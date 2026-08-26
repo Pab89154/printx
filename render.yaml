@@ -2,7 +2,7 @@ services:
   - type: web
     name: printx
     runtime: node
-    buildCommand: npm install && npm run build
+    buildCommand: npm run render-build
     startCommand: npm start
     envVars:
       - key: NODE_VERSION

@@ -6,8 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "render-build": "bash scripts/render-build.sh",
     "start": "node --experimental-sqlite --import tsx server/production.ts",
     "preview": "vite preview"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.8",
