@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: printx
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PRINTX_ADMIN_PASSWORD
+        sync: false
+      - key: PRINTX_SESSION_SECRET
+        generateValue: true

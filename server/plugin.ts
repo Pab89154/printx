@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect, Plugin } from 'vite'
 import { handleApi } from './router.ts'
 
-function apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
+const apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
   const url = req.url?.split('?')[0] ?? ''
   const method = req.method ?? 'GET'
   if (!url.startsWith('/api/')) return next()
