@@ -2,13 +2,13 @@ services:
   - type: web
     name: printx
     runtime: node
-    buildCommand: npm install --include=dev && npm run build
+    buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: "22"
-      - key: NPM_CONFIG_PRODUCTION
-        value: "false"
+      - key: NODE_OPTIONS
+        value: --experimental-sqlite
       - key: PRINTX_ADMIN_PASSWORD
         sync: false
       - key: PRINTX_SESSION_SECRET

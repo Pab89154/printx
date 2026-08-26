@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import bcrypt from 'bcryptjs'
-import type Database from 'better-sqlite3'
+import type { Db } from './db.ts'
 import { getDb } from './db.ts'
 
 const SESSION_COOKIE = 'printx_session'
@@ -61,7 +61,7 @@ export function verifyAdminPassword(password: string): { id: string; role: strin
   return { id: user.id, role: user.role }
 }
 
-export function updateAdminPassword(db: Database.Database, userId: string, currentPassword: string, newPassword: string): boolean {
+export function updateAdminPassword(db: Db, userId: string, currentPassword: string, newPassword: string): boolean {
   const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(userId) as { password_hash: string } | undefined
   if (!user || !bcrypt.compareSync(currentPassword, user.password_hash)) return false
   const hash = bcrypt.hashSync(newPassword, 12)

@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -6,20 +6,22 @@ import bcrypt from 'bcryptjs'
 import { randomUUID } from 'node:crypto'
 import type { Stand, WebsiteContent } from './types.ts'
 
+export type Db = DatabaseSync
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.PRINTX_DATA_DIR ?? path.join(__dirname, '..', 'data')
 const DB_PATH = path.join(DATA_DIR, 'printx.db')
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads')
 
-let db: Database.Database | null = null
+let db: Db | null = null
 
-export function getDb(): Database.Database {
+export function getDb(): Db {
   if (!db) {
     fs.mkdirSync(DATA_DIR, { recursive: true })
     fs.mkdirSync(UPLOADS_DIR, { recursive: true })
-    db = new Database(DB_PATH)
-    db.pragma('journal_mode = WAL')
-    db.pragma('foreign_keys = ON')
+    db = new DatabaseSync(DB_PATH)
+    db.exec('PRAGMA journal_mode = WAL')
+    db.exec('PRAGMA foreign_keys = ON')
     migrate(db)
     seed(db)
   }
@@ -31,7 +33,7 @@ export function getUploadsDir(): string {
   return UPLOADS_DIR
 }
 
-function migrate(database: Database.Database) {
+function migrate(database: Db) {
   database.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -122,7 +124,7 @@ function migrate(database: Database.Database) {
   `)
 }
 
-function seed(database: Database.Database) {
+function seed(database: Db) {
   const userCount = database.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number }
   if (userCount.c === 0) {
     const password = process.env.PRINTX_ADMIN_PASSWORD ?? 'PrintX-Admin-2026!'
@@ -248,7 +250,7 @@ export function rowToProduct(row: Record<string, unknown>) {
   }
 }
 
-export function getWebsiteContent(database: Database.Database): WebsiteContent {
+export function getWebsiteContent(database: Db): WebsiteContent {
   const rows = database.prepare('SELECT key, value FROM website_settings').all() as { key: string; value: string }[]
   const content = {} as Record<string, unknown>
   for (const row of rows) {
@@ -261,7 +263,7 @@ export function getWebsiteContent(database: Database.Database): WebsiteContent {
   return content as WebsiteContent
 }
 
-export function setWebsiteSetting(database: Database.Database, key: string, value: unknown) {
+export function setWebsiteSetting(database: Db, key: string, value: unknown) {
   const now = new Date().toISOString()
   database.prepare(`
     INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)
