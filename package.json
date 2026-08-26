@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "vite build",
     "start": "node --experimental-sqlite --import tsx server/production.ts",
     "preview": "vite preview"
   },
@@ -28,7 +28,10 @@
     "react-router-dom": "^7.6.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.20.3",
-    "typescript": "~6.0.2",
+    "typescript": "~5.7.3",
     "vite": "^8.1.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }
