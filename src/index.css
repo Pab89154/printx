@@ -1,0 +1,78 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-navy: #0a1628;
+  --color-navy-light: #152238;
+  --color-electric: #2563eb;
+  --color-electric-light: #3b82f6;
+  --color-cyan: #06b6d4;
+  --color-cyan-light: #22d3ee;
+  --color-surface: #f8fafc;
+  --color-muted: #64748b;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-navy);
+  background: #ffffff;
+  -webkit-font-smoothing: antialiased;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes layer-stack {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+.animate-fade-up {
+  animation: fade-up 0.6s ease-out forwards;
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.field-input {
+  @apply w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none transition-colors focus:border-electric focus:ring-2 focus:ring-electric/20;
+}
+
+.filament-pattern {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 8px,
+    rgba(37, 99, 235, 0.04) 8px,
+    rgba(37, 99, 235, 0.04) 9px
+  );
+}
