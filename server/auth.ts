@@ -57,14 +57,14 @@ export function verifyAdminLogin(email: string, password: string): { id: string;
 
   const db = getDb()
   const user = db.prepare(`
-    SELECT id, password_hash, role, email, email_verified
+    SELECT id, password_hash, role, email
     FROM users
     WHERE role = 'admin' AND LOWER(email) = ?
   `).get(normalized) as
-    | { id: string; password_hash: string; role: string; email: string; email_verified: number }
+    | { id: string; password_hash: string; role: string; email: string }
     | undefined
 
-  if (!user || !user.email_verified) return null
+  if (!user) return null
   if (!bcrypt.compareSync(password, user.password_hash)) return null
   return { id: user.id, role: user.role, email: user.email }
 }
@@ -73,7 +73,7 @@ export function verifyAdminLogin(email: string, password: string): { id: string;
 export function verifyAdminPassword(password: string): { id: string; role: string } | null {
   const db = getDb()
   const user = db.prepare(`
-    SELECT id, password_hash, role FROM users WHERE role = 'admin' AND email_verified = 1 LIMIT 1
+    SELECT id, password_hash, role FROM users WHERE role = 'admin' LIMIT 1
   `).get() as { id: string; password_hash: string; role: string } | undefined
   if (!user) return null
   if (!bcrypt.compareSync(password, user.password_hash)) return null

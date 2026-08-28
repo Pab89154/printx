@@ -1,16 +1,17 @@
 import {
   GraduationCap,
   MapPin,
-  Printer,
   Store,
   type LucideIcon,
 } from 'lucide-react'
+import { Printer3d } from '../lib/printer3dIcon'
 
 const iconMap: Record<string, LucideIcon> = {
   'map-pin': MapPin,
   'graduation-cap': GraduationCap,
   store: Store,
-  printer: Printer,
+  'printer-3d': Printer3d as LucideIcon,
+  printer: Printer3d as LucideIcon,
 }
 
 type Props = {

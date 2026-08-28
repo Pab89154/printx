@@ -77,7 +77,7 @@ export const WHY_FEATURES = [
   {
     title: '3D Printed',
     description: 'Every product is made using 3D-printing technology.',
-    icon: 'printer' as const,
+    icon: 'printer-3d' as const,
   },
 ] as const
 

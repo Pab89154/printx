@@ -137,12 +137,13 @@ function migrateEmojiToIcons(database: Db) {
     '📚': 'book-open',
     '✨': 'sparkles',
     '📦': 'package',
-    '🖨️': 'printer',
+    '🖨️': 'printer-3d',
   }
   const update = database.prepare('UPDATE products SET emoji = ? WHERE emoji = ?')
   for (const [emoji, icon] of Object.entries(map)) {
     update.run(icon, emoji)
   }
+  database.prepare("UPDATE products SET emoji = 'printer-3d' WHERE emoji = 'printer'").run()
 }
 
 function migrateUserAuth(database: Db) {

@@ -184,7 +184,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const password = typeof body.password === 'string' ? body.password : ''
     const user = verifyAdminLogin(email, password)
     if (!user) {
-      send(res, 401, { error: 'Invalid email or password, or email is not verified.' })
+      send(res, 401, { error: 'Invalid email or password.' })
       return true
     }
     const token = createSession(user.id)

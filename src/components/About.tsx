@@ -14,7 +14,7 @@ export function About() {
           <ScrollReveal>
             <div className="relative aspect-[4/3] overflow-hidden rounded-3xl bg-gradient-to-br from-slate-100 to-slate-200">
               <div className="absolute inset-0 flex items-center justify-center">
-                <WebIcon name="printer" className="h-20 w-20 opacity-40" alt="3D printer" />
+                <WebIcon name="printer-3d" className="h-20 w-20 opacity-40" alt="3D printer" />
               </div>
               <div className="absolute inset-0 filament-pattern opacity-30" />
             </div>

@@ -96,7 +96,7 @@ export function AdminSettings() {
               <div>
                 <p className="font-medium text-navy">{admin.email}</p>
                 <p className="text-xs text-muted">
-                  {admin.emailVerified ? 'Verified' : 'Unverified'} · joined {new Date(admin.createdAt).toLocaleDateString()}
+                  Joined {new Date(admin.createdAt).toLocaleDateString()}
                 </p>
               </div>
               {admin.id !== currentAdmin?.id && admins.length > 1 && (

@@ -21,7 +21,7 @@ export function AdminLogin() {
       await login(email, password)
       navigate('/admin/dashboard')
     } catch {
-      setError('Invalid email or password. Only verified admin accounts can sign in.')
+      setError('Invalid email or password.')
     } finally {
       setLoading(false)
     }
@@ -35,7 +35,7 @@ export function AdminLogin() {
             <Layers3 size={28} />
           </div>
           <h1 className="text-2xl font-bold text-navy">PrintX Admin</h1>
-          <p className="mt-2 text-sm text-muted">Sign in with your verified admin email</p>
+          <p className="mt-2 text-sm text-muted">Sign in with your admin email</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -49,7 +49,7 @@ export function AdminLogin() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="pablo.molinasamayoa@printx.pw"
+                placeholder="Enter your email"
                 className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20"
               />
             </div>

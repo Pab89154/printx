@@ -22,7 +22,7 @@ function HeroVisual() {
         </div>
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           <div className="relative flex h-32 w-32 items-center justify-center rounded-lg border-2 border-white/30 bg-white/10 backdrop-blur-sm">
-            <WebIcon name="printer" light className="h-14 w-14" alt="3D printer" />
+            <WebIcon name="printer-3d" light className="h-14 w-14" alt="3D printer" />
           </div>
         </div>
       </div>
