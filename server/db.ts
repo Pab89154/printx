@@ -23,6 +23,9 @@ export function getDb(): Db {
     db.exec('PRAGMA journal_mode = WAL')
     db.exec('PRAGMA foreign_keys = ON')
     migrate(db)
+    migrateUserAuth(db)
+    migrateEmojiToIcons(db)
+    migrateContactEmail(db)
     seed(db)
   }
   return db
@@ -85,7 +88,7 @@ function migrate(database: Db) {
       price REAL NOT NULL DEFAULT 0,
       category TEXT NOT NULL DEFAULT 'General',
       image TEXT NOT NULL DEFAULT '',
-      emoji TEXT NOT NULL DEFAULT '📦',
+      emoji TEXT NOT NULL DEFAULT 'package',
       image_gradient TEXT NOT NULL DEFAULT 'from-blue-500 to-cyan-400',
       available INTEGER NOT NULL DEFAULT 1,
       featured INTEGER NOT NULL DEFAULT 0,
@@ -124,26 +127,93 @@ function migrate(database: Db) {
   `)
 }
 
+/** Convert legacy emoji product icons to Lucide CDN icon names. */
+function migrateEmojiToIcons(database: Db) {
+  const map: Record<string, string> = {
+    '🌀': 'loader',
+    '🔑': 'key-round',
+    '📱': 'smartphone',
+    '🗂️': 'folder-open',
+    '📚': 'book-open',
+    '✨': 'sparkles',
+    '📦': 'package',
+    '🖨️': 'printer',
+  }
+  const update = database.prepare('UPDATE products SET emoji = ? WHERE emoji = ?')
+  for (const [emoji, icon] of Object.entries(map)) {
+    update.run(icon, emoji)
+  }
+}
+
+function migrateUserAuth(database: Db) {
+  try {
+    database.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0')
+  } catch {
+    /* column already exists */
+  }
+  database.prepare('UPDATE users SET email_verified = 1 WHERE role = ?').run('admin')
+
+  const adminEmail = (process.env.PRINTX_ADMIN_EMAIL ?? 'pablo.molinasamayoa@printx.pw').toLowerCase()
+  const envPassword = process.env.PRINTX_ADMIN_PASSWORD
+
+  // Sync env credentials only for the primary admin — never overwrite other admin accounts
+  const primary = database.prepare(`
+    SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1
+  `).get(adminEmail) as { id: string } | undefined
+
+  const fallback = database.prepare(`
+    SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1
+  `).get() as { id: string } | undefined
+
+  const primaryId = primary?.id ?? fallback?.id
+  if (primaryId) {
+    database.prepare('UPDATE users SET email = ?, email_verified = 1 WHERE id = ?').run(adminEmail, primaryId)
+    if (envPassword && envPassword.length >= 8) {
+      const hash = bcrypt.hashSync(envPassword, 12)
+      database.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, primaryId)
+    }
+  }
+}
+
+function migrateContactEmail(database: Db) {
+  const row = database.prepare("SELECT value FROM website_settings WHERE key = 'contactEmail'").get() as
+    | { value: string }
+    | undefined
+  if (!row) return
+  try {
+    const email = JSON.parse(row.value) as string
+    if (email === 'hello@printxmckinney.com') {
+      database.prepare("UPDATE website_settings SET value = ?, updated_at = ? WHERE key = 'contactEmail'").run(
+        JSON.stringify('hello@printx.pw'),
+        new Date().toISOString(),
+      )
+    }
+  } catch {
+    /* ignore malformed settings */
+  }
+}
+
 function seed(database: Db) {
   const userCount = database.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number }
   if (userCount.c === 0) {
-    const password = process.env.PRINTX_ADMIN_PASSWORD ?? 'PrintX-Admin-2026!'
+    const password = process.env.PRINTX_ADMIN_PASSWORD ?? 'coolprints.X'
+    const email = process.env.PRINTX_ADMIN_EMAIL ?? 'pablo.molinasamayoa@printx.pw'
     const hash = bcrypt.hashSync(password, 12)
     database.prepare(
-      'INSERT INTO users (id, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).run(randomUUID(), 'admin@printxmckinney.com', hash, 'admin', new Date().toISOString())
+      'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(randomUUID(), email, hash, 'admin', 1, new Date().toISOString())
   }
 
   const productCount = database.prepare('SELECT COUNT(*) as c FROM products').get() as { c: number }
   if (productCount.c === 0) {
     const now = new Date().toISOString()
     const products = [
-      ['fidget-toys', 'Fidget Toys', 'Spinners, clickers, and satisfying desk toys in fun colors.', 5, 'Toys', '🌀', 'from-blue-500 to-cyan-400', 1, 1, 1],
-      ['keychains', 'Keychains', 'Custom name tags, logos, and shapes for backpacks and keys.', 4, 'Accessories', '🔑', 'from-indigo-500 to-blue-400', 1, 1, 2],
-      ['phone-stands', 'Phone Stands', 'Sturdy, colorful stands for desks, nightstands, and study spaces.', 8, 'Accessories', '📱', 'from-cyan-500 to-teal-400', 1, 1, 3],
-      ['desk-accessories', 'Desk Accessories', 'Organizers, cable clips, pen holders, and tidy-up tools.', 6, 'Desk', '🗂️', 'from-violet-500 to-indigo-400', 1, 0, 4],
-      ['school-accessories', 'School Accessories', 'Bookmarks, rulers, clips, and handy tools for class.', 3, 'School', '📚', 'from-sky-500 to-blue-400', 1, 0, 5],
-      ['custom-designs', 'Custom Designs', 'Bring your own idea — ask us about printing it in PLA or PETG.', 10, 'Custom', '✨', 'from-blue-600 to-cyan-500', 1, 1, 6],
+      ['fidget-toys', 'Fidget Toys', 'Spinners, clickers, and satisfying desk toys in fun colors.', 5, 'Toys', 'loader', 'from-blue-500 to-cyan-400', 1, 1, 1],
+      ['keychains', 'Keychains', 'Custom name tags, logos, and shapes for backpacks and keys.', 4, 'Accessories', 'key-round', 'from-indigo-500 to-blue-400', 1, 1, 2],
+      ['phone-stands', 'Phone Stands', 'Sturdy, colorful stands for desks, nightstands, and study spaces.', 8, 'Accessories', 'smartphone', 'from-cyan-500 to-teal-400', 1, 1, 3],
+      ['desk-accessories', 'Desk Accessories', 'Organizers, cable clips, pen holders, and tidy-up tools.', 6, 'Desk', 'folder-open', 'from-violet-500 to-indigo-400', 1, 0, 4],
+      ['school-accessories', 'School Accessories', 'Bookmarks, rulers, clips, and handy tools for class.', 3, 'School', 'book-open', 'from-sky-500 to-blue-400', 1, 0, 5],
+      ['custom-designs', 'Custom Designs', 'Bring your own idea — ask us about printing it in PLA or PETG.', 10, 'Custom', 'sparkles', 'from-blue-600 to-cyan-500', 1, 1, 6],
     ]
     const stmt = database.prepare(`
       INSERT INTO products (id, name, description, price, category, image, emoji, image_gradient, available, featured, display_order, created_at, updated_at)
@@ -197,7 +267,7 @@ function seed(database: Db) {
       heroDescription: 'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.',
       aboutText: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across McKinney — where students can see, touch, and buy 3D-printed products made by people their age.',
       aboutTeam: 'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
-      contactEmail: 'hello@printxmckinney.com',
+      contactEmail: 'hello@printx.pw',
       contactInstagram: 'https://instagram.com',
       contactTiktok: 'https://tiktok.com',
       forSchoolsDescription: 'Interested in having a PrintX stand at your school? Contact us to learn more about setting up a stand for your students, clubs, or events.',

@@ -14,7 +14,10 @@ import {
   sessionCookieHeader,
   SESSION_COOKIE,
   updateAdminPassword,
-  verifyAdminPassword,
+  verifyAdminLogin,
+  listAdminUsers,
+  createAdminUser,
+  deleteAdminUser,
 } from './auth.ts'
 import {
   getDb,
@@ -177,14 +180,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/admin/login' && method === 'POST') {
     const body = await readJson(req)
+    const email = typeof body.email === 'string' ? body.email : ''
     const password = typeof body.password === 'string' ? body.password : ''
-    const user = verifyAdminPassword(password)
+    const user = verifyAdminLogin(email, password)
     if (!user) {
-      send(res, 401, { error: 'Invalid password' })
+      send(res, 401, { error: 'Invalid email or password, or email is not verified.' })
       return true
     }
     const token = createSession(user.id)
-    send(res, 200, { ok: true, role: user.role }, [sessionCookieHeader(token)])
+    send(res, 200, { ok: true, role: user.role, email: user.email }, [sessionCookieHeader(token)])
     return true
   }
 
@@ -201,7 +205,31 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 401, { error: 'Unauthorized' })
       return true
     }
-    send(res, 200, { ok: true, role: user.role })
+    send(res, 200, { ok: true, role: user.role, email: user.email })
+    return true
+  }
+
+  const uploadMatch = urlPath.match(/^\/api\/admin\/uploads\/([^/]+)$/)
+  if (uploadMatch && method === 'GET') {
+    const adminUser = requireAdmin(req)
+    if (!adminUser) {
+      send(res, 401, { error: 'Unauthorized' })
+      return true
+    }
+    const filename = uploadMatch[1] ?? ''
+    if (!/^[\w-]+\.(stl|obj)$/i.test(filename)) {
+      send(res, 400, { error: 'Invalid file name' })
+      return true
+    }
+    const filePath = path.join(getUploadsDir(), filename)
+    if (!filePath.startsWith(getUploadsDir()) || !fs.existsSync(filePath)) {
+      send(res, 404, { error: 'File not found' })
+      return true
+    }
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'application/octet-stream')
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    fs.createReadStream(filePath).pipe(res)
     return true
   }
 
@@ -326,7 +354,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       Number(body.price) || 0,
       sanitizeText(body.category, 80),
       sanitizeText(body.image, 500),
-      sanitizeText(body.emoji, 10) || '📦',
+      sanitizeText(body.emoji, 64) || 'package',
       sanitizeText(body.imageGradient, 80) || 'from-blue-500 to-cyan-400',
       body.available === false ? 0 : 1,
       body.featured ? 1 : 0,
@@ -355,7 +383,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         Number(body.price) || 0,
         sanitizeText(body.category, 80),
         sanitizeText(body.image, 500),
-        sanitizeText(body.emoji, 10) || '📦',
+        sanitizeText(body.emoji, 64) || 'package',
         sanitizeText(body.imageGradient, 80) || 'from-blue-500 to-cyan-400',
         body.available === false ? 0 : 1,
         body.featured ? 1 : 0,
@@ -475,6 +503,36 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
     send(res, 200, { ok: true }, [clearSessionCookieHeader()])
+    return true
+  }
+
+  if (urlPath === '/api/admin/users' && method === 'GET') {
+    send(res, 200, listAdminUsers())
+    return true
+  }
+
+  if (urlPath === '/api/admin/users' && method === 'POST') {
+    const body = await readJson(req)
+    const email = sanitizeEmail(body.email)
+    const password = typeof body.password === 'string' ? body.password : ''
+    const created = createAdminUser(email, password)
+    if (!created) {
+      send(res, 400, { error: 'Could not create admin. Use a valid unique email and password (8+ characters).' })
+      return true
+    }
+    send(res, 201, created)
+    return true
+  }
+
+  const userMatch = urlPath.match(/^\/api\/admin\/users\/([^/]+)$/)
+  if (userMatch && method === 'DELETE') {
+    const targetId = userMatch[1]
+    const ok = deleteAdminUser(admin.id, targetId)
+    if (!ok) {
+      send(res, 400, { error: 'Cannot remove this admin (you may be deleting yourself or the last admin).' })
+      return true
+    }
+    send(res, 200, { ok: true })
     return true
   }
 

@@ -8,12 +8,8 @@ echo "PWD: $(pwd)"
 
 npm ci
 
-if [ -f dist/index.html ]; then
-  echo "==> dist/index.html found — skipping Vite build"
-else
-  echo "==> Building frontend with Vite"
-  npm run build
-fi
+echo "==> Building frontend with Vite"
+npm run build
 
 if [ ! -f dist/index.html ]; then
   echo "ERROR: dist/index.html missing after build"

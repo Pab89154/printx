@@ -1,4 +1,5 @@
 import type { Product } from '../types/api'
+import { WebIcon } from '../lib/webIcon'
 import { Button } from './Button'
 
 type Props = {
@@ -11,9 +12,20 @@ export function ProductCard({ product }: Props) {
       <div
         className={`relative flex h-44 items-center justify-center bg-gradient-to-br ${product.imageGradient} transition-transform duration-500 group-hover:scale-[1.02]`}
       >
-        <span className="text-6xl drop-shadow-md transition-transform duration-500 group-hover:scale-110">
-          {product.emoji}
-        </span>
+        {product.image ? (
+          <img
+            src={product.image}
+            alt={product.name}
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+          />
+        ) : (
+          <WebIcon
+            name={product.emoji}
+            alt=""
+            light
+            className="h-16 w-16 drop-shadow-md transition-transform duration-500 group-hover:scale-110"
+          />
+        )}
         <div className="absolute inset-0 filament-pattern opacity-60" />
         {product.available && (
           <div className="absolute left-3 top-3 rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-electric backdrop-blur-sm">

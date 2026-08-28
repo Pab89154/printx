@@ -12,7 +12,7 @@ export function AdminDashboard() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-navy">Welcome to PrintX 👋</h1>
+      <h1 className="text-2xl font-bold text-navy">Welcome to PrintX</h1>
       <p className="mt-1 text-muted">Here&apos;s what&apos;s happening with your business.</p>
 
       <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -39,7 +39,14 @@ export function AdminDashboard() {
         </StatCard>
 
         <StatCard title="Website">
-          <p className="text-lg font-semibold text-green-600">🟢 Online</p>
+          <p className="flex items-center gap-2 text-lg font-semibold text-green-600">
+            <img
+              src="https://cdn.jsdelivr.net/npm/lucide-static@0.469.0/icons/circle-check.svg"
+              alt=""
+              className="h-5 w-5"
+            />
+            Online
+          </p>
           <p className="text-sm text-muted">Public site is live</p>
         </StatCard>
       </div>

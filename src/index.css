@@ -1,5 +1,9 @@
 @import 'tailwindcss';
 
+/* Limit scanning to this app — avoids hanging when nested in a large monorepo */
+@source "../index.html";
+@source "./**/*.{js,ts,jsx,tsx}";
+
 @theme {
   --color-navy: #0a1628;
   --color-navy-light: #152238;

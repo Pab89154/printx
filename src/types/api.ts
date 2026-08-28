@@ -88,3 +88,10 @@ export type Stand = PublicStand & {
   createdAt: string
   updatedAt: string
 }
+
+export type AdminUser = {
+  id: string
+  email: string
+  emailVerified: boolean
+  createdAt: string
+}

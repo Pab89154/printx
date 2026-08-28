@@ -51,6 +51,9 @@ export function AdminSchools() {
             <label>Name<input className={inputClass} value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></label>
             <label>Address<input className={inputClass} value={editing.address ?? ''} onChange={(e) => setEditing({ ...editing, address: e.target.value })} /></label>
             <label className="sm:col-span-2">Description<textarea className={inputClass} rows={2} value={editing.description ?? ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></label>
+            <label className="sm:col-span-2">Logo / image URL (optional)
+              <input className={inputClass} type="url" placeholder="https://example.com/logo.png" value={editing.image ?? ''} onChange={(e) => setEditing({ ...editing, image: e.target.value })} />
+            </label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={editing.active !== 0} onChange={(e) => setEditing({ ...editing, active: e.target.checked ? 1 : 0 })} /> Active</label>
           </div>
           <div className="mt-4 flex gap-2">

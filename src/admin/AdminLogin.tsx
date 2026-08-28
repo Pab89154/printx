@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { Layers3, Lock } from 'lucide-react'
+import { Layers3, Lock, Mail } from 'lucide-react'
 import { useAdminAuth } from '../context/AdminAuthContext'
 
 export function AdminLogin() {
   const { authenticated, login } = useAdminAuth()
   const navigate = useNavigate()
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -17,10 +18,10 @@ export function AdminLogin() {
     setLoading(true)
     setError('')
     try {
-      await login(password)
+      await login(email, password)
       navigate('/admin/dashboard')
     } catch {
-      setError('Invalid password. Please try again.')
+      setError('Invalid email or password. Only verified admin accounts can sign in.')
     } finally {
       setLoading(false)
     }
@@ -34,10 +35,26 @@ export function AdminLogin() {
             <Layers3 size={28} />
           </div>
           <h1 className="text-2xl font-bold text-navy">PrintX Admin</h1>
-          <p className="mt-2 text-sm text-muted">Sign in to manage your website</p>
+          <p className="mt-2 text-sm text-muted">Sign in with your verified admin email</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-navy">Email</span>
+            <div className="relative">
+              <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="pablo.molinasamayoa@printx.pw"
+                className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20"
+              />
+            </div>
+          </label>
+
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-navy">Password</span>
             <div className="relative">
@@ -45,6 +62,7 @@ export function AdminLogin() {
               <input
                 type="password"
                 required
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter admin password"

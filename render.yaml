@@ -11,5 +11,7 @@ services:
         value: --experimental-sqlite
       - key: PRINTX_ADMIN_PASSWORD
         sync: false
+      - key: PRINTX_ADMIN_EMAIL
+        value: pablo.molinasamayoa@printx.pw
       - key: PRINTX_SESSION_SECRET
         generateValue: true

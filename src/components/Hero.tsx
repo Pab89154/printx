@@ -1,5 +1,6 @@
 import { MapPin } from 'lucide-react'
 import { Button } from './Button'
+import { WebIcon } from '../lib/webIcon'
 import { usePublicData } from '../context/PublicDataContext'
 
 function HeroVisual() {
@@ -7,13 +8,21 @@ function HeroVisual() {
     <div className="relative mx-auto w-full max-w-lg lg:max-w-none">
       <div className="relative aspect-square overflow-hidden rounded-3xl bg-gradient-to-br from-navy via-navy-light to-electric p-8 shadow-2xl shadow-navy/30">
         <div className="absolute inset-0 filament-pattern opacity-40" />
-        <div className="animate-float absolute left-8 top-12 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan to-cyan-light text-3xl shadow-lg">🌀</div>
-        <div className="animate-float absolute right-10 top-20 flex h-16 w-16 items-center justify-center rounded-xl bg-gradient-to-br from-electric-light to-electric text-2xl shadow-lg" style={{ animationDelay: '0.5s' }}>🔑</div>
-        <div className="animate-float absolute bottom-24 left-16 flex h-14 w-14 items-center justify-center rounded-lg bg-white/20 text-xl backdrop-blur-sm" style={{ animationDelay: '1s' }}>📱</div>
-        <div className="animate-float absolute bottom-16 right-12 flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-500 text-4xl shadow-lg" style={{ animationDelay: '1.5s' }}>🗂️</div>
+        <div className="animate-float absolute left-8 top-12 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan to-cyan-light shadow-lg">
+          <WebIcon name="loader" light className="h-10 w-10" alt="" />
+        </div>
+        <div className="animate-float absolute right-10 top-20 flex h-16 w-16 items-center justify-center rounded-xl bg-gradient-to-br from-electric-light to-electric shadow-lg" style={{ animationDelay: '0.5s' }}>
+          <WebIcon name="key-round" light className="h-8 w-8" alt="" />
+        </div>
+        <div className="animate-float absolute bottom-24 left-16 flex h-14 w-14 items-center justify-center rounded-lg bg-white/20 backdrop-blur-sm" style={{ animationDelay: '1s' }}>
+          <WebIcon name="smartphone" light className="h-7 w-7" alt="" />
+        </div>
+        <div className="animate-float absolute bottom-16 right-12 flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-500 shadow-lg" style={{ animationDelay: '1.5s' }}>
+          <WebIcon name="folder-open" light className="h-12 w-12" alt="" />
+        </div>
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           <div className="relative flex h-32 w-32 items-center justify-center rounded-lg border-2 border-white/30 bg-white/10 backdrop-blur-sm">
-            <span className="text-5xl">🖨️</span>
+            <WebIcon name="printer" light className="h-14 w-14" alt="3D printer" />
           </div>
         </div>
       </div>

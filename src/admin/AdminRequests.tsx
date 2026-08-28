@@ -32,7 +32,14 @@ export function AdminRequests() {
                 <p className="text-sm text-muted">{req.email} · {req.school || 'No school listed'}</p>
                 <p className="mt-2 text-sm">{req.description}</p>
                 {req.size && <p className="mt-1 text-xs text-muted">Size: {req.size}</p>}
-                {req.uploaded_file && <p className="mt-1 text-xs text-electric">File uploaded: {req.uploaded_file}</p>}
+                {req.uploaded_file && (
+                  <a
+                    href={`/api/admin/uploads/${encodeURIComponent(req.uploaded_file)}`}
+                    className="mt-1 inline-block text-xs font-medium text-electric hover:underline"
+                  >
+                    Download uploaded file ({req.uploaded_file})
+                  </a>
+                )}
                 <p className="mt-2 text-xs text-muted">Submitted {new Date(req.created_at).toLocaleString()}</p>
               </div>
               <select

@@ -22,9 +22,12 @@ export const api = {
       }),
   },
   admin: {
-    me: () => request<{ ok: boolean; role: string }>('/api/admin/me'),
-    login: (password: string) =>
-      request('/api/admin/login', { method: 'POST', body: JSON.stringify({ password }) }),
+    me: () => request<{ ok: boolean; role: string; email: string }>('/api/admin/me'),
+    login: (email: string, password: string) =>
+      request<{ ok: boolean; role: string; email: string }>('/api/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      }),
     logout: () => request('/api/admin/logout', { method: 'POST' }),
     stats: () => request<import('../types/api.ts').DashboardStats>('/api/admin/stats'),
     stands: {
@@ -67,6 +70,15 @@ export const api = {
           method: 'PATCH',
           body: JSON.stringify({ currentPassword, newPassword }),
         }),
+    },
+    users: {
+      list: () => request<import('../types/api.ts').AdminUser[]>('/api/admin/users'),
+      create: (email: string, password: string) =>
+        request<import('../types/api.ts').AdminUser>('/api/admin/users', {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        }),
+      delete: (id: string) => request(`/api/admin/users/${id}`, { method: 'DELETE' }),
     },
   },
 }

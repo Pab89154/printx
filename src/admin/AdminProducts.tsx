@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { PRODUCT_ICON_OPTIONS, WebIcon } from '../lib/webIcon'
 import type { Product } from '../types/api'
 
 const inputClass =
@@ -32,7 +33,7 @@ export function AdminProducts() {
       description: '',
       price: 5,
       category: 'General',
-      emoji: '📦',
+      emoji: 'package',
       imageGradient: gradients[0],
       available: true,
       featured: false,
@@ -65,12 +66,21 @@ export function AdminProducts() {
             <label>Name<input className={inputClass} value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></label>
             <label>Price ($)<input type="number" step="0.01" className={inputClass} value={editing.price ?? 0} onChange={(e) => setEditing({ ...editing, price: Number(e.target.value) })} /></label>
             <label>Category<input className={inputClass} value={editing.category ?? ''} onChange={(e) => setEditing({ ...editing, category: e.target.value })} /></label>
-            <label>Emoji<input className={inputClass} value={editing.emoji ?? ''} onChange={(e) => setEditing({ ...editing, emoji: e.target.value })} /></label>
+            <label>Icon (from Lucide CDN)
+              <select className={inputClass} value={editing.emoji ?? 'package'} onChange={(e) => setEditing({ ...editing, emoji: e.target.value })}>
+                {PRODUCT_ICON_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label} ({opt.value})</option>
+                ))}
+              </select>
+            </label>
             <label>Display order<input type="number" className={inputClass} value={editing.displayOrder ?? 0} onChange={(e) => setEditing({ ...editing, displayOrder: Number(e.target.value) })} /></label>
             <label>Gradient
               <select className={inputClass} value={editing.imageGradient ?? gradients[0]} onChange={(e) => setEditing({ ...editing, imageGradient: e.target.value })}>
                 {gradients.map((g) => <option key={g} value={g}>{g}</option>)}
               </select>
+            </label>
+            <label className="sm:col-span-2">Product image URL (optional)
+              <input className={inputClass} type="url" placeholder="https://example.com/photo.jpg" value={editing.image ?? ''} onChange={(e) => setEditing({ ...editing, image: e.target.value })} />
             </label>
             <label className="sm:col-span-2">Description<textarea className={inputClass} rows={2} value={editing.description ?? ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={editing.available ?? true} onChange={(e) => setEditing({ ...editing, available: e.target.checked })} /> Available</label>
@@ -87,7 +97,7 @@ export function AdminProducts() {
         {products.map((p) => (
           <div key={p.id} className="flex items-center justify-between rounded-xl border bg-white p-4">
             <div className="flex items-center gap-3">
-              <span className="text-2xl">{p.emoji}</span>
+              <WebIcon name={p.emoji} className="h-8 w-8" alt="" />
               <div>
                 <p className="font-semibold text-navy">{p.name} — ${p.price}</p>
                 <p className="text-sm text-muted">{p.description}</p>

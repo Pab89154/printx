@@ -1,4 +1,5 @@
 import { AtSign, Layers3, Mail, Music2 } from 'lucide-react'
+import { usePublicData } from '../context/PublicDataContext'
 import { FOOTER_LINKS, SOCIAL_LINKS } from '../data/navigation'
 
 const socialIcons: Record<string, typeof AtSign> = {
@@ -8,6 +9,9 @@ const socialIcons: Record<string, typeof AtSign> = {
 }
 
 export function Footer() {
+  const { data } = usePublicData()
+  const contactEmail = data?.content?.contactEmail ?? 'hello@printx.pw'
+
   return (
     <footer className="bg-navy text-white">
       <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
@@ -52,8 +56,8 @@ export function Footer() {
             <ul className="space-y-2.5 text-sm text-slate-400">
               <li>McKinney, Texas</li>
               <li>
-                <a href="mailto:hello@printxmckinney.com" className="transition-colors hover:text-cyan">
-                  hello@printxmckinney.com
+                <a href={`mailto:${contactEmail}`} className="transition-colors hover:text-cyan">
+                  {contactEmail}
                 </a>
               </li>
             </ul>

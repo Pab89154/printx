@@ -3,7 +3,8 @@ import { api } from '../lib/api'
 
 type AuthContextValue = {
   authenticated: boolean | null
-  login: (password: string) => Promise<void>
+  email: string | null
+  login: (email: string, password: string) => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -11,13 +12,16 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
+  const [email, setEmail] = useState<string | null>(null)
 
   const check = useCallback(async () => {
     try {
-      await api.admin.me()
+      const me = await api.admin.me()
       setAuthenticated(true)
+      setEmail(me.email)
     } catch {
       setAuthenticated(false)
+      setEmail(null)
     }
   }, [])
 
@@ -25,18 +29,20 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     check()
   }, [check])
 
-  const login = async (password: string) => {
-    await api.admin.login(password)
+  const login = async (loginEmail: string, password: string) => {
+    const result = await api.admin.login(loginEmail, password)
     setAuthenticated(true)
+    setEmail(result.email)
   }
 
   const logout = async () => {
     await api.admin.logout()
     setAuthenticated(false)
+    setEmail(null)
   }
 
   return (
-    <AuthContext.Provider value={{ authenticated, login, logout }}>
+    <AuthContext.Provider value={{ authenticated, email, login, logout }}>
       {children}
     </AuthContext.Provider>
   )

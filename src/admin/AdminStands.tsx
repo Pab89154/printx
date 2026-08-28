@@ -1,21 +1,24 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { Product, Stand } from '../types/api'
+import type { Product, School, Stand } from '../types/api'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20'
 
 export function AdminStands() {
   const [stands, setStands] = useState<Stand[]>([])
+  const [schools, setSchools] = useState<School[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [editing, setEditing] = useState<Partial<Stand> | null>(null)
 
   async function load() {
-    const [s, p] = await Promise.all([
+    const [s, sc, p] = await Promise.all([
       api.admin.stands.list(),
+      api.admin.schools.list(),
       api.admin.products.list(),
     ])
     setStands(s)
+    setSchools(sc)
     setProducts(p)
   }
 
@@ -70,7 +73,26 @@ export function AdminStands() {
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
           <h2 className="mb-4 font-semibold">{editing.id ? 'Edit Stand' : 'New Stand'}</h2>
           <div className="grid gap-3 sm:grid-cols-2">
-            <label>School name<input className={inputClass} value={editing.schoolName ?? ''} onChange={(e) => setEditing({ ...editing, schoolName: e.target.value })} /></label>
+            <label>School
+              <select
+                className={inputClass}
+                value={editing.schoolId ?? ''}
+                onChange={(e) => {
+                  const school = schools.find((s) => s.id === e.target.value)
+                  setEditing({
+                    ...editing,
+                    schoolId: e.target.value || undefined,
+                    schoolName: school?.name ?? editing.schoolName,
+                  })
+                }}
+              >
+                <option value="">Select a school…</option>
+                {schools.filter((s) => s.active).map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>School name (display)<input className={inputClass} value={editing.schoolName ?? ''} onChange={(e) => setEditing({ ...editing, schoolName: e.target.value })} /></label>
             <label>Date<input type="date" className={inputClass} value={editing.date ?? ''} onChange={(e) => setEditing({ ...editing, date: e.target.value })} /></label>
             <label>Start time<input className={inputClass} value={editing.startTime ?? ''} onChange={(e) => setEditing({ ...editing, startTime: e.target.value })} /></label>
             <label>End time<input className={inputClass} value={editing.endTime ?? ''} onChange={(e) => setEditing({ ...editing, endTime: e.target.value })} /></label>
