@@ -21,14 +21,19 @@ export const Printer3d = forwardRef<SVGSVGElement, Printer3dProps>(
       className={className}
       {...props}
     >
-      <path d="M4 8V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v3" />
-      <path d="M4 8h16" />
-      <path d="M6 8v9" />
-      <path d="M18 8v9" />
-      <path d="M6 12h12" />
-      <path d="M12 12v2" />
-      <circle cx="12" cy="15" r="1" />
-      <rect x="5" y="17" width="14" height="4" rx="1" />
+      <path d="M7 20V8" />
+      <path d="M17 20V8" />
+      <path d="M7 8h10" />
+      <path d="M6 20h12" />
+      <path d="M12 8v2" />
+      <path d="M10.5 10h3" />
+      <path d="M12 10v2.5" />
+      <path d="M11.5 12.5 12 14 12.5 12.5" />
+      <path d="M12 15 10.5 17" />
+      <path d="M12 15 13.5 17" />
+      <path d="M10.5 17v2" />
+      <path d="M13.5 17v2" />
+      <path d="M10.5 19h3" />
     </svg>
   ),
 )
