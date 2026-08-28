@@ -27,6 +27,7 @@ export function getDb(): Db {
     migrateEmojiToIcons(db)
     migrateContactEmail(db)
     seed(db)
+    ensurePrimaryAdmin(db)
   }
   return db
 }
@@ -146,6 +147,59 @@ function migrateEmojiToIcons(database: Db) {
   database.prepare("UPDATE products SET emoji = 'printer-3d' WHERE emoji = 'printer'").run()
 }
 
+function resolveAdminEmail(): string {
+  return (process.env.PRINTX_ADMIN_EMAIL?.trim() || 'pablo.molinasamayoa@printx.pw').toLowerCase()
+}
+
+function resolveAdminPassword(): string {
+  const raw = process.env.PRINTX_ADMIN_PASSWORD?.trim()
+  const placeholders = new Set([
+    '',
+    'change-me',
+    'changeme',
+    'change-me-set-real-password-in-render',
+  ])
+  if (!raw || placeholders.has(raw.toLowerCase())) {
+    return 'coolprints.X'
+  }
+  return raw.length >= 8 ? raw : 'coolprints.X'
+}
+
+function ensurePrimaryAdmin(database: Db) {
+  const adminEmail = resolveAdminEmail()
+  const hash = bcrypt.hashSync(resolveAdminPassword(), 12)
+
+  const byEmail = database.prepare(`
+    SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1
+  `).get(adminEmail) as { id: string } | undefined
+
+  if (byEmail) {
+    database.prepare('UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?').run(
+      adminEmail,
+      hash,
+      byEmail.id,
+    )
+    return
+  }
+
+  const fallback = database.prepare(`
+    SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1
+  `).get() as { id: string } | undefined
+
+  if (fallback) {
+    database.prepare('UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?').run(
+      adminEmail,
+      hash,
+      fallback.id,
+    )
+    return
+  }
+
+  database.prepare(
+    'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(randomUUID(), adminEmail, hash, 'admin', 1, new Date().toISOString())
+}
+
 function migrateUserAuth(database: Db) {
   try {
     database.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0')
@@ -153,27 +207,6 @@ function migrateUserAuth(database: Db) {
     /* column already exists */
   }
   database.prepare('UPDATE users SET email_verified = 1 WHERE role = ?').run('admin')
-
-  const adminEmail = (process.env.PRINTX_ADMIN_EMAIL ?? 'pablo.molinasamayoa@printx.pw').toLowerCase()
-  const envPassword = process.env.PRINTX_ADMIN_PASSWORD
-
-  // Sync env credentials only for the primary admin — never overwrite other admin accounts
-  const primary = database.prepare(`
-    SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1
-  `).get(adminEmail) as { id: string } | undefined
-
-  const fallback = database.prepare(`
-    SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1
-  `).get() as { id: string } | undefined
-
-  const primaryId = primary?.id ?? fallback?.id
-  if (primaryId) {
-    database.prepare('UPDATE users SET email = ?, email_verified = 1 WHERE id = ?').run(adminEmail, primaryId)
-    if (envPassword && envPassword.length >= 8) {
-      const hash = bcrypt.hashSync(envPassword, 12)
-      database.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, primaryId)
-    }
-  }
 }
 
 function migrateContactEmail(database: Db) {
@@ -195,16 +228,6 @@ function migrateContactEmail(database: Db) {
 }
 
 function seed(database: Db) {
-  const userCount = database.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number }
-  if (userCount.c === 0) {
-    const password = process.env.PRINTX_ADMIN_PASSWORD ?? 'coolprints.X'
-    const email = process.env.PRINTX_ADMIN_EMAIL ?? 'pablo.molinasamayoa@printx.pw'
-    const hash = bcrypt.hashSync(password, 12)
-    database.prepare(
-      'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(randomUUID(), email, hash, 'admin', 1, new Date().toISOString())
-  }
-
   const productCount = database.prepare('SELECT COUNT(*) as c FROM products').get() as { c: number }
   if (productCount.c === 0) {
     const now = new Date().toISOString()

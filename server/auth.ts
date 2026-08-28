@@ -149,7 +149,11 @@ export function parseCookies(header: string | undefined): Record<string, string>
   )
 }
 
-export function sessionCookieHeader(token: string, maxAgeSeconds = SESSION_DAYS * 86400): string {
+export function sessionCookieHeader(
+  token: string,
+  options?: { maxAgeSeconds?: number; secure?: boolean },
+): string {
+  const maxAgeSeconds = options?.maxAgeSeconds ?? SESSION_DAYS * 86400
   const parts = [
     `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
     'Path=/',
@@ -157,11 +161,14 @@ export function sessionCookieHeader(token: string, maxAgeSeconds = SESSION_DAYS 
     'SameSite=Lax',
     `Max-Age=${maxAgeSeconds}`,
   ]
+  if (options?.secure) parts.push('Secure')
   return parts.join('; ')
 }
 
-export function clearSessionCookieHeader(): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+export function clearSessionCookieHeader(secure = false): string {
+  const parts = [`${SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0']
+  if (secure) parts.push('Secure')
+  return parts.join('; ')
 }
 
 export { SESSION_COOKIE }

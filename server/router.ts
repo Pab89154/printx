@@ -32,6 +32,12 @@ import type { RequestStatus, StandStatus } from './types.ts'
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
+function isSecureRequest(req: IncomingMessage): boolean {
+  const forwarded = req.headers['x-forwarded-proto']
+  if (typeof forwarded === 'string') return forwarded.split(',')[0]?.trim() === 'https'
+  return process.env.NODE_ENV === 'production'
+}
+
 function send(res: ServerResponse, status: number, body: unknown, cookies?: string[]) {
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json')
@@ -188,14 +194,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
     const token = createSession(user.id)
-    send(res, 200, { ok: true, role: user.role, email: user.email }, [sessionCookieHeader(token)])
+    send(res, 200, { ok: true, role: user.role, email: user.email }, [
+      sessionCookieHeader(token, { secure: isSecureRequest(req) }),
+    ])
     return true
   }
 
   if (urlPath === '/api/admin/logout' && method === 'POST') {
     const cookies = parseCookies(req.headers.cookie)
     destroySession(cookies[SESSION_COOKIE] ?? null)
-    send(res, 200, { ok: true }, [clearSessionCookieHeader()])
+    send(res, 200, { ok: true }, [clearSessionCookieHeader(isSecureRequest(req))])
     return true
   }
 
@@ -502,7 +510,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 400, { error: 'Current password is incorrect' })
       return true
     }
-    send(res, 200, { ok: true }, [clearSessionCookieHeader()])
+    send(res, 200, { ok: true }, [clearSessionCookieHeader(isSecureRequest(req))])
     return true
   }
 
