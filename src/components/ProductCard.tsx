@@ -8,7 +8,7 @@ type Props = {
 
 export function ProductCard({ product }: Props) {
   return (
-    <article className="group flex flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition-all duration-300 hover:-translate-y-1.5 hover:shadow-xl hover:shadow-electric/10">
+    <article className="group flex flex-col overflow-hidden rounded-2xl border border-navy/8 bg-white shadow-sm transition-all duration-300 hover:-translate-y-1.5 hover:shadow-xl hover:shadow-electric/15">
       <div
         className={`relative flex h-44 items-center justify-center bg-gradient-to-br ${product.imageGradient} transition-transform duration-500 group-hover:scale-[1.02]`}
       >

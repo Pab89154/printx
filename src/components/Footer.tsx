@@ -2,6 +2,7 @@ import { AtSign, Mail, MessageCircle } from 'lucide-react'
 import { usePublicData } from '../context/PublicDataContext'
 import { FOOTER_LINKS } from '../data/navigation'
 import { mailtoHref } from '../lib/mailto'
+import { onHashLinkClick } from '../lib/scroll'
 import { Logo } from './Logo'
 
 export function Footer() {
@@ -56,6 +57,7 @@ export function Footer() {
                   <a
                     href={link.href}
                     className="text-sm text-slate-400 transition-colors hover:text-cyan"
+                    onClick={(e) => onHashLinkClick(e, link.href)}
                   >
                     {link.label}
                   </a>
@@ -76,6 +78,12 @@ export function Footer() {
                 </a>
               </li>
             </ul>
+            <a
+              href="/admin"
+              className="mt-5 inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-300 transition-colors hover:border-cyan/40 hover:bg-cyan/10 hover:text-cyan"
+            >
+              Admins
+            </a>
           </div>
 
           <div>

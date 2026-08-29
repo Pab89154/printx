@@ -13,7 +13,7 @@ export const PRODUCTS: Product[] = [
     name: 'Fidget Toys',
     description: 'Spinners, clickers, and satisfying desk toys in fun colors.',
     price: 5,
-    imageGradient: 'from-blue-500 to-cyan-400',
+    imageGradient: 'from-navy to-electric',
     emoji: '🌀',
   },
   {
@@ -21,7 +21,7 @@ export const PRODUCTS: Product[] = [
     name: 'Keychains',
     description: 'Custom name tags, logos, and shapes for backpacks and keys.',
     price: 4,
-    imageGradient: 'from-indigo-500 to-blue-400',
+    imageGradient: 'from-electric to-cyan',
     emoji: '🔑',
   },
   {
@@ -29,7 +29,7 @@ export const PRODUCTS: Product[] = [
     name: 'Phone Stands',
     description: 'Sturdy, colorful stands for desks, nightstands, and study spaces.',
     price: 8,
-    imageGradient: 'from-cyan-500 to-teal-400',
+    imageGradient: 'from-cyan to-electric',
     emoji: '📱',
   },
   {
@@ -37,7 +37,7 @@ export const PRODUCTS: Product[] = [
     name: 'Desk Accessories',
     description: 'Organizers, cable clips, pen holders, and tidy-up tools.',
     price: 6,
-    imageGradient: 'from-violet-500 to-indigo-400',
+    imageGradient: 'from-navy via-navy-mid to-cyan',
     emoji: '🗂️',
   },
   {
@@ -45,7 +45,7 @@ export const PRODUCTS: Product[] = [
     name: 'School Accessories',
     description: 'Bookmarks, rulers, clips, and handy tools for class.',
     price: 3,
-    imageGradient: 'from-sky-500 to-blue-400',
+    imageGradient: 'from-electric to-navy',
     emoji: '📚',
   },
   {
@@ -53,7 +53,7 @@ export const PRODUCTS: Product[] = [
     name: 'Custom Designs',
     description: 'Bring your own idea — ask us about printing it in PLA or PETG.',
     price: 10,
-    imageGradient: 'from-blue-600 to-cyan-500',
+    imageGradient: 'from-cyan to-navy',
     emoji: '✨',
   },
 ]

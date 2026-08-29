@@ -12,11 +12,11 @@ export function About() {
       <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
         <div className="grid items-center gap-12 lg:grid-cols-2">
           <ScrollReveal>
-            <div className="relative aspect-[4/3] overflow-hidden rounded-3xl bg-gradient-to-br from-slate-100 to-slate-200">
+            <div className="brand-panel relative aspect-[4/3] overflow-hidden rounded-3xl">
               <div className="absolute inset-0 flex items-center justify-center">
-                <WebIcon name="printer-3d" className="h-20 w-20 opacity-40" alt="3D printer" />
+                <WebIcon name="printer-3d" light className="h-20 w-20 opacity-80" alt="3D printer" />
               </div>
-              <div className="absolute inset-0 filament-pattern opacity-30" />
+              <div className="absolute inset-0 filament-pattern opacity-40" />
             </div>
           </ScrollReveal>
           <ScrollReveal delay={150}>

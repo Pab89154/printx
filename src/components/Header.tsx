@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Menu, X } from 'lucide-react'
 import { NAV_LINKS } from '../data/navigation'
+import { onHashLinkClick } from '../lib/scroll'
 import { Button } from './Button'
 import { Logo } from './Logo'
 
@@ -8,9 +9,13 @@ export function Header() {
   const [menuOpen, setMenuOpen] = useState(false)
 
   return (
-    <header className="sticky top-0 z-50 border-b border-slate-100/80 bg-white/90 backdrop-blur-lg">
+    <header className="sticky top-0 z-50 border-b border-navy/8 bg-white/90 backdrop-blur-lg">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
-        <a href="#home" className="group flex items-center gap-3">
+        <a
+          href="#home"
+          className="group flex items-center gap-3"
+          onClick={(e) => onHashLinkClick(e, '#home')}
+        >
           <Logo size={40} className="transition-opacity group-hover:opacity-90" />
           <span className="hidden min-w-0 sm:block">
             <span className="block text-lg font-extrabold tracking-tight leading-none text-navy">PrintX</span>
@@ -24,6 +29,7 @@ export function Header() {
               key={link.href}
               href={link.href}
               className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-electric"
+              onClick={(e) => onHashLinkClick(e, link.href)}
             >
               {link.label}
             </a>
@@ -46,14 +52,17 @@ export function Header() {
       </div>
 
       {menuOpen && (
-        <nav className="border-t border-slate-100 bg-white px-4 py-4 lg:hidden">
+        <nav className="border-t border-navy/8 bg-white px-4 py-4 lg:hidden">
           <div className="flex flex-col gap-1">
             {NAV_LINKS.map((link) => (
               <a
                 key={link.href}
                 href={link.href}
                 className="rounded-xl px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-electric"
-                onClick={() => setMenuOpen(false)}
+                onClick={(e) => {
+                  onHashLinkClick(e, link.href)
+                  setMenuOpen(false)
+                }}
               >
                 {link.label}
               </a>

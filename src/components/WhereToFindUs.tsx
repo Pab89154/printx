@@ -6,8 +6,8 @@ import { SectionHeading } from './SectionHeading'
 
 const statusStyles: Record<PublicStand['status'], { label: string; className: string }> = {
   upcoming: { label: 'Upcoming', className: 'bg-electric/10 text-electric' },
-  active: { label: 'Today', className: 'bg-cyan/10 text-cyan-700' },
-  past: { label: 'Past', className: 'bg-slate-100 text-slate-500' },
+  active: { label: 'Today', className: 'bg-cyan/10 text-cyan' },
+  past: { label: 'Past', className: 'bg-navy/5 text-muted' },
 }
 
 function StandCard({ stand }: { stand: PublicStand }) {

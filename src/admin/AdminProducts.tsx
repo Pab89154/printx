@@ -7,12 +7,12 @@ const inputClass =
   'w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20'
 
 const gradients = [
-  'from-blue-500 to-cyan-400',
-  'from-indigo-500 to-blue-400',
-  'from-cyan-500 to-teal-400',
-  'from-violet-500 to-indigo-400',
-  'from-sky-500 to-blue-400',
-  'from-blue-600 to-cyan-500',
+  'from-navy to-electric',
+  'from-electric to-cyan',
+  'from-cyan to-electric',
+  'from-navy via-navy-mid to-cyan',
+  'from-electric to-navy',
+  'from-cyan to-navy',
 ]
 
 export function AdminProducts() {

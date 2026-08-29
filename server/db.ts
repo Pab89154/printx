@@ -62,7 +62,7 @@ async function migrate(database: DbApi) {
       category TEXT NOT NULL DEFAULT 'General',
       image TEXT NOT NULL DEFAULT '',
       emoji TEXT NOT NULL DEFAULT 'package',
-      image_gradient TEXT NOT NULL DEFAULT 'from-blue-500 to-cyan-400',
+      image_gradient TEXT NOT NULL DEFAULT 'from-navy to-electric',
       available INTEGER NOT NULL DEFAULT 1,
       featured INTEGER NOT NULL DEFAULT 0,
       display_order INTEGER NOT NULL DEFAULT 0,
@@ -251,17 +251,32 @@ async function migrateContactEmail(database: DbApi) {
   }
 }
 
+/** Remap product card gradients to logo navy / cyan / electric only. */
+async function migrateBrandGradients(database: DbApi) {
+  const remaps: Array<[string, string]> = [
+    ['from-blue-500 to-cyan-400', 'from-navy to-electric'],
+    ['from-indigo-500 to-blue-400', 'from-electric to-cyan'],
+    ['from-cyan-500 to-teal-400', 'from-cyan to-electric'],
+    ['from-violet-500 to-indigo-400', 'from-navy via-navy-mid to-cyan'],
+    ['from-sky-500 to-blue-400', 'from-electric to-navy'],
+    ['from-blue-600 to-cyan-500', 'from-cyan to-navy'],
+  ]
+  for (const [from, to] of remaps) {
+    await database.run('UPDATE products SET image_gradient = ? WHERE image_gradient = ?', to, from)
+  }
+}
+
 async function seed(database: DbApi) {
   const productCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM products')
   if (Number(productCount?.c ?? 0) === 0) {
     const now = new Date().toISOString()
     const products = [
-      ['fidget-toys', 'Fidget Toys', 'Spinners, clickers, and satisfying desk toys in fun colors.', 5, 'Toys', 'loader', 'from-blue-500 to-cyan-400', 1, 1, 1],
-      ['keychains', 'Keychains', 'Custom name tags, logos, and shapes for backpacks and keys.', 4, 'Accessories', 'key-round', 'from-indigo-500 to-blue-400', 1, 1, 2],
-      ['phone-stands', 'Phone Stands', 'Sturdy, colorful stands for desks, nightstands, and study spaces.', 8, 'Accessories', 'smartphone', 'from-cyan-500 to-teal-400', 1, 1, 3],
-      ['desk-accessories', 'Desk Accessories', 'Organizers, cable clips, pen holders, and tidy-up tools.', 6, 'Desk', 'folder-open', 'from-violet-500 to-indigo-400', 1, 0, 4],
-      ['school-accessories', 'School Accessories', 'Bookmarks, rulers, clips, and handy tools for class.', 3, 'School', 'book-open', 'from-sky-500 to-blue-400', 1, 0, 5],
-      ['custom-designs', 'Custom Designs', 'Bring your own idea — ask us about printing it in PLA or PETG.', 10, 'Custom', 'sparkles', 'from-blue-600 to-cyan-500', 1, 1, 6],
+      ['fidget-toys', 'Fidget Toys', 'Spinners, clickers, and satisfying desk toys in fun colors.', 5, 'Toys', 'loader', 'from-navy to-electric', 1, 1, 1],
+      ['keychains', 'Keychains', 'Custom name tags, logos, and shapes for backpacks and keys.', 4, 'Accessories', 'key-round', 'from-electric to-cyan', 1, 1, 2],
+      ['phone-stands', 'Phone Stands', 'Sturdy, colorful stands for desks, nightstands, and study spaces.', 8, 'Accessories', 'smartphone', 'from-cyan to-electric', 1, 1, 3],
+      ['desk-accessories', 'Desk Accessories', 'Organizers, cable clips, pen holders, and tidy-up tools.', 6, 'Desk', 'folder-open', 'from-navy via-navy-mid to-cyan', 1, 0, 4],
+      ['school-accessories', 'School Accessories', 'Bookmarks, rulers, clips, and handy tools for class.', 3, 'School', 'book-open', 'from-electric to-navy', 1, 0, 5],
+      ['custom-designs', 'Custom Designs', 'Bring your own idea — ask us about printing it in PLA or PETG.', 10, 'Custom', 'sparkles', 'from-cyan to-navy', 1, 1, 6],
     ]
     for (const p of products) {
       await database.run(
@@ -352,6 +367,7 @@ async function initDb(): Promise<DbApi> {
   await migrateUserAuth(database)
   await migrateEmojiToIcons(database)
   await migrateContactEmail(database)
+  await migrateBrandGradients(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
   ready = true

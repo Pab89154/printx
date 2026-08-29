@@ -58,7 +58,7 @@ create table if not exists products (
   category text not null default 'General',
   image text not null default '',
   emoji text not null default 'package',
-  image_gradient text not null default 'from-blue-500 to-cyan-400',
+  image_gradient text not null default 'from-navy to-electric',
   available integer not null default 1,
   featured integer not null default 0,
   display_order integer not null default 0,
