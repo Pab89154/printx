@@ -6,16 +6,29 @@ import { Logo } from './Logo'
 
 export function Footer() {
   const { data } = usePublicData()
-  const contactEmail = data?.content?.contactEmail ?? 'hello@printx.pw'
-  const contactInstagram = data?.content?.contactInstagram ?? ''
-  const contactWhatsapp = data?.content?.contactWhatsapp ?? ''
+  const contactEmail = data?.content?.contactEmail || 'hello@printx.pw'
+  const contactInstagram = (data?.content?.contactInstagram || '').trim()
+  const contactWhatsapp = (data?.content?.contactWhatsapp || '').trim()
   const emailDraftHref = mailtoHref(contactEmail, { subject: 'Hello PrintX' })
 
+  // Always show Instagram, WhatsApp, and Email — URLs come from Admin → Website Content
   const socialLinks = [
-    { label: 'Instagram', href: contactInstagram, Icon: AtSign },
-    { label: 'WhatsApp', href: contactWhatsapp, Icon: MessageCircle },
-    { label: 'Email', href: emailDraftHref, Icon: Mail },
-  ].filter((link) => Boolean(link.href))
+    {
+      label: 'Instagram',
+      href: contactInstagram || undefined,
+      Icon: AtSign,
+    },
+    {
+      label: 'WhatsApp',
+      href: contactWhatsapp || undefined,
+      Icon: MessageCircle,
+    },
+    {
+      label: 'Email',
+      href: emailDraftHref,
+      Icon: Mail,
+    },
+  ]
 
   return (
     <footer className="bg-navy text-white">
@@ -71,7 +84,24 @@ export function Footer() {
             </h3>
             <div className="flex gap-3">
               {socialLinks.map(({ label, href, Icon }) => {
-                const isMail = href.startsWith('mailto:')
+                const isMail = Boolean(href?.startsWith('mailto:'))
+                const enabled = Boolean(href)
+                const className =
+                  'flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 text-slate-400 transition-all hover:border-cyan/50 hover:bg-cyan/10 hover:text-cyan'
+
+                if (!enabled) {
+                  return (
+                    <span
+                      key={label}
+                      title={`${label} link coming soon`}
+                      aria-label={`${label} (link not set yet)`}
+                      className={`${className} cursor-default opacity-70`}
+                    >
+                      <Icon size={18} />
+                    </span>
+                  )
+                }
+
                 return (
                   <a
                     key={label}
@@ -79,7 +109,7 @@ export function Footer() {
                     target={isMail ? undefined : '_blank'}
                     rel={isMail ? undefined : 'noopener noreferrer'}
                     aria-label={label}
-                    className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 text-slate-400 transition-all hover:border-cyan/50 hover:bg-cyan/10 hover:text-cyan"
+                    className={className}
                   >
                     <Icon size={18} />
                   </a>

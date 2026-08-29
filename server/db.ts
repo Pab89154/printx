@@ -385,7 +385,21 @@ export function getWebsiteContent(database: Db): WebsiteContent {
       content[row.key] = row.value
     }
   }
-  return content as WebsiteContent
+  return {
+    heroHeadline: '',
+    heroDescription: '',
+    aboutText: '',
+    aboutTeam: '',
+    contactEmail: 'hello@printx.pw',
+    contactInstagram: '',
+    contactWhatsapp: '',
+    forSchoolsDescription: '',
+    forSchoolsInstructions: '',
+    announcementText: '',
+    announcementEnabled: false,
+    announcementExpiresAt: null,
+    ...content,
+  } as WebsiteContent
 }
 
 export function setWebsiteSetting(database: Db, key: string, value: unknown) {
