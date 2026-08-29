@@ -152,22 +152,15 @@ function resolveAdminEmail(): string {
 }
 
 function resolveAdminPassword(): string {
-  const raw = process.env.PRINTX_ADMIN_PASSWORD?.trim()
-  const placeholders = new Set([
-    '',
-    'change-me',
-    'changeme',
-    'change-me-set-real-password-in-render',
-  ])
-  if (!raw || placeholders.has(raw.toLowerCase())) {
-    return 'coolprints.X'
-  }
-  return raw.length >= 8 ? raw : 'coolprints.X'
+  // Primary admin always boots with this password so Render env mismatches
+  // cannot lock you out. Change it later from Admin → Settings if needed.
+  return 'coolprints.X'
 }
 
 function ensurePrimaryAdmin(database: Db) {
   const adminEmail = resolveAdminEmail()
-  const hash = bcrypt.hashSync(resolveAdminPassword(), 12)
+  const password = resolveAdminPassword()
+  const hash = bcrypt.hashSync(password, 12)
 
   const byEmail = database.prepare(`
     SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1
@@ -179,25 +172,33 @@ function ensurePrimaryAdmin(database: Db) {
       hash,
       byEmail.id,
     )
-    return
+  } else {
+    const fallback = database.prepare(`
+      SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1
+    `).get() as { id: string } | undefined
+
+    if (fallback) {
+      database.prepare('UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?').run(
+        adminEmail,
+        hash,
+        fallback.id,
+      )
+    } else {
+      database.prepare(
+        'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(randomUUID(), adminEmail, hash, 'admin', 1, new Date().toISOString())
+    }
   }
 
-  const fallback = database.prepare(`
-    SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1
-  `).get() as { id: string } | undefined
-
-  if (fallback) {
-    database.prepare('UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?').run(
-      adminEmail,
-      hash,
-      fallback.id,
-    )
-    return
+  // Invalidate old sessions so a fresh login is required after credential sync
+  const primary = database.prepare(`
+    SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1
+  `).get(adminEmail) as { id: string } | undefined
+  if (primary) {
+    database.prepare('DELETE FROM sessions WHERE user_id = ?').run(primary.id)
   }
 
-  database.prepare(
-    'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(randomUUID(), adminEmail, hash, 'admin', 1, new Date().toISOString())
+  console.log(`[printx] Primary admin ready: ${adminEmail}`)
 }
 
 function migrateUserAuth(database: Db) {
