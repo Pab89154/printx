@@ -1,49 +1,21 @@
-import { DatabaseSync } from 'node:sqlite'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import bcrypt from 'bcryptjs'
 import { randomUUID } from 'node:crypto'
 import type { Stand, WebsiteContent } from './types.ts'
+import { getDbApi, UPLOADS_DIR, type DbApi } from './dbClient.ts'
 
-export type Db = DatabaseSync
+export type Db = DbApi
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DATA_DIR = process.env.PRINTX_DATA_DIR ?? path.join(__dirname, '..', 'data')
-const DB_PATH = path.join(DATA_DIR, 'printx.db')
-const UPLOADS_DIR = path.join(DATA_DIR, 'uploads')
+let ready = false
+let readyPromise: Promise<DbApi> | null = null
 
-let db: Db | null = null
-
-export function getDb(): Db {
-  if (!db) {
-    fs.mkdirSync(DATA_DIR, { recursive: true })
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true })
-    db = new DatabaseSync(DB_PATH)
-    db.exec('PRAGMA journal_mode = WAL')
-    db.exec('PRAGMA foreign_keys = ON')
-    migrate(db)
-    migrateUserAuth(db)
-    migrateEmojiToIcons(db)
-    migrateContactEmail(db)
-    seed(db)
-    ensurePrimaryAdmin(db)
-  }
-  return db
-}
-
-export function getUploadsDir(): string {
-  getDb()
-  return UPLOADS_DIR
-}
-
-function migrate(database: Db) {
-  database.exec(`
+async function migrate(database: DbApi) {
+  await database.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'admin',
+      email_verified INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
 
@@ -129,7 +101,7 @@ function migrate(database: Db) {
 }
 
 /** Convert legacy emoji product icons to Lucide CDN icon names. */
-function migrateEmojiToIcons(database: Db) {
+async function migrateEmojiToIcons(database: DbApi) {
   const map: Record<string, string> = {
     '🌀': 'loader',
     '🔑': 'key-round',
@@ -140,11 +112,10 @@ function migrateEmojiToIcons(database: Db) {
     '📦': 'package',
     '🖨️': 'printer-3d',
   }
-  const update = database.prepare('UPDATE products SET emoji = ? WHERE emoji = ?')
   for (const [emoji, icon] of Object.entries(map)) {
-    update.run(icon, emoji)
+    await database.run('UPDATE products SET emoji = ? WHERE emoji = ?', icon, emoji)
   }
-  database.prepare("UPDATE products SET emoji = 'printer-3d' WHERE emoji = 'printer'").run()
+  await database.run("UPDATE products SET emoji = 'printer-3d' WHERE emoji = 'printer'")
 }
 
 function resolveAdminEmail(): string {
@@ -157,68 +128,79 @@ function resolveAdminPassword(): string {
   return 'coolprints.X'
 }
 
-function ensurePrimaryAdmin(database: Db) {
+async function ensurePrimaryAdmin(database: DbApi) {
   const adminEmail = resolveAdminEmail()
   const password = resolveAdminPassword()
   const hash = bcrypt.hashSync(password, 12)
 
-  const byEmail = database.prepare(`
-    SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1
-  `).get(adminEmail) as { id: string } | undefined
+  const byEmail = await database.get<{ id: string }>(
+    `SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1`,
+    adminEmail,
+  )
 
   if (byEmail) {
-    database.prepare('UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?').run(
+    await database.run(
+      'UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?',
       adminEmail,
       hash,
       byEmail.id,
     )
   } else {
-    const fallback = database.prepare(`
-      SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1
-    `).get() as { id: string } | undefined
+    const fallback = await database.get<{ id: string }>(
+      `SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`,
+    )
 
     if (fallback) {
-      database.prepare('UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?').run(
+      await database.run(
+        'UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?',
         adminEmail,
         hash,
         fallback.id,
       )
     } else {
-      database.prepare(
+      await database.run(
         'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(randomUUID(), adminEmail, hash, 'admin', 1, new Date().toISOString())
+        randomUUID(),
+        adminEmail,
+        hash,
+        'admin',
+        1,
+        new Date().toISOString(),
+      )
     }
   }
 
   // Invalidate old sessions so a fresh login is required after credential sync
-  const primary = database.prepare(`
-    SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1
-  `).get(adminEmail) as { id: string } | undefined
+  const primary = await database.get<{ id: string }>(
+    `SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1`,
+    adminEmail,
+  )
   if (primary) {
-    database.prepare('DELETE FROM sessions WHERE user_id = ?').run(primary.id)
+    await database.run('DELETE FROM sessions WHERE user_id = ?', primary.id)
   }
 
   console.log(`[printx] Primary admin ready: ${adminEmail}`)
 }
 
-function migrateUserAuth(database: Db) {
+async function migrateUserAuth(database: DbApi) {
   try {
-    database.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0')
+    await database.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0')
   } catch {
     /* column already exists */
   }
-  database.prepare('UPDATE users SET email_verified = 1 WHERE role = ?').run('admin')
+  await database.run('UPDATE users SET email_verified = 1 WHERE role = ?', 'admin')
 }
 
-function migrateContactEmail(database: Db) {
-  const row = database.prepare("SELECT value FROM website_settings WHERE key = 'contactEmail'").get() as
-    | { value: string }
-    | undefined
+async function migrateContactEmail(database: DbApi) {
+  const row = await database.get<{ value: string }>(
+    "SELECT value FROM website_settings WHERE key = 'contactEmail'",
+  )
   if (row) {
     try {
       const email = JSON.parse(row.value) as string
       if (email === 'hello@printxmckinney.com') {
-        database.prepare("UPDATE website_settings SET value = ?, updated_at = ? WHERE key = 'contactEmail'").run(
+        await database.run(
+          "UPDATE website_settings SET value = ?, updated_at = ? WHERE key = 'contactEmail'",
           JSON.stringify('hello@printx.pw'),
           new Date().toISOString(),
         )
@@ -229,12 +211,12 @@ function migrateContactEmail(database: Db) {
   }
 
   // Rename TikTok setting → WhatsApp channel URL
-  const tiktok = database.prepare("SELECT value FROM website_settings WHERE key = 'contactTiktok'").get() as
-    | { value: string }
-    | undefined
-  const whatsapp = database.prepare("SELECT value FROM website_settings WHERE key = 'contactWhatsapp'").get() as
-    | { value: string }
-    | undefined
+  const tiktok = await database.get<{ value: string }>(
+    "SELECT value FROM website_settings WHERE key = 'contactTiktok'",
+  )
+  const whatsapp = await database.get<{ value: string }>(
+    "SELECT value FROM website_settings WHERE key = 'contactWhatsapp'",
+  )
   if (!whatsapp) {
     const now = new Date().toISOString()
     let value = '""'
@@ -247,19 +229,21 @@ function migrateContactEmail(database: Db) {
         value = '""'
       }
     }
-    database.prepare('INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)').run(
+    await database.run(
+      'INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)',
       'contactWhatsapp',
       value,
       now,
     )
   }
   if (tiktok) {
-    database.prepare("DELETE FROM website_settings WHERE key = 'contactTiktok'").run()
+    await database.run("DELETE FROM website_settings WHERE key = 'contactTiktok'")
   }
 
-  const online = database.prepare("SELECT value FROM website_settings WHERE key = 'websiteOnline'").get()
+  const online = await database.get("SELECT value FROM website_settings WHERE key = 'websiteOnline'")
   if (!online) {
-    database.prepare('INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)').run(
+    await database.run(
+      'INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)',
       'websiteOnline',
       JSON.stringify(true),
       new Date().toISOString(),
@@ -267,9 +251,9 @@ function migrateContactEmail(database: Db) {
   }
 }
 
-function seed(database: Db) {
-  const productCount = database.prepare('SELECT COUNT(*) as c FROM products').get() as { c: number }
-  if (productCount.c === 0) {
+async function seed(database: DbApi) {
+  const productCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM products')
+  if (Number(productCount?.c ?? 0) === 0) {
     const now = new Date().toISOString()
     const products = [
       ['fidget-toys', 'Fidget Toys', 'Spinners, clickers, and satisfying desk toys in fun colors.', 5, 'Toys', 'loader', 'from-blue-500 to-cyan-400', 1, 1, 1],
@@ -279,35 +263,44 @@ function seed(database: Db) {
       ['school-accessories', 'School Accessories', 'Bookmarks, rulers, clips, and handy tools for class.', 3, 'School', 'book-open', 'from-sky-500 to-blue-400', 1, 0, 5],
       ['custom-designs', 'Custom Designs', 'Bring your own idea — ask us about printing it in PLA or PETG.', 10, 'Custom', 'sparkles', 'from-blue-600 to-cyan-500', 1, 1, 6],
     ]
-    const stmt = database.prepare(`
-      INSERT INTO products (id, name, description, price, category, image, emoji, image_gradient, available, featured, display_order, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)
-    `)
     for (const p of products) {
-      stmt.run(...p, now, now)
+      await database.run(
+        `INSERT INTO products (id, name, description, price, category, image, emoji, image_gradient, available, featured, display_order, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`,
+        ...p,
+        now,
+        now,
+      )
     }
   }
 
-  const schoolCount = database.prepare('SELECT COUNT(*) as c FROM schools').get() as { c: number }
+  const schoolCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM schools')
   let mckinneySchoolId = ''
-  if (schoolCount.c === 0) {
+  if (Number(schoolCount?.c ?? 0) === 0) {
     const now = new Date().toISOString()
     mckinneySchoolId = randomUUID()
-    database.prepare(
+    await database.run(
       'INSERT INTO schools (id, name, address, description, image, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(mckinneySchoolId, 'McKinney School', 'McKinney, TX', 'Home base for PrintX stands.', '', 1, now, now)
+      mckinneySchoolId,
+      'McKinney School',
+      'McKinney, TX',
+      'Home base for PrintX stands.',
+      '',
+      1,
+      now,
+      now,
+    )
   } else {
-    const row = database.prepare('SELECT id FROM schools WHERE name = ?').get('McKinney School') as { id: string } | undefined
+    const row = await database.get<{ id: string }>('SELECT id FROM schools WHERE name = ?', 'McKinney School')
     mckinneySchoolId = row?.id ?? ''
   }
 
-  const standCount = database.prepare('SELECT COUNT(*) as c FROM stands').get() as { c: number }
-  if (standCount.c === 0) {
+  const standCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM stands')
+  if (Number(standCount?.c ?? 0) === 0) {
     const now = new Date().toISOString()
-    database.prepare(`
-      INSERT INTO stands (id, school_id, school_name, date, start_time, end_time, location, description, notes, products_json, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    await database.run(
+      `INSERT INTO stands (id, school_id, school_name, date, start_time, end_time, location, description, notes, products_json, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       randomUUID(),
       mckinneySchoolId || null,
       'McKinney School',
@@ -324,8 +317,8 @@ function seed(database: Db) {
     )
   }
 
-  const settingsCount = database.prepare('SELECT COUNT(*) as c FROM website_settings').get() as { c: number }
-  if (settingsCount.c === 0) {
+  const settingsCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM website_settings')
+  if (Number(settingsCount?.c ?? 0) === 0) {
     const defaults: WebsiteContent = {
       heroHeadline: 'Your Ideas. Our Prints.',
       heroDescription: 'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.',
@@ -342,11 +335,48 @@ function seed(database: Db) {
       websiteOnline: true,
     }
     const now = new Date().toISOString()
-    const stmt = database.prepare('INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)')
     for (const [key, value] of Object.entries(defaults)) {
-      stmt.run(key, JSON.stringify(value), now)
+      await database.run(
+        'INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)',
+        key,
+        JSON.stringify(value),
+        now,
+      )
     }
   }
+}
+
+async function initDb(): Promise<DbApi> {
+  const database = await getDbApi()
+  await migrate(database)
+  await migrateUserAuth(database)
+  await migrateEmojiToIcons(database)
+  await migrateContactEmail(database)
+  await seed(database)
+  await ensurePrimaryAdmin(database)
+  ready = true
+  return database
+}
+
+/** Initialize once (migrate, seed, ensurePrimaryAdmin). Safe to call repeatedly. */
+export async function ensureDbReady(): Promise<DbApi> {
+  if (ready) return getDbApi()
+  if (!readyPromise) {
+    readyPromise = initDb().catch((err) => {
+      readyPromise = null
+      throw err
+    })
+  }
+  return readyPromise
+}
+
+export async function getDb(): Promise<DbApi> {
+  return ensureDbReady()
+}
+
+export async function getUploadsDir(): Promise<string> {
+  await ensureDbReady()
+  return UPLOADS_DIR
 }
 
 export function rowToStand(row: Record<string, unknown>): Stand {
@@ -385,8 +415,8 @@ export function rowToProduct(row: Record<string, unknown>) {
   }
 }
 
-export function getWebsiteContent(database: Db): WebsiteContent {
-  const rows = database.prepare('SELECT key, value FROM website_settings').all() as { key: string; value: string }[]
+export async function getWebsiteContent(database: DbApi): Promise<WebsiteContent> {
+  const rows = await database.all<{ key: string; value: string }>('SELECT key, value FROM website_settings')
   const content = {} as Record<string, unknown>
   for (const row of rows) {
     try {
@@ -432,10 +462,15 @@ export function getWebsiteContent(database: Db): WebsiteContent {
   return merged
 }
 
-export function setWebsiteSetting(database: Db, key: string, value: unknown) {
+export async function setWebsiteSetting(database: DbApi, key: string, value: unknown) {
   const now = new Date().toISOString()
-  database.prepare(`
+  await database.run(
+    `
     INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).run(key, JSON.stringify(value), now)
+  `,
+    key,
+    JSON.stringify(value),
+    now,
+  )
 }

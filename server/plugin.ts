@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect, Plugin } from 'vite'
+import { ensureDbReady } from './db.ts'
 import { handleApi } from './router.ts'
 
 const apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
@@ -25,10 +26,12 @@ const apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
 export function printxApiPlugin(): Plugin {
   return {
     name: 'printx-api',
-    configureServer(server) {
+    async configureServer(server) {
+      await ensureDbReady()
       server.middlewares.use(apiMiddleware)
     },
-    configurePreviewServer(server) {
+    async configurePreviewServer(server) {
+      await ensureDbReady()
       server.middlewares.use(apiMiddleware)
     },
   }

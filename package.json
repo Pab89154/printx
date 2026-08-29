@@ -7,7 +7,8 @@
     "dev": "NODE_OPTIONS='--experimental-sqlite' vite --port 5675 --strictPort",
     "build": "vite build",
     "render-build": "bash scripts/render-build.sh",
-    "start": "node --experimental-sqlite --import tsx server/production.ts",
+    "start": "node --import tsx server/production.ts",
+    "start:sqlite": "node --experimental-sqlite --import tsx server/production.ts",
     "preview": "NODE_OPTIONS='--experimental-sqlite' vite preview --port 5675 --strictPort"
   },
   "engines": {
@@ -24,6 +25,7 @@
     "bcryptjs": "^3.0.3",
     "formidable": "^3.5.4",
     "lucide-react": "^1.26.0",
+    "pg": "^8.23.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.0",
@@ -35,5 +37,8 @@
   "allowScripts": {
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
   }
 }

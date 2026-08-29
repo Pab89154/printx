@@ -11,58 +11,72 @@ function hashToken(token: string): string {
   return createHash('sha256').update(`${token}:${secret}`).digest('hex')
 }
 
-export function createSession(userId: string): string {
-  const db = getDb()
+export async function createSession(userId: string): Promise<string> {
+  const db = await getDb()
   const token = randomBytes(32).toString('hex')
   const tokenHash = hashToken(token)
   const now = new Date()
   const expires = new Date(now.getTime() + SESSION_DAYS * 24 * 60 * 60 * 1000)
   const sessionId = randomUUID()
 
-  db.prepare(
+  await db.run(
     'INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(sessionId, userId, tokenHash, expires.toISOString(), now.toISOString())
+    sessionId,
+    userId,
+    tokenHash,
+    expires.toISOString(),
+    now.toISOString(),
+  )
 
   return token
 }
 
-export function destroySession(token: string | null) {
+export async function destroySession(token: string | null): Promise<void> {
   if (!token) return
-  const db = getDb()
-  db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token))
+  const db = await getDb()
+  await db.run('DELETE FROM sessions WHERE token_hash = ?', hashToken(token))
 }
 
-export function getSessionUser(token: string | null): { id: string; role: string; email: string } | null {
+export async function getSessionUser(
+  token: string | null,
+): Promise<{ id: string; role: string; email: string } | null> {
   if (!token) return null
-  const db = getDb()
+  const db = await getDb()
   const tokenHash = hashToken(token)
-  const row = db.prepare(`
+  const row = await db.get<{ id: string; role: string; email: string; expires_at: string }>(
+    `
     SELECT u.id, u.role, u.email, s.expires_at
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ?
-  `).get(tokenHash) as { id: string; role: string; email: string; expires_at: string } | undefined
+  `,
+    tokenHash,
+  )
 
   if (!row) return null
   if (new Date(row.expires_at) < new Date()) {
-    db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash)
+    await db.run('DELETE FROM sessions WHERE token_hash = ?', tokenHash)
     return null
   }
   return { id: row.id, role: row.role, email: row.email ?? '' }
 }
 
-export function verifyAdminLogin(email: string, password: string): { id: string; role: string; email: string } | null {
+export async function verifyAdminLogin(
+  email: string,
+  password: string,
+): Promise<{ id: string; role: string; email: string } | null> {
   const normalized = sanitizeEmail(email).toLowerCase()
   if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null
 
-  const db = getDb()
-  const user = db.prepare(`
+  const db = await getDb()
+  const user = await db.get<{ id: string; password_hash: string; role: string; email: string }>(
+    `
     SELECT id, password_hash, role, email
     FROM users
     WHERE role = 'admin' AND LOWER(email) = ?
-  `).get(normalized) as
-    | { id: string; password_hash: string; role: string; email: string }
-    | undefined
+  `,
+    normalized,
+  )
 
   if (!user) return null
   if (!bcrypt.compareSync(password, user.password_hash)) return null
@@ -70,23 +84,30 @@ export function verifyAdminLogin(email: string, password: string): { id: string;
 }
 
 /** @deprecated use verifyAdminLogin */
-export function verifyAdminPassword(password: string): { id: string; role: string } | null {
-  const db = getDb()
-  const user = db.prepare(`
-    SELECT id, password_hash, role FROM users WHERE role = 'admin' LIMIT 1
-  `).get() as { id: string; password_hash: string; role: string } | undefined
+export async function verifyAdminPassword(
+  password: string,
+): Promise<{ id: string; role: string } | null> {
+  const db = await getDb()
+  const user = await db.get<{ id: string; password_hash: string; role: string }>(
+    `SELECT id, password_hash, role FROM users WHERE role = 'admin' LIMIT 1`,
+  )
   if (!user) return null
   if (!bcrypt.compareSync(password, user.password_hash)) return null
   return { id: user.id, role: user.role }
 }
 
-export function updateAdminPassword(db: Db, userId: string, currentPassword: string, newPassword: string): boolean {
-  const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(userId) as { password_hash: string } | undefined
+export async function updateAdminPassword(
+  db: Db,
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<boolean> {
+  const user = await db.get<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = ?', userId)
   if (!user || !bcrypt.compareSync(currentPassword, user.password_hash)) return false
   if (newPassword.length < 8) return false
   const hash = bcrypt.hashSync(newPassword, 12)
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, userId)
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId)
+  await db.run('UPDATE users SET password_hash = ? WHERE id = ?', hash, userId)
+  await db.run('DELETE FROM sessions WHERE user_id = ?', userId)
   return true
 }
 
@@ -97,11 +118,11 @@ export type AdminUserRecord = {
   createdAt: string
 }
 
-export function listAdminUsers(): AdminUserRecord[] {
-  const db = getDb()
-  const rows = db.prepare(`
-    SELECT id, email, email_verified, created_at FROM users WHERE role = 'admin' ORDER BY created_at ASC
-  `).all() as { id: string; email: string; email_verified: number; created_at: string }[]
+export async function listAdminUsers(): Promise<AdminUserRecord[]> {
+  const db = await getDb()
+  const rows = await db.all<{ id: string; email: string; email_verified: number; created_at: string }>(
+    `SELECT id, email, email_verified, created_at FROM users WHERE role = 'admin' ORDER BY created_at ASC`,
+  )
   return rows.map((r) => ({
     id: r.id,
     email: r.email,
@@ -110,32 +131,38 @@ export function listAdminUsers(): AdminUserRecord[] {
   }))
 }
 
-export function createAdminUser(email: string, password: string): AdminUserRecord | null {
+export async function createAdminUser(email: string, password: string): Promise<AdminUserRecord | null> {
   const normalized = sanitizeEmail(email).toLowerCase()
   if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null
   if (password.length < 8) return null
 
-  const db = getDb()
-  const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(normalized)
+  const db = await getDb()
+  const existing = await db.get('SELECT id FROM users WHERE LOWER(email) = ?', normalized)
   if (existing) return null
 
   const id = randomUUID()
   const now = new Date().toISOString()
   const hash = bcrypt.hashSync(password, 12)
-  db.prepare(
+  await db.run(
     'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(id, normalized, hash, 'admin', 1, now)
+    id,
+    normalized,
+    hash,
+    'admin',
+    1,
+    now,
+  )
 
   return { id, email: normalized, emailVerified: true, createdAt: now }
 }
 
-export function deleteAdminUser(actorId: string, targetId: string): boolean {
+export async function deleteAdminUser(actorId: string, targetId: string): Promise<boolean> {
   if (actorId === targetId) return false
-  const db = getDb()
-  const count = (db.prepare('SELECT COUNT(*) as c FROM users WHERE role = ?').get('admin') as { c: number }).c
-  if (count <= 1) return false
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(targetId)
-  const result = db.prepare('DELETE FROM users WHERE id = ? AND role = ?').run(targetId, 'admin')
+  const db = await getDb()
+  const countRow = await db.get<{ c: number | string }>('SELECT COUNT(*) as c FROM users WHERE role = ?', 'admin')
+  if (Number(countRow?.c ?? 0) <= 1) return false
+  await db.run('DELETE FROM sessions WHERE user_id = ?', targetId)
+  const result = await db.run('DELETE FROM users WHERE id = ? AND role = ?', targetId, 'admin')
   return result.changes > 0
 }
 

@@ -5,8 +5,17 @@ import type { Plugin } from 'vite'
 
 export default defineConfig(async ({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  process.env.PRINTX_ADMIN_PASSWORD = env.PRINTX_ADMIN_PASSWORD
-  process.env.PRINTX_SESSION_SECRET = env.PRINTX_SESSION_SECRET
+  for (const key of [
+    'PRINTX_ADMIN_EMAIL',
+    'PRINTX_ADMIN_PASSWORD',
+    'PRINTX_SESSION_SECRET',
+    'DATABASE_URL',
+    'SUPABASE_URL',
+    'SUPABASE_ANON_KEY',
+    'PRINTX_DATA_DIR',
+  ] as const) {
+    if (env[key]) process.env[key] = env[key]
+  }
 
   const plugins: Plugin[] = [react(), tailwindcss()]
 

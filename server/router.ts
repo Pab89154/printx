@@ -55,9 +55,9 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   }
 }
 
-function requireAdmin(req: IncomingMessage): { id: string; role: string } | null {
+async function requireAdmin(req: IncomingMessage): Promise<{ id: string; role: string; email: string } | null> {
   const cookies = parseCookies(req.headers.cookie)
-  const user = getSessionUser(cookies[SESSION_COOKIE] ?? null)
+  const user = await getSessionUser(cookies[SESSION_COOKIE] ?? null)
   if (!user || user.role !== 'admin') return null
   return user
 }
@@ -81,8 +81,9 @@ function publicStand(row: ReturnType<typeof rowToStand>) {
 }
 
 async function parseMultipart(req: IncomingMessage): Promise<{ fields: Record<string, string>; filePath: string | null }> {
+  const uploadsDir = await getUploadsDir()
   const form = formidable({
-    uploadDir: getUploadsDir(),
+    uploadDir: uploadsDir,
     keepExtensions: true,
     maxFileSize: MAX_UPLOAD_BYTES,
     multiples: false,
@@ -106,7 +107,7 @@ async function parseMultipart(req: IncomingMessage): Promise<{ fields: Record<st
           return reject(new Error('Invalid file type. Only .stl and .obj allowed.'))
         }
         const safeName = `${randomUUID()}${ext}`
-        const dest = path.join(getUploadsDir(), safeName)
+        const dest = path.join(uploadsDir, safeName)
         fs.renameSync(file.filepath, dest)
         filePath = safeName
       }
@@ -116,23 +117,29 @@ async function parseMultipart(req: IncomingMessage): Promise<{ fields: Record<st
 }
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPath: string, method: string): Promise<boolean> {
-  const db = getDb()
+  const db = await getDb()
 
   if (urlPath === '/api/public/bootstrap' && method === 'GET') {
-    const stands = (db.prepare(`
+    const stands = (
+      await db.all<Record<string, unknown>>(`
       SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC, start_time ASC
-    `).all() as Record<string, unknown>[]).map((r) => publicStand(rowToStand(r)))
+    `)
+    ).map((r) => publicStand(rowToStand(r)))
 
-    const pastStands = (db.prepare(`
+    const pastStands = (
+      await db.all<Record<string, unknown>>(`
       SELECT * FROM stands WHERE status = 'past' ORDER BY date DESC LIMIT 10
-    `).all() as Record<string, unknown>[]).map((r) => publicStand(rowToStand(r)))
+    `)
+    ).map((r) => publicStand(rowToStand(r)))
 
-    const products = (db.prepare(`
+    const products = (
+      await db.all<Record<string, unknown>>(`
       SELECT * FROM products ORDER BY display_order ASC, name ASC
-    `).all() as Record<string, unknown>[]).map(rowToProduct)
+    `)
+    ).map(rowToProduct)
 
-    const schools = db.prepare('SELECT * FROM schools WHERE active = 1 ORDER BY name ASC').all()
-    const content = getWebsiteContent(db)
+    const schools = await db.all('SELECT * FROM schools WHERE active = 1 ORDER BY name ASC')
+    const content = await getWebsiteContent(db)
     const announcementActive =
       content.announcementEnabled &&
       (!content.announcementExpiresAt || new Date(content.announcementExpiresAt) >= new Date())
@@ -146,10 +153,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       const { fields, filePath } = await parseMultipart(req)
       const now = new Date().toISOString()
       const id = randomUUID()
-      db.prepare(`
+      await db.run(
+        `
         INSERT INTO custom_requests (id, name, email, school, description, size, uploaded_file, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
-      `).run(
+      `,
         id,
         sanitizeText(fields.name, 120),
         sanitizeEmail(fields.email),
@@ -169,10 +177,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/public/contact' && method === 'POST') {
     const body = await readJson(req)
-    db.prepare(`
+    await db.run(
+      `
       INSERT INTO contact_messages (id, name, email, inquiry_type, message, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       randomUUID(),
       sanitizeText(body.name, 120),
       sanitizeEmail(body.email),
@@ -188,12 +197,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const email = typeof body.email === 'string' ? body.email : ''
     const password = typeof body.password === 'string' ? body.password : ''
-    const user = verifyAdminLogin(email, password)
+    const user = await verifyAdminLogin(email, password)
     if (!user) {
       send(res, 401, { error: 'Invalid email or password.' })
       return true
     }
-    const token = createSession(user.id)
+    const token = await createSession(user.id)
     send(res, 200, { ok: true, role: user.role, email: user.email }, [
       sessionCookieHeader(token, { secure: isSecureRequest(req) }),
     ])
@@ -202,13 +211,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/admin/logout' && method === 'POST') {
     const cookies = parseCookies(req.headers.cookie)
-    destroySession(cookies[SESSION_COOKIE] ?? null)
+    await destroySession(cookies[SESSION_COOKIE] ?? null)
     send(res, 200, { ok: true }, [clearSessionCookieHeader(isSecureRequest(req))])
     return true
   }
 
   if (urlPath === '/api/admin/me' && method === 'GET') {
-    const user = requireAdmin(req)
+    const user = await requireAdmin(req)
     if (!user) {
       send(res, 401, { error: 'Unauthorized' })
       return true
@@ -219,7 +228,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   const uploadMatch = urlPath.match(/^\/api\/admin\/uploads\/([^/]+)$/)
   if (uploadMatch && method === 'GET') {
-    const adminUser = requireAdmin(req)
+    const adminUser = await requireAdmin(req)
     if (!adminUser) {
       send(res, 401, { error: 'Unauthorized' })
       return true
@@ -229,8 +238,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 400, { error: 'Invalid file name' })
       return true
     }
-    const filePath = path.join(getUploadsDir(), filename)
-    if (!filePath.startsWith(getUploadsDir()) || !fs.existsSync(filePath)) {
+    const uploadsDir = await getUploadsDir()
+    const filePath = path.join(uploadsDir, filename)
+    if (!filePath.startsWith(uploadsDir) || !fs.existsSync(filePath)) {
       send(res, 404, { error: 'File not found' })
       return true
     }
@@ -242,25 +252,31 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/stats' && method === 'GET') {
-    if (!requireAdmin(req)) {
+    if (!(await requireAdmin(req))) {
       send(res, 401, { error: 'Unauthorized' })
       return true
     }
-    const nextRow = db.prepare(`
+    const nextRow = await db.get<Record<string, unknown>>(`
       SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC LIMIT 1
-    `).get() as Record<string, unknown> | undefined
-    const activeProducts = (db.prepare('SELECT COUNT(*) as c FROM products WHERE available = 1').get() as { c: number }).c
-    const newRequests = (db.prepare("SELECT COUNT(*) as c FROM custom_requests WHERE status = 'new'").get() as { c: number }).c
+    `)
+    const activeProducts = Number(
+      (await db.get<{ c: number | string }>('SELECT COUNT(*) as c FROM products WHERE available = 1'))?.c ?? 0,
+    )
+    const newRequests = Number(
+      (await db.get<{ c: number | string }>("SELECT COUNT(*) as c FROM custom_requests WHERE status = 'new'"))?.c ??
+        0,
+    )
+    const content = await getWebsiteContent(db)
     send(res, 200, {
       nextStand: nextRow ? publicStand(rowToStand(nextRow)) : null,
       activeProducts,
       newRequests,
-      websiteOnline: getWebsiteContent(db).websiteOnline !== false,
+      websiteOnline: content.websiteOnline !== false,
     })
     return true
   }
 
-  const admin = requireAdmin(req)
+  const admin = await requireAdmin(req)
   if (!admin) {
     if (urlPath.startsWith('/api/admin/')) {
       send(res, 401, { error: 'Unauthorized' })
@@ -270,7 +286,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/stands' && method === 'GET') {
-    const rows = db.prepare('SELECT * FROM stands ORDER BY date DESC').all() as Record<string, unknown>[]
+    const rows = await db.all<Record<string, unknown>>('SELECT * FROM stands ORDER BY date DESC')
     send(res, 200, rows.map((r) => rowToStand(r)))
     return true
   }
@@ -279,10 +295,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const now = new Date().toISOString()
     const id = randomUUID()
-    db.prepare(`
+    await db.run(
+      `
       INSERT INTO stands (id, school_id, school_name, date, start_time, end_time, location, description, notes, products_json, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       id,
       body.schoolId ?? null,
       sanitizeText(body.schoolName, 200),
@@ -297,7 +314,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       now,
       now,
     )
-    const row = db.prepare('SELECT * FROM stands WHERE id = ?').get(id) as Record<string, unknown>
+    const row = (await db.get<Record<string, unknown>>('SELECT * FROM stands WHERE id = ?', id))!
     send(res, 201, rowToStand(row))
     return true
   }
@@ -307,17 +324,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const id = standMatch[1]
     if (method === 'PATCH') {
       const body = await readJson(req)
-      const existing = db.prepare('SELECT * FROM stands WHERE id = ?').get(id)
+      const existing = await db.get('SELECT * FROM stands WHERE id = ?', id)
       if (!existing) {
         send(res, 404, { error: 'Not found' })
         return true
       }
-      db.prepare(`
+      await db.run(
+        `
         UPDATE stands SET
           school_id = ?, school_name = ?, date = ?, start_time = ?, end_time = ?,
           location = ?, description = ?, notes = ?, products_json = ?, status = ?, updated_at = ?
         WHERE id = ?
-      `).run(
+      `,
         body.schoolId ?? null,
         sanitizeText(body.schoolName, 200),
         sanitizeText(body.date, 20),
@@ -331,19 +349,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         new Date().toISOString(),
         id,
       )
-      const row = db.prepare('SELECT * FROM stands WHERE id = ?').get(id) as Record<string, unknown>
+      const row = (await db.get<Record<string, unknown>>('SELECT * FROM stands WHERE id = ?', id))!
       send(res, 200, rowToStand(row))
       return true
     }
     if (method === 'DELETE') {
-      db.prepare('DELETE FROM stands WHERE id = ?').run(id)
+      await db.run('DELETE FROM stands WHERE id = ?', id)
       send(res, 200, { ok: true })
       return true
     }
   }
 
   if (urlPath === '/api/admin/products' && method === 'GET') {
-    const rows = db.prepare('SELECT * FROM products ORDER BY display_order ASC').all() as Record<string, unknown>[]
+    const rows = await db.all<Record<string, unknown>>('SELECT * FROM products ORDER BY display_order ASC')
     send(res, 200, rows.map(rowToProduct))
     return true
   }
@@ -352,10 +370,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const now = new Date().toISOString()
     const id = randomUUID()
-    db.prepare(`
+    await db.run(
+      `
       INSERT INTO products (id, name, description, price, category, image, emoji, image_gradient, available, featured, display_order, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       id,
       sanitizeText(body.name, 120),
       sanitizeText(body.description, 2000),
@@ -370,7 +389,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       now,
       now,
     )
-    const row = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Record<string, unknown>
+    const row = (await db.get<Record<string, unknown>>('SELECT * FROM products WHERE id = ?', id))!
     send(res, 201, rowToProduct(row))
     return true
   }
@@ -380,12 +399,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const id = productMatch[1]
     if (method === 'PATCH') {
       const body = await readJson(req)
-      db.prepare(`
+      await db.run(
+        `
         UPDATE products SET
           name = ?, description = ?, price = ?, category = ?, image = ?, emoji = ?,
           image_gradient = ?, available = ?, featured = ?, display_order = ?, updated_at = ?
         WHERE id = ?
-      `).run(
+      `,
         sanitizeText(body.name, 120),
         sanitizeText(body.description, 2000),
         Number(body.price) || 0,
@@ -399,19 +419,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         new Date().toISOString(),
         id,
       )
-      const row = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as Record<string, unknown>
+      const row = (await db.get<Record<string, unknown>>('SELECT * FROM products WHERE id = ?', id))!
       send(res, 200, rowToProduct(row))
       return true
     }
     if (method === 'DELETE') {
-      db.prepare('DELETE FROM products WHERE id = ?').run(id)
+      await db.run('DELETE FROM products WHERE id = ?', id)
       send(res, 200, { ok: true })
       return true
     }
   }
 
   if (urlPath === '/api/admin/custom-requests' && method === 'GET') {
-    send(res, 200, db.prepare('SELECT * FROM custom_requests ORDER BY created_at DESC').all())
+    send(res, 200, await db.all('SELECT * FROM custom_requests ORDER BY created_at DESC'))
     return true
   }
 
@@ -422,17 +442,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const status = ['new', 'reviewing', 'approved', 'declined', 'completed'].includes(String(body.status))
       ? (body.status as RequestStatus)
       : 'new'
-    db.prepare('UPDATE custom_requests SET status = ?, updated_at = ? WHERE id = ?').run(
-      status,
-      new Date().toISOString(),
-      id,
-    )
+    await db.run('UPDATE custom_requests SET status = ?, updated_at = ? WHERE id = ?', status, new Date().toISOString(), id)
     send(res, 200, { ok: true })
     return true
   }
 
   if (urlPath === '/api/admin/schools' && method === 'GET') {
-    send(res, 200, db.prepare('SELECT * FROM schools ORDER BY name ASC').all())
+    send(res, 200, await db.all('SELECT * FROM schools ORDER BY name ASC'))
     return true
   }
 
@@ -440,10 +456,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const now = new Date().toISOString()
     const id = randomUUID()
-    db.prepare(`
+    await db.run(
+      `
       INSERT INTO schools (id, name, address, description, image, active, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       id,
       sanitizeText(body.name, 200),
       sanitizeText(body.address, 300),
@@ -453,7 +470,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       now,
       now,
     )
-    send(res, 201, db.prepare('SELECT * FROM schools WHERE id = ?').get(id))
+    send(res, 201, await db.get('SELECT * FROM schools WHERE id = ?', id))
     return true
   }
 
@@ -462,10 +479,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const id = schoolMatch[1]
     if (method === 'PATCH') {
       const body = await readJson(req)
-      db.prepare(`
+      await db.run(
+        `
         UPDATE schools SET name = ?, address = ?, description = ?, image = ?, active = ?, updated_at = ?
         WHERE id = ?
-      `).run(
+      `,
         sanitizeText(body.name, 200),
         sanitizeText(body.address, 300),
         sanitizeText(body.description, 2000),
@@ -474,33 +492,33 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         new Date().toISOString(),
         id,
       )
-      send(res, 200, db.prepare('SELECT * FROM schools WHERE id = ?').get(id))
+      send(res, 200, await db.get('SELECT * FROM schools WHERE id = ?', id))
       return true
     }
     if (method === 'DELETE') {
-      db.prepare('DELETE FROM schools WHERE id = ?').run(id)
+      await db.run('DELETE FROM schools WHERE id = ?', id)
       send(res, 200, { ok: true })
       return true
     }
   }
 
   if (urlPath === '/api/admin/content' && method === 'GET') {
-    send(res, 200, getWebsiteContent(db))
+    send(res, 200, await getWebsiteContent(db))
     return true
   }
 
   if (urlPath === '/api/admin/content' && method === 'PATCH') {
     const body = await readJson(req)
     for (const [key, value] of Object.entries(body)) {
-      setWebsiteSetting(db, key, value)
+      await setWebsiteSetting(db, key, value)
     }
-    send(res, 200, getWebsiteContent(db))
+    send(res, 200, await getWebsiteContent(db))
     return true
   }
 
   if (urlPath === '/api/admin/settings/password' && method === 'PATCH') {
     const body = await readJson(req)
-    const ok = updateAdminPassword(
+    const ok = await updateAdminPassword(
       db,
       admin.id,
       String(body.currentPassword ?? ''),
@@ -515,7 +533,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/users' && method === 'GET') {
-    send(res, 200, listAdminUsers())
+    send(res, 200, await listAdminUsers())
     return true
   }
 
@@ -523,7 +541,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const email = sanitizeEmail(body.email)
     const password = typeof body.password === 'string' ? body.password : ''
-    const created = createAdminUser(email, password)
+    const created = await createAdminUser(email, password)
     if (!created) {
       send(res, 400, { error: 'Could not create admin. Use a valid unique email and password (8+ characters).' })
       return true
@@ -535,7 +553,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   const userMatch = urlPath.match(/^\/api\/admin\/users\/([^/]+)$/)
   if (userMatch && method === 'DELETE') {
     const targetId = userMatch[1]
-    const ok = deleteAdminUser(admin.id, targetId)
+    const ok = await deleteAdminUser(admin.id, targetId)
     if (!ok) {
       send(res, 400, { error: 'Cannot remove this admin (you may be deleting yourself or the last admin).' })
       return true

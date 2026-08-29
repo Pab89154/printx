@@ -3,15 +3,23 @@ services:
     name: printx
     runtime: node
     buildCommand: npm run render-build
+    # With DATABASE_URL set, start does not need --experimental-sqlite.
+    # Keep NODE_OPTIONS only if you temporarily run without DATABASE_URL (SQLite fallback).
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: "22"
-      - key: NODE_OPTIONS
-        value: --experimental-sqlite
       - key: PRINTX_ADMIN_PASSWORD
         value: coolprints.X
       - key: PRINTX_ADMIN_EMAIL
         value: pablo.molina@printx.pw
       - key: PRINTX_SESSION_SECRET
         generateValue: true
+      # REQUIRED — set in Render Dashboard → Environment (sync: false so secret stays in dashboard):
+      # Supabase → Connect → Session pooler URI
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
