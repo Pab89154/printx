@@ -20,6 +20,6 @@ export const FOOTER_LINKS = [
 
 export const SOCIAL_LINKS = [
   { label: 'Instagram', href: 'https://instagram.com' },
-  { label: 'TikTok', href: 'https://tiktok.com' },
-  { label: 'Email', href: 'mailto:hello@printx.pw' },
+  { label: 'WhatsApp', href: '' },
+  { label: 'Email', href: 'mailto:hello@printx.pw?subject=Hello%20PrintX' },
 ] as const

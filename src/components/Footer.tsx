@@ -1,17 +1,21 @@
-import { AtSign, Mail, Music2 } from 'lucide-react'
+import { AtSign, Mail, MessageCircle } from 'lucide-react'
 import { usePublicData } from '../context/PublicDataContext'
-import { FOOTER_LINKS, SOCIAL_LINKS } from '../data/navigation'
+import { FOOTER_LINKS } from '../data/navigation'
+import { mailtoHref } from '../lib/mailto'
 import { Logo } from './Logo'
-
-const socialIcons: Record<string, typeof AtSign> = {
-  Instagram: AtSign,
-  TikTok: Music2,
-  Email: Mail,
-}
 
 export function Footer() {
   const { data } = usePublicData()
   const contactEmail = data?.content?.contactEmail ?? 'hello@printx.pw'
+  const contactInstagram = data?.content?.contactInstagram ?? ''
+  const contactWhatsapp = data?.content?.contactWhatsapp ?? ''
+  const emailDraftHref = mailtoHref(contactEmail, { subject: 'Hello PrintX' })
+
+  const socialLinks = [
+    { label: 'Instagram', href: contactInstagram, Icon: AtSign },
+    { label: 'WhatsApp', href: contactWhatsapp, Icon: MessageCircle },
+    { label: 'Email', href: emailDraftHref, Icon: Mail },
+  ].filter((link) => Boolean(link.href))
 
   return (
     <footer className="bg-navy text-white">
@@ -54,7 +58,7 @@ export function Footer() {
             <ul className="space-y-2.5 text-sm text-slate-400">
               <li>McKinney, Texas</li>
               <li>
-                <a href={`mailto:${contactEmail}`} className="transition-colors hover:text-cyan">
+                <a href={emailDraftHref} className="transition-colors hover:text-cyan">
                   {contactEmail}
                 </a>
               </li>
@@ -66,13 +70,15 @@ export function Footer() {
               Follow Us
             </h3>
             <div className="flex gap-3">
-              {SOCIAL_LINKS.map((social) => {
-                const Icon = socialIcons[social.label] ?? Mail
+              {socialLinks.map(({ label, href, Icon }) => {
+                const isMail = href.startsWith('mailto:')
                 return (
                   <a
-                    key={social.label}
-                    href={social.href}
-                    aria-label={social.label}
+                    key={label}
+                    href={href}
+                    target={isMail ? undefined : '_blank'}
+                    rel={isMail ? undefined : 'noopener noreferrer'}
+                    aria-label={label}
                     className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 text-slate-400 transition-all hover:border-cyan/50 hover:bg-cyan/10 hover:text-cyan"
                   >
                     <Icon size={18} />

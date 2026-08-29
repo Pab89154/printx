@@ -47,7 +47,7 @@ export function AdminContent() {
         <Section title="Contact">
           <label>Email<input className={inputClass} value={content.contactEmail} onChange={(e) => setContent({ ...content, contactEmail: e.target.value })} /></label>
           <label className="mt-3 block">Instagram URL<input className={inputClass} value={content.contactInstagram} onChange={(e) => setContent({ ...content, contactInstagram: e.target.value })} /></label>
-          <label className="mt-3 block">TikTok URL<input className={inputClass} value={content.contactTiktok} onChange={(e) => setContent({ ...content, contactTiktok: e.target.value })} /></label>
+          <label className="mt-3 block">WhatsApp channel URL<input className={inputClass} placeholder="https://whatsapp.com/channel/..." value={content.contactWhatsapp ?? ''} onChange={(e) => setContent({ ...content, contactWhatsapp: e.target.value })} /></label>
         </Section>
 
         <Section title="For Schools">

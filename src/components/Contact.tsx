@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { CheckCircle2 } from 'lucide-react'
 import { api } from '../lib/api'
+import { mailtoHref } from '../lib/mailto'
 import { usePublicData } from '../context/PublicDataContext'
 import { Button } from './Button'
 import { ScrollReveal } from './ScrollReveal'
@@ -42,7 +43,7 @@ export function Contact() {
         <div className="grid gap-12 lg:grid-cols-5">
           <ScrollReveal className="lg:col-span-2">
             <div className="space-y-4 text-sm">
-              <p><strong>Email:</strong> <a href={`mailto:${content?.contactEmail}`} className="text-electric">{content?.contactEmail}</a></p>
+              <p><strong>Email:</strong> <a href={mailtoHref(content?.contactEmail ?? 'hello@printx.pw', { subject: 'Hello PrintX' })} className="text-electric">{content?.contactEmail}</a></p>
               <p><strong>General questions</strong> — ask us anything about PrintX.</p>
               <p><strong>School stand requests</strong> — bring PrintX to your school.</p>
               <p><strong>Custom print requests</strong> — tell us about your idea.</p>

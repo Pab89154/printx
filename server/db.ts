@@ -214,17 +214,47 @@ function migrateContactEmail(database: Db) {
   const row = database.prepare("SELECT value FROM website_settings WHERE key = 'contactEmail'").get() as
     | { value: string }
     | undefined
-  if (!row) return
-  try {
-    const email = JSON.parse(row.value) as string
-    if (email === 'hello@printxmckinney.com') {
-      database.prepare("UPDATE website_settings SET value = ?, updated_at = ? WHERE key = 'contactEmail'").run(
-        JSON.stringify('hello@printx.pw'),
-        new Date().toISOString(),
-      )
+  if (row) {
+    try {
+      const email = JSON.parse(row.value) as string
+      if (email === 'hello@printxmckinney.com') {
+        database.prepare("UPDATE website_settings SET value = ?, updated_at = ? WHERE key = 'contactEmail'").run(
+          JSON.stringify('hello@printx.pw'),
+          new Date().toISOString(),
+        )
+      }
+    } catch {
+      /* ignore malformed settings */
     }
-  } catch {
-    /* ignore malformed settings */
+  }
+
+  // Rename TikTok setting → WhatsApp channel URL
+  const tiktok = database.prepare("SELECT value FROM website_settings WHERE key = 'contactTiktok'").get() as
+    | { value: string }
+    | undefined
+  const whatsapp = database.prepare("SELECT value FROM website_settings WHERE key = 'contactWhatsapp'").get() as
+    | { value: string }
+    | undefined
+  if (!whatsapp) {
+    const now = new Date().toISOString()
+    let value = '""'
+    if (tiktok) {
+      try {
+        const parsed = JSON.parse(tiktok.value) as string
+        // Don't carry over placeholder TikTok URLs
+        value = JSON.stringify(parsed.includes('tiktok.com') ? '' : parsed)
+      } catch {
+        value = '""'
+      }
+    }
+    database.prepare('INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)').run(
+      'contactWhatsapp',
+      value,
+      now,
+    )
+  }
+  if (tiktok) {
+    database.prepare("DELETE FROM website_settings WHERE key = 'contactTiktok'").run()
   }
 }
 
@@ -294,7 +324,7 @@ function seed(database: Db) {
       aboutTeam: 'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
       contactEmail: 'hello@printx.pw',
       contactInstagram: 'https://instagram.com',
-      contactTiktok: 'https://tiktok.com',
+      contactWhatsapp: '',
       forSchoolsDescription: 'Interested in having a PrintX stand at your school? Contact us to learn more about setting up a stand for your students, clubs, or events.',
       forSchoolsInstructions: 'Email us with your school name, preferred dates, and what kind of event you are planning.',
       announcementText: 'Next PrintX Stand: Friday at McKinney School!',

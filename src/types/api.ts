@@ -37,7 +37,7 @@ export type WebsiteContent = {
   aboutTeam: string
   contactEmail: string
   contactInstagram: string
-  contactTiktok: string
+  contactWhatsapp: string
   forSchoolsDescription: string
   forSchoolsInstructions: string
   announcementText: string
