@@ -395,22 +395,41 @@ export function getWebsiteContent(database: Db): WebsiteContent {
       content[row.key] = row.value
     }
   }
-  return {
-    heroHeadline: '',
-    heroDescription: '',
-    aboutText: '',
-    aboutTeam: '',
+
+  const defaults: WebsiteContent = {
+    heroHeadline: 'Your Ideas. Our Prints.',
+    heroDescription: 'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.',
+    aboutText:
+      'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across McKinney — where students can see, touch, and buy 3D-printed products made by people their age.',
+    aboutTeam:
+      'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
     contactEmail: 'hello@printx.pw',
     contactInstagram: '',
     contactWhatsapp: '',
-    forSchoolsDescription: '',
-    forSchoolsInstructions: '',
-    announcementText: '',
-    announcementEnabled: false,
-    announcementExpiresAt: null,
+    forSchoolsDescription:
+      'Interested in having a PrintX stand at your school? Contact us to learn more about setting up a stand for your students, clubs, or events.',
+    forSchoolsInstructions:
+      'Email us with your school name, preferred dates, and what kind of event you are planning.',
+    announcementText: 'Next PrintX Stand: Friday at McKinney School!',
+    announcementEnabled: true,
+    announcementExpiresAt: '2026-09-13',
     websiteOnline: true,
-    ...content,
-  } as WebsiteContent
+  }
+
+  const merged = { ...defaults, ...content } as WebsiteContent
+
+  // Treat blank strings as missing so wiped admin saves don't blank the public site
+  for (const [key, fallback] of Object.entries(defaults) as [keyof WebsiteContent, WebsiteContent[keyof WebsiteContent]][]) {
+    const value = merged[key]
+    if (typeof fallback === 'string' && typeof value === 'string' && value.trim() === '') {
+      ;(merged as Record<string, unknown>)[key] = fallback
+    }
+    if (value === undefined || value === null) {
+      ;(merged as Record<string, unknown>)[key] = fallback
+    }
+  }
+
+  return merged
 }
 
 export function setWebsiteSetting(database: Db, key: string, value: unknown) {

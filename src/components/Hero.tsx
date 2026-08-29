@@ -51,11 +51,12 @@ export function Hero() {
           </div>
 
           <h1 className="text-4xl font-extrabold leading-tight tracking-tight text-navy sm:text-5xl lg:text-6xl">
-            {content?.heroHeadline ?? 'Your Ideas. Our Prints.'}
+            {content?.heroHeadline?.trim() || 'Your Ideas. Our Prints.'}
           </h1>
 
           <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted">
-            {content?.heroDescription}
+            {content?.heroDescription?.trim() ||
+              'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.'}
           </p>
 
           <div className="mt-8 flex flex-wrap gap-4">

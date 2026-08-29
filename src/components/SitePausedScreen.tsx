@@ -13,12 +13,6 @@ export function SitePausedScreen() {
         <p className="mt-4 max-w-md text-base leading-relaxed text-slate-300 sm:text-lg">
           We&apos;ll be back soon with new products and stand dates. Thanks for your patience.
         </p>
-        <a
-          href="/admin"
-          className="mt-10 text-sm font-medium text-slate-400 underline-offset-4 transition-colors hover:text-white hover:underline"
-        >
-          Admin sign in
-        </a>
       </div>
     </div>
   )
