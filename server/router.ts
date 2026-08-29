@@ -255,7 +255,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       nextStand: nextRow ? publicStand(rowToStand(nextRow)) : null,
       activeProducts,
       newRequests,
-      websiteOnline: true,
+      websiteOnline: getWebsiteContent(db).websiteOnline !== false,
     })
     return true
   }

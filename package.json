@@ -4,11 +4,11 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "NODE_OPTIONS='--experimental-sqlite' vite --port 5675 --strictPort",
     "build": "vite build",
     "render-build": "bash scripts/render-build.sh",
     "start": "node --experimental-sqlite --import tsx server/production.ts",
-    "preview": "vite preview"
+    "preview": "NODE_OPTIONS='--experimental-sqlite' vite preview --port 5675 --strictPort"
   },
   "engines": {
     "node": ">=22"

@@ -10,6 +10,8 @@ export function AdminDashboard() {
     api.admin.stats().then(setStats).catch(console.error)
   }, [])
 
+  const online = stats?.websiteOnline !== false
+
   return (
     <div>
       <h1 className="text-2xl font-bold text-navy">Welcome to PrintX</h1>
@@ -38,16 +40,18 @@ export function AdminDashboard() {
           <p className="text-sm text-muted">New requests</p>
         </StatCard>
 
-        <StatCard title="Website">
-          <p className="flex items-center gap-2 text-lg font-semibold text-green-600">
-            <img
-              src="https://cdn.jsdelivr.net/npm/lucide-static@0.469.0/icons/circle-check.svg"
-              alt=""
-              className="h-5 w-5"
-            />
-            Online
-          </p>
-          <p className="text-sm text-muted">Public site is live</p>
+        <StatCard title="Website" href="/admin/settings">
+          {online ? (
+            <>
+              <p className="text-lg font-semibold text-green-600">Online</p>
+              <p className="text-sm text-muted">Public site is live</p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-semibold text-amber-600">Paused</p>
+              <p className="text-sm text-muted">Showing planning screen</p>
+            </>
+          )}
         </StatCard>
       </div>
 

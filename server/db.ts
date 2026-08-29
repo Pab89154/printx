@@ -256,6 +256,15 @@ function migrateContactEmail(database: Db) {
   if (tiktok) {
     database.prepare("DELETE FROM website_settings WHERE key = 'contactTiktok'").run()
   }
+
+  const online = database.prepare("SELECT value FROM website_settings WHERE key = 'websiteOnline'").get()
+  if (!online) {
+    database.prepare('INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)').run(
+      'websiteOnline',
+      JSON.stringify(true),
+      new Date().toISOString(),
+    )
+  }
 }
 
 function seed(database: Db) {
@@ -330,6 +339,7 @@ function seed(database: Db) {
       announcementText: 'Next PrintX Stand: Friday at McKinney School!',
       announcementEnabled: true,
       announcementExpiresAt: '2026-09-13',
+      websiteOnline: true,
     }
     const now = new Date().toISOString()
     const stmt = database.prepare('INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)')
@@ -398,6 +408,7 @@ export function getWebsiteContent(database: Db): WebsiteContent {
     announcementText: '',
     announcementEnabled: false,
     announcementExpiresAt: null,
+    websiteOnline: true,
     ...content,
   } as WebsiteContent
 }

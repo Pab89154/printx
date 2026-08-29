@@ -21,13 +21,41 @@ export function AdminSettings() {
   const [adminError, setAdminError] = useState('')
   const [adminMessage, setAdminMessage] = useState('')
 
+  const [websiteOnline, setWebsiteOnline] = useState(true)
+  const [siteStatusMessage, setSiteStatusMessage] = useState('')
+  const [siteStatusSaving, setSiteStatusSaving] = useState(false)
+
   async function loadAdmins() {
     setAdmins(await api.admin.users.list())
   }
 
+  async function loadSiteStatus() {
+    const content = await api.admin.content.get()
+    setWebsiteOnline(content.websiteOnline !== false)
+  }
+
   useEffect(() => {
     loadAdmins()
+    loadSiteStatus().catch(console.error)
   }, [])
+
+  async function toggleWebsiteOnline(next: boolean) {
+    setSiteStatusSaving(true)
+    setSiteStatusMessage('')
+    try {
+      await api.admin.content.update({ websiteOnline: next })
+      setWebsiteOnline(next)
+      setSiteStatusMessage(
+        next
+          ? 'Public website is online again.'
+          : 'Public website paused — visitors see “Currently Planning Prints!”',
+      )
+    } catch (e) {
+      setSiteStatusMessage(e instanceof Error ? e.message : 'Failed to update website status')
+    } finally {
+      setSiteStatusSaving(false)
+    }
+  }
 
   async function changePassword(e: React.FormEvent) {
     e.preventDefault()
@@ -82,6 +110,30 @@ export function AdminSettings() {
         <p className="text-sm text-muted">Signed in as</p>
         <p className="font-medium text-navy">{email ?? '—'}</p>
         <p className="mt-1 text-xs text-green-600">Verified admin account</p>
+      </div>
+
+      <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+        <h2 className="mb-1 font-semibold">Public website</h2>
+        <p className="mb-4 text-sm text-muted">
+          Temporarily pause the public site. Visitors will see “Currently Planning Prints!” Admin stays available at /admin.
+        </p>
+        <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3">
+          <span className="text-sm font-medium text-navy">
+            {websiteOnline ? 'Website is online' : 'Website is paused'}
+          </span>
+          <input
+            type="checkbox"
+            className="h-5 w-5 accent-electric"
+            checked={websiteOnline}
+            disabled={siteStatusSaving}
+            onChange={(e) => toggleWebsiteOnline(e.target.checked)}
+          />
+        </label>
+        {siteStatusMessage && (
+          <p className={`mt-3 text-sm ${websiteOnline ? 'text-green-600' : 'text-amber-600'}`}>
+            {siteStatusMessage}
+          </p>
+        )}
       </div>
 
       <div className="mt-8 max-w-2xl rounded-2xl border bg-white p-6">

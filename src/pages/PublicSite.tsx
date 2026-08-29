@@ -6,13 +6,14 @@ import { ForSchools } from '../components/ForSchools'
 import { Header } from '../components/Header'
 import { Hero } from '../components/Hero'
 import { HowToBuy } from '../components/HowToBuy'
+import { SitePausedScreen } from '../components/SitePausedScreen'
 import { WhatWePrint } from '../components/WhatWePrint'
 import { WhereToFindUs } from '../components/WhereToFindUs'
 import { WhyPrintX } from '../components/WhyPrintX'
 import { usePublicData } from '../context/PublicDataContext'
 
 export function PublicSite() {
-  const { loading, error } = usePublicData()
+  const { data, loading, error } = usePublicData()
 
   if (loading) {
     return (
@@ -28,6 +29,10 @@ export function PublicSite() {
         <p className="text-red-600">Unable to load site: {error}</p>
       </div>
     )
+  }
+
+  if (data?.content?.websiteOnline === false) {
+    return <SitePausedScreen />
   }
 
   return (

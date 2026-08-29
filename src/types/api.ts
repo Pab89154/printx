@@ -43,6 +43,8 @@ export type WebsiteContent = {
   announcementText: string
   announcementEnabled: boolean
   announcementExpiresAt: string | null
+  /** When false, public site shows a temporary “planning prints” screen. Admin stays available. */
+  websiteOnline: boolean
 }
 
 export type PublicBootstrap = {

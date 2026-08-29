@@ -20,6 +20,8 @@ export default defineConfig(async ({ mode, command }) => {
     plugins,
     server: {
       port: 5675,
+      strictPort: true,
+      host: '127.0.0.1',
       open: true,
     },
   }
