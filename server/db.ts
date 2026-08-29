@@ -148,7 +148,7 @@ function migrateEmojiToIcons(database: Db) {
 }
 
 function resolveAdminEmail(): string {
-  return (process.env.PRINTX_ADMIN_EMAIL?.trim() || 'pablo.molinasamayoa@printx.pw').toLowerCase()
+  return (process.env.PRINTX_ADMIN_EMAIL?.trim() || 'pablo.molina@printx.pw').toLowerCase()
 }
 
 function resolveAdminPassword(): string {

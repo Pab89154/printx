@@ -1,5 +1,6 @@
 import { MapPin } from 'lucide-react'
 import { Button } from './Button'
+import { Logo } from './Logo'
 import { WebIcon } from '../lib/webIcon'
 import { usePublicData } from '../context/PublicDataContext'
 
@@ -17,12 +18,12 @@ function HeroVisual() {
         <div className="animate-float absolute bottom-24 left-16 flex h-14 w-14 items-center justify-center rounded-lg bg-white/20 backdrop-blur-sm" style={{ animationDelay: '1s' }}>
           <WebIcon name="smartphone" light className="h-7 w-7" alt="" />
         </div>
-        <div className="animate-float absolute bottom-16 right-12 flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-500 shadow-lg" style={{ animationDelay: '1.5s' }}>
+        <div className="animate-float absolute bottom-16 right-12 flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-br from-electric to-cyan shadow-lg" style={{ animationDelay: '1.5s' }}>
           <WebIcon name="folder-open" light className="h-12 w-12" alt="" />
         </div>
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-          <div className="relative flex h-32 w-32 items-center justify-center rounded-lg border-2 border-white/30 bg-white/10 backdrop-blur-sm">
-            <WebIcon name="printer-3d" light className="h-14 w-14" alt="3D printer" />
+          <div className="animate-float rounded-[28%] shadow-2xl shadow-black/40 ring-4 ring-white/20" style={{ animationDelay: '0.25s' }}>
+            <Logo size={128} />
           </div>
         </div>
       </div>

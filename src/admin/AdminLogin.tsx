@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { Layers3, Lock, Mail } from 'lucide-react'
+import { Lock, Mail } from 'lucide-react'
 import { useAdminAuth } from '../context/AdminAuthContext'
+import { Logo } from '../components/Logo'
 
 export function AdminLogin() {
   const { authenticated, login } = useAdminAuth()
@@ -31,8 +32,8 @@ export function AdminLogin() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-navy via-navy-light to-electric p-4">
       <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-electric to-cyan text-white">
-            <Layers3 size={28} />
+          <div className="mx-auto mb-4 flex justify-center">
+            <Logo size={56} />
           </div>
           <h1 className="text-2xl font-bold text-navy">PrintX Admin</h1>
           <p className="mt-2 text-sm text-muted">Sign in with your admin email</p>

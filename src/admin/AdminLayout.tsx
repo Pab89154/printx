@@ -3,7 +3,6 @@ import {
   Building2,
   FileText,
   LayoutDashboard,
-  Layers3,
   LogOut,
   MapPin,
   Package,
@@ -11,6 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useAdminAuth } from '../context/AdminAuthContext'
+import { Logo } from '../components/Logo'
 
 const links = [
   { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -35,9 +35,7 @@ export function AdminLayout() {
     <div className="flex min-h-screen bg-slate-50">
       <aside className="fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-200 bg-navy text-white">
         <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-electric to-cyan">
-            <Layers3 size={18} />
-          </div>
+          <Logo size={36} />
           <div>
             <div className="font-bold">PrintX Admin</div>
             <div className="text-xs text-slate-400">Dashboard</div>

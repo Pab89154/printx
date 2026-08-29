@@ -1,6 +1,7 @@
-import { AtSign, Layers3, Mail, Music2 } from 'lucide-react'
+import { AtSign, Mail, Music2 } from 'lucide-react'
 import { usePublicData } from '../context/PublicDataContext'
 import { FOOTER_LINKS, SOCIAL_LINKS } from '../data/navigation'
+import { Logo } from './Logo'
 
 const socialIcons: Record<string, typeof AtSign> = {
   Instagram: AtSign,
@@ -17,15 +18,12 @@ export function Footer() {
       <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2 lg:col-span-1">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-electric to-cyan">
-                <Layers3 size={20} strokeWidth={2.5} />
-              </div>
-              <div>
-                <div className="text-lg font-extrabold">PrintX</div>
-                <div className="text-xs text-slate-400">3D Printing • McKinney, TX</div>
-              </div>
-            </div>
+            <Logo
+              size={40}
+              withWordmark
+              light
+              subtitle="3D Printing • McKinney, TX"
+            />
             <p className="mt-4 text-sm leading-relaxed text-slate-400">
               Made locally in McKinney, Texas.
             </p>

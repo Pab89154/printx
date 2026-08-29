@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Menu, X, Layers3 } from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 import { NAV_LINKS } from '../data/navigation'
 import { Button } from './Button'
+import { Logo } from './Logo'
 
 export function Header() {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -10,13 +11,11 @@ export function Header() {
     <header className="sticky top-0 z-50 border-b border-slate-100/80 bg-white/90 backdrop-blur-lg">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
         <a href="#home" className="group flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-electric to-cyan text-white shadow-md shadow-electric/30">
-            <Layers3 size={20} strokeWidth={2.5} />
-          </div>
-          <div className="hidden sm:block">
-            <div className="text-lg font-extrabold tracking-tight text-navy">PrintX</div>
-            <div className="text-xs font-medium text-muted">3D Printing • McKinney, TX</div>
-          </div>
+          <Logo size={40} className="transition-opacity group-hover:opacity-90" />
+          <span className="hidden min-w-0 sm:block">
+            <span className="block text-lg font-extrabold tracking-tight leading-none text-navy">PrintX</span>
+            <span className="mt-0.5 block text-xs font-medium text-muted">3D Printing • McKinney, TX</span>
+          </span>
         </a>
 
         <nav className="hidden items-center gap-1 lg:flex">

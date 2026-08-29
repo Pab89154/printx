@@ -12,6 +12,6 @@ services:
       - key: PRINTX_ADMIN_PASSWORD
         sync: false
       - key: PRINTX_ADMIN_EMAIL
-        value: pablo.molinasamayoa@printx.pw
+        value: pablo.molina@printx.pw
       - key: PRINTX_SESSION_SECRET
         generateValue: true
