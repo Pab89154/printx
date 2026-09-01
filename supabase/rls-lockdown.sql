@@ -1,6 +1,9 @@
--- URGENT: Run this in Supabase → SQL Editor → Run (fixes rls_disabled_in_public)
--- PrintX uses DATABASE_URL on the Node server only — NOT the browser Data API.
--- Enabling RLS with no anon policies blocks public API access; your Render app still works.
+-- PrintX: RLS lockdown (safe to re-run)
+-- Use this ONLY if you already created tables WITHOUT the security block at the
+-- bottom of schema.sql (Supabase alert: rls_disabled_in_public).
+--
+-- "Success, no rows returned" is correct. Tables and your data stay — you are
+-- only locking the public API door. printx.pw still works via DATABASE_URL.
 
 alter table if exists users enable row level security;
 alter table if exists sessions enable row level security;
@@ -11,7 +14,6 @@ alter table if exists custom_requests enable row level security;
 alter table if exists contact_messages enable row level security;
 alter table if exists website_settings enable row level security;
 
--- Belt-and-suspenders: deny Data API roles even if a policy is added later by mistake
 revoke all on table users from anon, authenticated;
 revoke all on table sessions from anon, authenticated;
 revoke all on table schools from anon, authenticated;

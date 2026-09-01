@@ -1,8 +1,13 @@
 -- PrintX schema for Supabase Postgres
--- Run this once in Supabase → SQL Editor (Dashboard → SQL → New query → Run).
--- After tables exist, set DATABASE_URL (Session pooler URI) on Render + local .env.
--- The Node server also runs CREATE TABLE IF NOT EXISTS on boot, but running this
--- file first is the clearest setup path.
+-- Run ONCE in Supabase → SQL Editor → New query → Run.
+-- "Success, no rows returned" is normal — tables stay visible; that is correct.
+--
+-- After this: set DATABASE_URL (Session pooler URI) on Render + local .env.
+-- PrintX uses Vite + Node with DATABASE_URL only — NOT @supabase/ssr or the Data API.
+
+-- ---------------------------------------------------------------------------
+-- Tables
+-- ---------------------------------------------------------------------------
 
 create table if not exists users (
   id text primary key,
@@ -94,9 +99,13 @@ create table if not exists website_settings (
   updated_at text not null
 );
 
--- Server uses DATABASE_URL (postgres role) which bypasses RLS.
--- Enable RLS with no anon/authenticated policies so the Data API cannot
--- read/write these tables if someone has the publishable key.
+-- ---------------------------------------------------------------------------
+-- Security (required on Supabase)
+-- The Node server connects with DATABASE_URL (postgres role) and bypasses RLS.
+-- RLS + revokes block the public Data API (anon / publishable key).
+-- Do NOT add permissive policies for anon — PrintX does not use client-side Supabase.
+-- ---------------------------------------------------------------------------
+
 alter table users enable row level security;
 alter table sessions enable row level security;
 alter table schools enable row level security;
@@ -105,3 +114,12 @@ alter table products enable row level security;
 alter table custom_requests enable row level security;
 alter table contact_messages enable row level security;
 alter table website_settings enable row level security;
+
+revoke all on table users from anon, authenticated;
+revoke all on table sessions from anon, authenticated;
+revoke all on table schools from anon, authenticated;
+revoke all on table stands from anon, authenticated;
+revoke all on table products from anon, authenticated;
+revoke all on table custom_requests from anon, authenticated;
+revoke all on table contact_messages from anon, authenticated;
+revoke all on table website_settings from anon, authenticated;
