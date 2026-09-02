@@ -267,98 +267,120 @@ async function migrateBrandGradients(database: DbApi) {
 }
 
 async function seed(database: DbApi) {
-  const productCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM products')
-  if (Number(productCount?.c ?? 0) === 0) {
-    const now = new Date().toISOString()
-    const products = [
-      ['fidget-toys', 'Fidget Toys', 'Spinners, clickers, and satisfying desk toys in fun colors.', 5, 'Toys', 'loader', 'from-navy to-electric', 1, 1, 1],
-      ['keychains', 'Keychains', 'Custom name tags, logos, and shapes for backpacks and keys.', 4, 'Accessories', 'key-round', 'from-electric to-cyan', 1, 1, 2],
-      ['phone-stands', 'Phone Stands', 'Sturdy, colorful stands for desks, nightstands, and study spaces.', 8, 'Accessories', 'smartphone', 'from-cyan to-electric', 1, 1, 3],
-      ['desk-accessories', 'Desk Accessories', 'Organizers, cable clips, pen holders, and tidy-up tools.', 6, 'Desk', 'folder-open', 'from-navy via-navy-mid to-cyan', 1, 0, 4],
-      ['school-accessories', 'School Accessories', 'Bookmarks, rulers, clips, and handy tools for class.', 3, 'School', 'book-open', 'from-electric to-navy', 1, 0, 5],
-      ['custom-designs', 'Custom Designs', 'Bring your own idea — ask us about printing it in PLA or PETG.', 10, 'Custom', 'sparkles', 'from-cyan to-navy', 1, 1, 6],
-    ]
-    for (const p of products) {
-      await database.run(
-        `INSERT INTO products (id, name, description, price, category, image, emoji, image_gradient, available, featured, display_order, created_at, updated_at)
+  // Once demo data has been offered, never re-insert it when admins clear tables.
+  // (Render free tier restarts often — without this flag, deleted stands come back.)
+  const seedFlag = await database.get<{ value: string }>(
+    "SELECT value FROM website_settings WHERE key = 'demoDataSeeded'",
+  )
+  if (seedFlag) return
+
+  const productCount = Number(
+    (await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM products'))?.c ?? 0,
+  )
+  const schoolCount = Number(
+    (await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM schools'))?.c ?? 0,
+  )
+  const standCount = Number(
+    (await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM stands'))?.c ?? 0,
+  )
+  const settingsCount = Number(
+    (await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM website_settings'))?.c ?? 0,
+  )
+
+  const isFreshInstall =
+    productCount === 0 && schoolCount === 0 && standCount === 0 && settingsCount === 0
+
+  if (!isFreshInstall) {
+    // Existing database (admin may have deleted all stands on purpose) — lock seed forever.
+    await database.run(
+      'INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING',
+      'demoDataSeeded',
+      JSON.stringify(true),
+      new Date().toISOString(),
+    )
+    return
+  }
+
+  const now = new Date().toISOString()
+  const products = [
+    ['fidget-toys', 'Fidget Toys', 'Spinners, clickers, and satisfying desk toys in fun colors.', 5, 'Toys', 'loader', 'from-navy to-electric', 1, 1, 1],
+    ['keychains', 'Keychains', 'Custom name tags, logos, and shapes for backpacks and keys.', 4, 'Accessories', 'key-round', 'from-electric to-cyan', 1, 1, 2],
+    ['phone-stands', 'Phone Stands', 'Sturdy, colorful stands for desks, nightstands, and study spaces.', 8, 'Accessories', 'smartphone', 'from-cyan to-electric', 1, 1, 3],
+    ['desk-accessories', 'Desk Accessories', 'Organizers, cable clips, pen holders, and tidy-up tools.', 6, 'Desk', 'folder-open', 'from-navy via-navy-mid to-cyan', 1, 0, 4],
+    ['school-accessories', 'School Accessories', 'Bookmarks, rulers, clips, and handy tools for class.', 3, 'School', 'book-open', 'from-electric to-navy', 1, 0, 5],
+    ['custom-designs', 'Custom Designs', 'Bring your own idea — ask us about printing it in PLA or PETG.', 10, 'Custom', 'sparkles', 'from-cyan to-navy', 1, 1, 6],
+  ]
+  for (const p of products) {
+    await database.run(
+      `INSERT INTO products (id, name, description, price, category, image, emoji, image_gradient, available, featured, display_order, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`,
-        ...p,
-        now,
-        now,
-      )
-    }
-  }
-
-  const schoolCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM schools')
-  let mckinneySchoolId = ''
-  if (Number(schoolCount?.c ?? 0) === 0) {
-    const now = new Date().toISOString()
-    mckinneySchoolId = randomUUID()
-    await database.run(
-      'INSERT INTO schools (id, name, address, description, image, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      mckinneySchoolId,
-      'McKinney School',
-      'McKinney, TX',
-      'Home base for PrintX stands.',
-      '',
-      1,
+      ...p,
       now,
       now,
     )
-  } else {
-    const row = await database.get<{ id: string }>('SELECT id FROM schools WHERE name = ?', 'McKinney School')
-    mckinneySchoolId = row?.id ?? ''
   }
 
-  const standCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM stands')
-  if (Number(standCount?.c ?? 0) === 0) {
-    const now = new Date().toISOString()
-    await database.run(
-      `INSERT INTO stands (id, school_id, school_name, date, start_time, end_time, location, description, notes, products_json, status, created_at, updated_at)
+  const mckinneySchoolId = randomUUID()
+  await database.run(
+    'INSERT INTO schools (id, name, address, description, image, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    mckinneySchoolId,
+    'McKinney School',
+    'McKinney, TX',
+    'Home base for PrintX stands.',
+    '',
+    1,
+    now,
+    now,
+  )
+
+  await database.run(
+    `INSERT INTO stands (id, school_id, school_name, date, start_time, end_time, location, description, notes, products_json, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      randomUUID(),
-      mckinneySchoolId || null,
-      'McKinney School',
-      '2026-09-12',
-      '3:15 PM',
-      '4:30 PM',
-      'School cafeteria',
-      'Our next stand — come check out fidgets, keychains, and more!',
-      '',
-      JSON.stringify(['Fidget Toys', 'Keychains', 'Phone Stands', 'Desk Accessories']),
-      'upcoming',
-      now,
+    randomUUID(),
+    mckinneySchoolId,
+    'McKinney School',
+    '2026-09-12',
+    '3:15 PM',
+    '4:30 PM',
+    'School cafeteria',
+    'Our next stand — come check out fidgets, keychains, and more!',
+    '',
+    JSON.stringify(['Fidget Toys', 'Keychains', 'Phone Stands', 'Desk Accessories']),
+    'upcoming',
+    now,
+    now,
+  )
+
+  const defaults: WebsiteContent = {
+    heroHeadline: 'Your Ideas. Our Prints.',
+    heroDescription: 'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.',
+    aboutText: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across McKinney — where students can see, touch, and buy 3D-printed products made by people their age.',
+    aboutTeam: 'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
+    contactEmail: 'hello@printx.pw',
+    contactInstagram: 'https://instagram.com',
+    contactWhatsapp: '',
+    forSchoolsDescription: 'Interested in having a PrintX stand at your school? Contact us to learn more about setting up a stand for your students, clubs, or events.',
+    forSchoolsInstructions: 'Email us with your school name, preferred dates, and what kind of event you are planning.',
+    announcementText: 'Next PrintX Stand: Friday at McKinney School!',
+    announcementEnabled: true,
+    announcementExpiresAt: '2026-09-13',
+    websiteOnline: true,
+  }
+  for (const [key, value] of Object.entries(defaults)) {
+    await database.run(
+      'INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)',
+      key,
+      JSON.stringify(value),
       now,
     )
   }
 
-  const settingsCount = await database.get<{ c: number | string }>('SELECT COUNT(*) as c FROM website_settings')
-  if (Number(settingsCount?.c ?? 0) === 0) {
-    const defaults: WebsiteContent = {
-      heroHeadline: 'Your Ideas. Our Prints.',
-      heroDescription: 'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.',
-      aboutText: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across McKinney — where students can see, touch, and buy 3D-printed products made by people their age.',
-      aboutTeam: 'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
-      contactEmail: 'hello@printx.pw',
-      contactInstagram: 'https://instagram.com',
-      contactWhatsapp: '',
-      forSchoolsDescription: 'Interested in having a PrintX stand at your school? Contact us to learn more about setting up a stand for your students, clubs, or events.',
-      forSchoolsInstructions: 'Email us with your school name, preferred dates, and what kind of event you are planning.',
-      announcementText: 'Next PrintX Stand: Friday at McKinney School!',
-      announcementEnabled: true,
-      announcementExpiresAt: '2026-09-13',
-      websiteOnline: true,
-    }
-    const now = new Date().toISOString()
-    for (const [key, value] of Object.entries(defaults)) {
-      await database.run(
-        'INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)',
-        key,
-        JSON.stringify(value),
-        now,
-      )
-    }
-  }
+  await database.run(
+    'INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING',
+    'demoDataSeeded',
+    JSON.stringify(true),
+    now,
+  )
 }
 
 async function initDb(): Promise<DbApi> {
