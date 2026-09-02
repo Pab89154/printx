@@ -52,8 +52,8 @@ export function WhereToFindUs() {
       <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
         <ScrollReveal>
           <SectionHeading
-            title="Find Us at a School Near You"
-            subtitle="We sell our prints in person at PrintX stands, usually at schools around McKinney."
+            title="Find a PrintX Stand Near You"
+            subtitle="We sell our prints in person at stands around McKinney — schools, clubs, and local spots."
           />
         </ScrollReveal>
 
