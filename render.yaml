@@ -23,3 +23,10 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
+      # Email via Resend → hello@printx.pw (set API key after verifying printx.pw domain)
+      - key: RESEND_API_KEY
+        sync: false
+      - key: PRINTX_NOTIFY_EMAIL
+        value: hello@printx.pw
+      - key: PRINTX_MAIL_FROM
+        value: PrintX <hello@printx.pw>

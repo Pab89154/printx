@@ -13,6 +13,9 @@ export default defineConfig(async ({ mode, command }) => {
     'SUPABASE_URL',
     'SUPABASE_ANON_KEY',
     'PRINTX_DATA_DIR',
+    'RESEND_API_KEY',
+    'PRINTX_NOTIFY_EMAIL',
+    'PRINTX_MAIL_FROM',
   ] as const) {
     if (env[key]) process.env[key] = env[key]
   }

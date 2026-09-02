@@ -1,6 +1,7 @@
 import { About } from '../components/About'
 import { Contact } from '../components/Contact'
 import { CustomPrinting } from '../components/CustomPrinting'
+import { FeedbackButton } from '../components/FeedbackButton'
 import { Footer } from '../components/Footer'
 import { ForSchools } from '../components/ForSchools'
 import { Header } from '../components/Header'
@@ -50,6 +51,7 @@ export function PublicSite() {
         <Contact />
       </main>
       <Footer />
+      <FeedbackButton />
     </div>
   )
 }

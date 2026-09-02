@@ -27,6 +27,7 @@ import {
   rowToStand,
   setWebsiteSetting,
 } from './db.ts'
+import { notifyContactMessage, notifyCustomRequest } from './mail.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
 
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
@@ -153,21 +154,27 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       const { fields, filePath } = await parseMultipart(req)
       const now = new Date().toISOString()
       const id = randomUUID()
+      const name = sanitizeText(fields.name, 120)
+      const email = sanitizeEmail(fields.email)
+      const school = sanitizeText(fields.school, 200)
+      const description = sanitizeText(fields.description, 3000)
+      const size = sanitizeText(fields.size, 100)
       await db.run(
         `
         INSERT INTO custom_requests (id, name, email, school, description, size, uploaded_file, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
       `,
         id,
-        sanitizeText(fields.name, 120),
-        sanitizeEmail(fields.email),
-        sanitizeText(fields.school, 200),
-        sanitizeText(fields.description, 3000),
-        sanitizeText(fields.size, 100),
+        name,
+        email,
+        school,
+        description,
+        size,
         filePath,
         now,
         now,
       )
+      void notifyCustomRequest({ name, email, school, description, size })
       send(res, 201, { ok: true, id })
     } catch (e) {
       send(res, 400, { error: e instanceof Error ? e.message : 'Upload failed' })
@@ -177,18 +184,23 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/public/contact' && method === 'POST') {
     const body = await readJson(req)
+    const name = sanitizeText(body.name, 120)
+    const email = sanitizeEmail(body.email)
+    const inquiryType = sanitizeText(body.inquiryType, 100)
+    const message = sanitizeText(body.message, 5000)
     await db.run(
       `
       INSERT INTO contact_messages (id, name, email, inquiry_type, message, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `,
       randomUUID(),
-      sanitizeText(body.name, 120),
-      sanitizeEmail(body.email),
-      sanitizeText(body.inquiryType, 100),
-      sanitizeText(body.message, 5000),
+      name,
+      email,
+      inquiryType,
+      message,
       new Date().toISOString(),
     )
+    void notifyContactMessage({ name, email, inquiryType, message })
     send(res, 201, { ok: true })
     return true
   }
@@ -382,7 +394,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       sanitizeText(body.category, 80),
       sanitizeText(body.image, 500),
       sanitizeText(body.emoji, 64) || 'package',
-      sanitizeText(body.imageGradient, 80) || 'from-navy to-electric',
+      sanitizeText(body.imageGradient, 80) || 'from-blue-500 to-cyan-400',
       body.available === false ? 0 : 1,
       body.featured ? 1 : 0,
       Number(body.displayOrder) || 0,
@@ -412,7 +424,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         sanitizeText(body.category, 80),
         sanitizeText(body.image, 500),
         sanitizeText(body.emoji, 64) || 'package',
-        sanitizeText(body.imageGradient, 80) || 'from-navy to-electric',
+        sanitizeText(body.imageGradient, 80) || 'from-blue-500 to-cyan-400',
         body.available === false ? 0 : 1,
         body.featured ? 1 : 0,
         Number(body.displayOrder) || 0,

@@ -7,7 +7,12 @@ import { Button } from './Button'
 import { ScrollReveal } from './ScrollReveal'
 import { SectionHeading } from './SectionHeading'
 
-const INQUIRY_TYPES = ['General question', 'School stand request', 'Custom print request'] as const
+const INQUIRY_TYPES = [
+  'General question',
+  'School stand request',
+  'Custom print request',
+  'Website feedback',
+] as const
 
 export function Contact() {
   const { data } = usePublicData()
