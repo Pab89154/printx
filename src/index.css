@@ -87,7 +87,20 @@ body {
 }
 
 .field-input {
-  @apply w-full rounded-xl border border-navy/10 px-4 py-2.5 text-sm outline-none transition-colors focus:border-electric focus:ring-2 focus:ring-electric/20;
+  /* text-base (16px) avoids iOS zoom-on-focus */
+  @apply w-full rounded-xl border border-navy/10 px-4 py-2.5 text-base outline-none transition-colors focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm;
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-right {
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 .filament-pattern {

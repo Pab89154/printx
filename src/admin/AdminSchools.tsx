@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import type { School } from '../types/api'
 
 const inputClass =
-  'w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20'
+  'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
 
 export function AdminSchools() {
   const [schools, setSchools] = useState<School[]>([])
@@ -38,9 +38,9 @@ export function AdminSchools() {
 
   return (
     <div>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold text-navy">Manage Schools</h1>
-        <button type="button" onClick={newSchool} className="rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white">
+        <button type="button" onClick={newSchool} className="rounded-xl bg-electric px-4 py-2.5 text-sm font-semibold text-white">
           + Add School
         </button>
       </div>
@@ -65,17 +65,28 @@ export function AdminSchools() {
 
       <div className="mt-6 space-y-3">
         {schools.map((school) => (
-          <div key={school.id} className="flex items-center justify-between rounded-xl border bg-white p-4">
-            <div>
+          <div
+            key={school.id}
+            className="flex flex-col gap-3 rounded-xl border bg-white p-4 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div className="min-w-0">
               <p className="font-semibold text-navy">{school.name}</p>
-              <p className="text-sm text-muted">{school.address}</p>
+              <p className="break-words text-sm text-muted">{school.address}</p>
               <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${school.active ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
                 {school.active ? 'Active' : 'Inactive'}
               </span>
             </div>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setEditing(school)} className="rounded-lg border px-3 py-1.5 text-sm">Edit</button>
-              <button type="button" onClick={() => api.admin.schools.delete(school.id).then(load)} className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600">Delete</button>
+            <div className="flex shrink-0 gap-2">
+              <button type="button" onClick={() => setEditing(school)} className="flex-1 rounded-lg border px-3 py-2 text-sm sm:flex-none sm:py-1.5">
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => api.admin.schools.delete(school.id).then(load)}
+                className="flex-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 sm:flex-none sm:py-1.5"
+              >
+                Delete
+              </button>
             </div>
           </div>
         ))}

@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import type { WebsiteContent } from '../types/api'
 
 const inputClass =
-  'w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20'
+  'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
 
 export function AdminContent() {
   const [content, setContent] = useState<WebsiteContent | null>(null)

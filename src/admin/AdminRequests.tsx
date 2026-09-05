@@ -45,7 +45,7 @@ export function AdminRequests() {
               <select
                 value={req.status}
                 onChange={(e) => api.admin.requests.updateStatus(req.id, e.target.value).then(load)}
-                className="rounded-lg border px-3 py-1.5 text-sm capitalize"
+                className="w-full rounded-lg border px-3 py-2.5 text-base capitalize sm:w-auto sm:py-1.5 sm:text-sm"
               >
                 {statuses.map((s) => (
                   <option key={s} value={s}>{s}</option>

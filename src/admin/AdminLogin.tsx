@@ -30,7 +30,7 @@ export function AdminLogin() {
 
   return (
     <div className="brand-panel flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl sm:p-8">
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 flex justify-center">
             <Logo size={56} />
@@ -51,7 +51,7 @@ export function AdminLogin() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="Enter your email"
-                className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20"
+                className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:py-2.5 sm:text-sm"
               />
             </div>
           </label>
@@ -67,7 +67,7 @@ export function AdminLogin() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter admin password"
-                className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20"
+                className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:py-2.5 sm:text-sm"
               />
             </div>
           </label>

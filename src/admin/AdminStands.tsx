@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import type { Product, Stand } from '../types/api'
 
 const inputClass =
-  'w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20'
+  'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
 
 export function AdminStands() {
   const [stands, setStands] = useState<Stand[]>([])
@@ -62,15 +62,15 @@ export function AdminStands() {
 
   return (
     <div>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold text-navy">Manage Stands</h1>
-        <button type="button" onClick={newStand} className="rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white">
+        <button type="button" onClick={newStand} className="rounded-xl bg-electric px-4 py-2.5 text-sm font-semibold text-white">
           + Add Stand
         </button>
       </div>
 
       {editing && (
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
           <h2 className="mb-4 font-semibold">{editing.id ? 'Edit Stand' : 'New Stand'}</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             <label>
@@ -181,12 +181,13 @@ export function AdminStands() {
 
       <div className="mt-6 space-y-3">
         {stands.map((stand) => (
-          <div key={stand.id} className="flex items-center justify-between rounded-xl border bg-white p-4">
-            <div>
+          <div
+            key={stand.id}
+            className="flex flex-col gap-3 rounded-xl border bg-white p-4 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div className="min-w-0">
               <p className="font-semibold text-navy">{stand.schoolName}</p>
-              <p className="text-sm text-muted">
-                {stand.location}
-              </p>
+              <p className="break-words text-sm text-muted">{stand.location}</p>
               <p className="text-sm text-muted">
                 {stand.date} · {stand.startTime} – {stand.endTime}
               </p>
@@ -194,14 +195,14 @@ export function AdminStands() {
                 {stand.status}
               </span>
             </div>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setEditing(stand)} className="rounded-lg border px-3 py-1.5 text-sm">
+            <div className="flex shrink-0 gap-2">
+              <button type="button" onClick={() => setEditing(stand)} className="flex-1 rounded-lg border px-3 py-2 text-sm sm:flex-none sm:py-1.5">
                 Edit
               </button>
               <button
                 type="button"
                 onClick={() => api.admin.stands.delete(stand.id).then(load)}
-                className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600"
+                className="flex-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 sm:flex-none sm:py-1.5"
               >
                 Delete
               </button>

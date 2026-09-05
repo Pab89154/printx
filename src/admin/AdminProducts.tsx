@@ -4,7 +4,7 @@ import { PRODUCT_ICON_OPTIONS, WebIcon } from '../lib/webIcon'
 import type { Product } from '../types/api'
 
 const inputClass =
-  'w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-electric focus:ring-2 focus:ring-electric/20'
+  'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
 
 const gradients = [
   'from-navy to-electric',
@@ -52,9 +52,9 @@ export function AdminProducts() {
 
   return (
     <div>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold text-navy">Manage Products</h1>
-        <button type="button" onClick={newProduct} className="rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white">
+        <button type="button" onClick={newProduct} className="rounded-xl bg-electric px-4 py-2.5 text-sm font-semibold text-white">
           + Add Product
         </button>
       </div>
@@ -95,13 +95,18 @@ export function AdminProducts() {
 
       <div className="mt-6 grid gap-3">
         {products.map((p) => (
-          <div key={p.id} className="flex items-center justify-between rounded-xl border bg-white p-4">
-            <div className="flex items-center gap-3">
-              <WebIcon name={p.emoji} className="h-8 w-8" alt="" />
-              <div>
-                <p className="font-semibold text-navy">{p.name} — ${p.price}</p>
-                <p className="text-sm text-muted">{p.description}</p>
-                <div className="mt-1 flex gap-2">
+          <div
+            key={p.id}
+            className="flex flex-col gap-3 rounded-xl border bg-white p-4 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div className="flex min-w-0 items-start gap-3">
+              <WebIcon name={p.emoji} className="mt-0.5 h-8 w-8 shrink-0" alt="" />
+              <div className="min-w-0">
+                <p className="font-semibold text-navy">
+                  {p.name} — ${p.price}
+                </p>
+                <p className="break-words text-sm text-muted">{p.description}</p>
+                <div className="mt-1 flex flex-wrap gap-2">
                   <span className={`rounded-full px-2 py-0.5 text-xs ${p.available ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                     {p.available ? 'Available' : 'Unavailable'}
                   </span>
@@ -109,9 +114,17 @@ export function AdminProducts() {
                 </div>
               </div>
             </div>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setEditing(p)} className="rounded-lg border px-3 py-1.5 text-sm">Edit</button>
-              <button type="button" onClick={() => api.admin.products.delete(p.id).then(load)} className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600">Delete</button>
+            <div className="flex shrink-0 gap-2">
+              <button type="button" onClick={() => setEditing(p)} className="flex-1 rounded-lg border px-3 py-2 text-sm sm:flex-none sm:py-1.5">
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => api.admin.products.delete(p.id).then(load)}
+                className="flex-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 sm:flex-none sm:py-1.5"
+              >
+                Delete
+              </button>
             </div>
           </div>
         ))}

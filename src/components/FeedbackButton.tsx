@@ -60,6 +60,10 @@ export function FeedbackButton() {
         type="button"
         onClick={() => setOpen(true)}
         className="fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full bg-electric px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-electric/35 transition-all hover:-translate-y-0.5 hover:bg-electric-light hover:shadow-cyan/25 sm:bottom-6 sm:right-6"
+        style={{
+          bottom: 'max(1.25rem, env(safe-area-inset-bottom, 0px))',
+          right: 'max(1.25rem, env(safe-area-inset-right, 0px))',
+        }}
         aria-haspopup="dialog"
         aria-expanded={open}
       >
