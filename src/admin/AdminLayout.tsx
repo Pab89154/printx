@@ -14,15 +14,16 @@ import {
 } from 'lucide-react'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { Logo } from '../components/Logo'
+import { adminHomePath, adminPath, publicSiteUrl } from '../lib/portal'
 
 const links = [
-  { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/admin/stands', label: 'Stands', icon: MapPin },
-  { to: '/admin/products', label: 'Products', icon: Package },
-  { to: '/admin/requests', label: 'Custom Requests', icon: Sparkles },
-  { to: '/admin/schools', label: 'Schools', icon: Building2 },
-  { to: '/admin/content', label: 'Website Content', icon: FileText },
-  { to: '/admin/settings', label: 'Settings', icon: Settings },
+  { section: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { section: 'stands', label: 'Stands', icon: MapPin },
+  { section: 'products', label: 'Products', icon: Package },
+  { section: 'requests', label: 'Custom Requests', icon: Sparkles },
+  { section: 'schools', label: 'Schools', icon: Building2 },
+  { section: 'content', label: 'Website Content', icon: FileText },
+  { section: 'settings', label: 'Settings', icon: Settings },
 ]
 
 export function AdminLayout() {
@@ -46,10 +47,11 @@ export function AdminLayout() {
 
   async function handleLogout() {
     await logout()
-    navigate('/admin')
+    navigate(adminHomePath())
   }
 
-  const currentLabel = links.find((l) => location.pathname.startsWith(l.to))?.label ?? 'Admin'
+  const navLinks = links.map((l) => ({ ...l, to: adminPath(l.section) }))
+  const currentLabel = navLinks.find((l) => location.pathname.startsWith(l.to))?.label ?? 'Admin'
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -107,7 +109,7 @@ export function AdminLayout() {
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-          {links.map(({ to, label, icon: Icon }) => (
+          {navLinks.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -125,7 +127,7 @@ export function AdminLayout() {
 
         <div className="border-t border-white/10 p-3">
           <a
-            href="/"
+            href={publicSiteUrl('/')}
             className="mb-2 block rounded-xl px-3 py-3 text-sm text-slate-400 hover:bg-white/10 hover:text-white md:py-2"
           >
             ← View Public Site

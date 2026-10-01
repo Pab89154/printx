@@ -6,16 +6,16 @@
 
 /*
   PrintX brand palette — matches public/logo.svg exactly:
-  navy #0B1220 · cyan #12B5D4 · electric #2563EB · white
+  navy #0B1220 · electric (light blue) #12B5D4 · cyan (dark blue) #2563EB · white
 */
 @theme {
   --color-navy: #0b1220;
   --color-navy-light: #121a2c;
   --color-navy-mid: #1a2740;
-  --color-electric: #2563eb;
-  --color-electric-light: #3b7aef;
-  --color-cyan: #12b5d4;
-  --color-cyan-light: #2ec4df;
+  --color-electric: #12b5d4;
+  --color-electric-light: #2ec4df;
+  --color-cyan: #2563eb;
+  --color-cyan-light: #3b7aef;
   --color-surface: #eef3f9;
   --color-muted: #5b6b82;
   --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
@@ -37,13 +37,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Logo-matched dark field (navy → electric, cyan accent via overlays) */
+/* Logo-matched dark field (navy → light electric blue) */
 .brand-panel {
-  background: linear-gradient(145deg, #0b1220 0%, #121a2c 48%, #1a3a6e 78%, #2563eb 100%);
+  background: linear-gradient(145deg, #0b1220 0%, #121a2c 48%, #0e5f74 78%, #12b5d4 100%);
 }
 
 .brand-banner {
-  background: linear-gradient(90deg, #2563eb 0%, #12b5d4 100%);
+  background: linear-gradient(90deg, #12b5d4 0%, #2563eb 100%);
 }
 
 @keyframes float {
@@ -108,7 +108,7 @@ body {
     -45deg,
     transparent,
     transparent 8px,
-    rgba(18, 181, 212, 0.07) 8px,
-    rgba(18, 181, 212, 0.07) 9px
+    rgba(18, 181, 212, 0.08) 8px,
+    rgba(18, 181, 212, 0.08) 9px
   );
 }

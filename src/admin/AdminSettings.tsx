@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { api } from '../lib/api'
 import type { AdminUser } from '../types/api'
+import { adminHomePath } from '../lib/portal'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
@@ -64,7 +65,7 @@ export function AdminSettings() {
     try {
       await api.admin.settings.changePassword(currentPassword, newPassword)
       setMessage('Password updated. Please sign in again.')
-      setTimeout(() => navigate('/admin'), 1500)
+      setTimeout(() => navigate(adminHomePath()), 1500)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update password')
     }
@@ -115,7 +116,7 @@ export function AdminSettings() {
       <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
         <h2 className="mb-1 font-semibold">Public website</h2>
         <p className="mb-4 text-sm text-muted">
-          Temporarily pause the public site. Visitors will see “Currently Planning Prints!” Admin stays available at /admin.
+          Temporarily pause the public site. Visitors will see “Currently Planning Prints!” Admin stays available at portal.printx.pw.
         </p>
         <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3">
           <span className="text-sm font-medium text-navy">

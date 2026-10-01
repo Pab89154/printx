@@ -1,5 +1,6 @@
 import { Navigate, Outlet } from 'react-router-dom'
 import { useAdminAuth } from '../context/AdminAuthContext'
+import { adminHomePath } from '../lib/portal'
 
 export function AdminGuard() {
   const { authenticated } = useAdminAuth()
@@ -12,7 +13,7 @@ export function AdminGuard() {
     )
   }
 
-  if (!authenticated) return <Navigate to="/admin" replace />
+  if (!authenticated) return <Navigate to={adminHomePath()} replace />
 
   return <Outlet />
 }

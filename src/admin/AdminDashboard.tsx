@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { DashboardStats } from '../types/api'
+import { adminPath } from '../lib/portal'
 
 export function AdminDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
@@ -18,7 +19,7 @@ export function AdminDashboard() {
       <p className="mt-1 text-muted">Here&apos;s what&apos;s happening with your business.</p>
 
       <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Next Stand" href="/admin/stands">
+        <StatCard title="Next Stand" href={adminPath('stands')}>
           {stats?.nextStand ? (
             <>
               <p className="font-semibold text-navy">{stats.nextStand.schoolName}</p>
@@ -30,17 +31,17 @@ export function AdminDashboard() {
           )}
         </StatCard>
 
-        <StatCard title="Products" href="/admin/products">
+        <StatCard title="Products" href={adminPath('products')}>
           <p className="text-3xl font-bold text-electric">{stats?.activeProducts ?? '—'}</p>
           <p className="text-sm text-muted">Active products</p>
         </StatCard>
 
-        <StatCard title="Custom Requests" href="/admin/requests">
+        <StatCard title="Custom Requests" href={adminPath('requests')}>
           <p className="text-3xl font-bold text-cyan">{stats?.newRequests ?? '—'}</p>
           <p className="text-sm text-muted">New requests</p>
         </StatCard>
 
-        <StatCard title="Website" href="/admin/settings">
+        <StatCard title="Website" href={adminPath('settings')}>
           {online ? (
             <>
               <p className="text-lg font-semibold text-green-600">Online</p>
@@ -56,13 +57,13 @@ export function AdminDashboard() {
       </div>
 
       <div className="mt-8 flex flex-wrap gap-3">
-        <Link to="/admin/stands" className="rounded-xl bg-electric px-5 py-2.5 text-sm font-semibold text-white hover:bg-electric-light">
+        <Link to={adminPath('stands')} className="rounded-xl bg-electric px-5 py-2.5 text-sm font-semibold text-white hover:bg-electric-light">
           + Add Stand
         </Link>
-        <Link to="/admin/products" className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
+        <Link to={adminPath('products')} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
           + Add Product
         </Link>
-        <Link to="/admin/requests" className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
+        <Link to={adminPath('requests')} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
           View Requests
         </Link>
       </div>
