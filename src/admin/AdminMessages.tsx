@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { ContactMessage } from '../types/api'
 import { mailtoHref } from '../lib/mailto'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 export function AdminMessages() {
   const [messages, setMessages] = useState<ContactMessage[]>([])
+  const [pendingDelete, setPendingDelete] = useState<ContactMessage | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   async function load() {
     setMessages(await api.admin.messages.list())
@@ -13,6 +16,18 @@ export function AdminMessages() {
   useEffect(() => {
     load()
   }, [])
+
+  async function confirmDelete() {
+    if (!pendingDelete) return
+    setDeleting(true)
+    try {
+      await api.admin.messages.delete(pendingDelete.id)
+      setPendingDelete(null)
+      await load()
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
     <div>
@@ -69,11 +84,7 @@ export function AdminMessages() {
                 <button
                   type="button"
                   className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-red-600 hover:border-red-300"
-                  onClick={() => {
-                    if (confirm('Delete this message?')) {
-                      api.admin.messages.delete(msg.id).then(load)
-                    }
-                  }}
+                  onClick={() => setPendingDelete(msg)}
                 >
                   Delete
                 </button>
@@ -82,6 +93,24 @@ export function AdminMessages() {
           </div>
         ))}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="Delete message?"
+        message={
+          pendingDelete
+            ? `Remove the message from ${pendingDelete.name}? This can’t be undone.`
+            : ''
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        busy={deleting}
+        onCancel={() => {
+          if (!deleting) setPendingDelete(null)
+        }}
+        onConfirm={confirmDelete}
+      />
     </div>
   )
 }
