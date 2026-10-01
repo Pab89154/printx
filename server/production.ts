@@ -88,18 +88,6 @@ async function serveStatic(urlPath: string, res: ServerResponse) {
 const server = http.createServer(async (req, res) => {
   const url = req.url?.split('?')[0] ?? '/'
   const method = req.method ?? 'GET'
-  const host = (req.headers.host ?? '').split(':')[0]?.toLowerCase() ?? ''
-  const isPortalHost = host === 'portal.printx.pw' || host.startsWith('portal.')
-
-  // printx.pw/admin → portal.printx.pw (API stays on whichever host is used)
-  if (!isPortalHost && (host === 'printx.pw' || host === 'www.printx.pw') && url.startsWith('/admin')) {
-    const rest = url.replace(/^\/admin/, '') || '/'
-    const qs = req.url?.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''
-    res.statusCode = 302
-    res.setHeader('Location', `https://portal.printx.pw${rest}${qs}`)
-    res.end()
-    return
-  }
 
   if (url.startsWith('/api/')) {
     try {
