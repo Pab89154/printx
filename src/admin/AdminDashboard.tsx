@@ -31,9 +31,9 @@ export function AdminDashboard() {
           )}
         </StatCard>
 
-        <StatCard title="Products" href={adminPath('products')}>
-          <p className="text-3xl font-bold text-electric">{stats?.activeProducts ?? '—'}</p>
-          <p className="text-sm text-muted">Active products</p>
+        <StatCard title="Inbox" href={adminPath('messages')}>
+          <p className="text-3xl font-bold text-electric">{stats?.newMessages ?? '—'}</p>
+          <p className="text-sm text-muted">New messages</p>
         </StatCard>
 
         <StatCard title="Custom Requests" href={adminPath('requests')}>
@@ -60,8 +60,8 @@ export function AdminDashboard() {
         <Link to={adminPath('stands')} className="rounded-xl bg-electric px-5 py-2.5 text-sm font-semibold text-white hover:bg-electric-light">
           + Add Stand
         </Link>
-        <Link to={adminPath('products')} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
-          + Add Product
+        <Link to={adminPath('messages')} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
+          Open Inbox
         </Link>
         <Link to={adminPath('requests')} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
           View Requests

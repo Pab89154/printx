@@ -18,7 +18,9 @@ export function AdminRequests() {
   return (
     <div>
       <h1 className="text-2xl font-bold text-navy">Custom Print Requests</h1>
-      <p className="mt-1 text-muted">Review and update the status of custom print requests.</p>
+      <p className="mt-1 text-muted">
+        Custom print ideas from the website. Also emailed to hello@printx.pw when email is configured.
+      </p>
 
       <div className="mt-6 space-y-4">
         {requests.length === 0 && (

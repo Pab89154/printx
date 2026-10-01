@@ -60,7 +60,18 @@ export type DashboardStats = {
   nextStand: PublicStand | null
   activeProducts: number
   newRequests: number
+  newMessages: number
   websiteOnline: boolean
+}
+
+export type ContactMessage = {
+  id: string
+  name: string
+  email: string
+  inquiry_type: string
+  message: string
+  status: 'new' | 'read'
+  created_at: string
 }
 
 export type CustomRequest = {

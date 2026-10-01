@@ -51,6 +51,12 @@ export const api = {
       updateStatus: (id: string, status: string) =>
         request(`/api/admin/custom-requests/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
     },
+    messages: {
+      list: () => request<import('../types/api.ts').ContactMessage[]>('/api/admin/contact-messages'),
+      updateStatus: (id: string, status: 'new' | 'read') =>
+        request(`/api/admin/contact-messages/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+      delete: (id: string) => request(`/api/admin/contact-messages/${id}`, { method: 'DELETE' }),
+    },
     schools: {
       list: () => request<import('../types/api.ts').School[]>('/api/admin/schools'),
       create: (body: Record<string, unknown>) =>

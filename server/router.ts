@@ -190,8 +190,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const message = sanitizeText(body.message, 5000)
     await db.run(
       `
-      INSERT INTO contact_messages (id, name, email, inquiry_type, message, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO contact_messages (id, name, email, inquiry_type, message, status, created_at)
+      VALUES (?, ?, ?, ?, ?, 'new', ?)
     `,
       randomUUID(),
       name,
@@ -278,11 +278,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       (await db.get<{ c: number | string }>("SELECT COUNT(*) as c FROM custom_requests WHERE status = 'new'"))?.c ??
         0,
     )
+    const newMessages = Number(
+      (await db.get<{ c: number | string }>("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'new'"))?.c ??
+        0,
+    )
     const content = await getWebsiteContent(db)
     send(res, 200, {
       nextStand: nextRow ? publicStand(rowToStand(nextRow)) : null,
       activeProducts,
       newRequests,
+      newMessages,
       websiteOnline: content.websiteOnline !== false,
     })
     return true
@@ -445,6 +450,28 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   if (urlPath === '/api/admin/custom-requests' && method === 'GET') {
     send(res, 200, await db.all('SELECT * FROM custom_requests ORDER BY created_at DESC'))
     return true
+  }
+
+  if (urlPath === '/api/admin/contact-messages' && method === 'GET') {
+    send(res, 200, await db.all('SELECT * FROM contact_messages ORDER BY created_at DESC'))
+    return true
+  }
+
+  const contactMatch = urlPath.match(/^\/api\/admin\/contact-messages\/([^/]+)$/)
+  if (contactMatch) {
+    const id = contactMatch[1]
+    if (method === 'PATCH') {
+      const body = await readJson(req)
+      const status = body.status === 'read' ? 'read' : 'new'
+      await db.run('UPDATE contact_messages SET status = ? WHERE id = ?', status, id)
+      send(res, 200, { ok: true })
+      return true
+    }
+    if (method === 'DELETE') {
+      await db.run('DELETE FROM contact_messages WHERE id = ?', id)
+      send(res, 200, { ok: true })
+      return true
+    }
   }
 
   const requestMatch = urlPath.match(/^\/api\/admin\/custom-requests\/([^/]+)$/)

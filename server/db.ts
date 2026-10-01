@@ -89,6 +89,7 @@ async function migrate(database: DbApi) {
       email TEXT NOT NULL,
       inquiry_type TEXT NOT NULL DEFAULT '',
       message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'new',
       created_at TEXT NOT NULL
     );
 
@@ -189,6 +190,16 @@ async function migrateUserAuth(database: DbApi) {
     /* column already exists */
   }
   await database.run('UPDATE users SET email_verified = 1 WHERE role = ?', 'admin')
+}
+
+async function migrateContactMessagesStatus(database: DbApi) {
+  try {
+    await database.exec(
+      `ALTER TABLE contact_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'new'`,
+    )
+  } catch {
+    /* column already exists */
+  }
 }
 
 async function migrateContactEmail(database: DbApi) {
@@ -387,6 +398,7 @@ async function initDb(): Promise<DbApi> {
   const database = await getDbApi()
   await migrate(database)
   await migrateUserAuth(database)
+  await migrateContactMessagesStatus(database)
   await migrateEmojiToIcons(database)
   await migrateContactEmail(database)
   await migrateBrandGradients(database)

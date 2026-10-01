@@ -90,6 +90,7 @@ create table if not exists contact_messages (
   email text not null,
   inquiry_type text not null default '',
   message text not null,
+  status text not null default 'new',
   created_at text not null
 );
 

@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Building2,
   FileText,
+  Inbox,
   LayoutDashboard,
   LogOut,
   MapPin,
@@ -18,6 +19,7 @@ import { adminHomePath, adminPath, publicSiteUrl } from '../lib/portal'
 
 const links = [
   { section: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { section: 'messages', label: 'Inbox', icon: Inbox },
   { section: 'stands', label: 'Stands', icon: MapPin },
   { section: 'products', label: 'Products', icon: Package },
   { section: 'requests', label: 'Custom Requests', icon: Sparkles },
