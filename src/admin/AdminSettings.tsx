@@ -4,6 +4,7 @@ import { useAdminAuth } from '../context/AdminAuthContext'
 import { api } from '../lib/api'
 import type { AdminUser } from '../types/api'
 import { adminHomePath } from '../lib/portal'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
@@ -21,6 +22,8 @@ export function AdminSettings() {
   const [newAdminPassword, setNewAdminPassword] = useState('')
   const [adminError, setAdminError] = useState('')
   const [adminMessage, setAdminMessage] = useState('')
+  const [pendingRemove, setPendingRemove] = useState<AdminUser | null>(null)
+  const [removing, setRemoving] = useState(false)
 
   const [websiteOnline, setWebsiteOnline] = useState(true)
   const [siteStatusMessage, setSiteStatusMessage] = useState('')
@@ -86,16 +89,20 @@ export function AdminSettings() {
     }
   }
 
-  async function removeAdmin(id: string) {
-    if (!confirm('Remove this admin account? They will no longer be able to sign in.')) return
+  async function confirmRemoveAdmin() {
+    if (!pendingRemove) return
+    setRemoving(true)
     setAdminError('')
     setAdminMessage('')
     try {
-      await api.admin.users.delete(id)
+      await api.admin.users.delete(pendingRemove.id)
+      setPendingRemove(null)
       setAdminMessage('Admin account removed.')
-      loadAdmins()
+      await loadAdmins()
     } catch (e) {
       setAdminError(e instanceof Error ? e.message : 'Failed to remove admin')
+    } finally {
+      setRemoving(false)
     }
   }
 
@@ -155,7 +162,7 @@ export function AdminSettings() {
               {admin.id !== currentAdmin?.id && admins.length > 1 && (
                 <button
                   type="button"
-                  onClick={() => removeAdmin(admin.id)}
+                  onClick={() => setPendingRemove(admin)}
                   className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
                 >
                   Remove
@@ -214,6 +221,24 @@ export function AdminSettings() {
         {message && <p className="mt-3 text-sm text-green-600">{message}</p>}
         <button type="submit" className="mt-4 rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white">Update Password</button>
       </form>
+
+      <ConfirmDialog
+        open={Boolean(pendingRemove)}
+        title="Remove admin?"
+        message={
+          pendingRemove
+            ? `Remove ${pendingRemove.email}? They will no longer be able to sign in.`
+            : ''
+        }
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        danger
+        busy={removing}
+        onCancel={() => {
+          if (!removing) setPendingRemove(null)
+        }}
+        onConfirm={confirmRemoveAdmin}
+      />
     </div>
   )
 }
