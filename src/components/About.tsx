@@ -25,7 +25,12 @@ export function About() {
             <p className="mt-4 leading-relaxed text-muted">{content?.aboutTeam}</p>
             <div className="mt-6 flex flex-wrap gap-2">
               {ABOUT_VALUES.map((value) => (
-                <span key={value} className="rounded-full border border-electric/20 bg-electric/5 px-3.5 py-1.5 text-sm font-medium text-electric">{value}</span>
+                <span
+                  key={value}
+                  className="select-none rounded-full border border-electric/20 bg-electric/5 px-3.5 py-1.5 text-sm font-medium text-electric transition-colors duration-150 hover:border-cyan hover:bg-cyan hover:text-white"
+                >
+                  {value}
+                </span>
               ))}
             </div>
           </ScrollReveal>
