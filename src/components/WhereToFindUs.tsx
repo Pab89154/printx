@@ -5,9 +5,21 @@ import { ScrollReveal } from './ScrollReveal'
 import { SectionHeading } from './SectionHeading'
 
 const statusStyles: Record<PublicStand['status'], { label: string; className: string }> = {
-  upcoming: { label: 'Upcoming', className: 'bg-electric/10 text-electric' },
-  active: { label: 'Today', className: 'bg-cyan/10 text-cyan' },
-  past: { label: 'Past', className: 'bg-navy/5 text-muted' },
+  upcoming: {
+    label: 'Upcoming',
+    className:
+      'border border-electric/20 bg-electric/10 text-electric hover:border-electric hover:bg-electric hover:text-white',
+  },
+  active: {
+    label: 'Today',
+    className:
+      'border border-cyan/25 bg-cyan/10 text-cyan hover:border-cyan hover:bg-cyan hover:text-white',
+  },
+  past: {
+    label: 'Past',
+    className:
+      'border border-navy/10 bg-navy/5 text-muted hover:border-navy hover:bg-navy hover:text-white',
+  },
 }
 
 function StandCard({ stand }: { stand: PublicStand }) {
@@ -17,7 +29,9 @@ function StandCard({ stand }: { stand: PublicStand }) {
     <article className={`rounded-2xl border bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${stand.status === 'past' ? 'border-slate-100 opacity-75' : 'border-slate-100 hover:border-electric/20'}`}>
       <div className="mb-4 flex items-start justify-between gap-3">
         <h3 className="text-xl font-bold text-navy">{stand.schoolName}</h3>
-        <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${status.className}`}>
+        <span
+          className={`shrink-0 select-none rounded-full px-3 py-1 text-xs font-semibold transition-colors duration-150 ${status.className}`}
+        >
           {status.label}
         </span>
       </div>
@@ -33,7 +47,12 @@ function StandCard({ stand }: { stand: PublicStand }) {
           </div>
           <div className="flex flex-wrap gap-1.5">
             {stand.products.map((product) => (
-              <span key={product} className="rounded-lg bg-white px-2.5 py-1 text-xs font-medium text-slate-600">{product}</span>
+              <span
+                key={product}
+                className="select-none rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors duration-150 hover:border-navy hover:bg-navy hover:text-white"
+              >
+                {product}
+              </span>
             ))}
           </div>
         </div>

@@ -102,18 +102,60 @@ export const HOW_TO_BUY = [
   },
 ] as const
 
+/** Soft chip + hover fill — full Tailwind classes so JIT can see them. */
 export const SCHOOL_OFFERINGS = [
-  'School stands',
-  'STEM activities',
-  'Club events',
-  'School events',
-  'Custom school items',
+  {
+    label: 'School stands',
+    className:
+      'border-cyan/25 bg-cyan/5 text-cyan hover:border-cyan hover:bg-cyan hover:text-white',
+  },
+  {
+    label: 'STEM activities',
+    className:
+      'border-violet-300/60 bg-violet-50 text-violet-700 hover:border-violet-600 hover:bg-violet-600 hover:text-white',
+  },
+  {
+    label: 'Club events',
+    className:
+      'border-amber-300/60 bg-amber-50 text-amber-700 hover:border-amber-600 hover:bg-amber-600 hover:text-white',
+  },
+  {
+    label: 'School events',
+    className:
+      'border-electric/25 bg-electric/5 text-electric hover:border-electric hover:bg-electric hover:text-white',
+  },
+  {
+    label: 'Custom school items',
+    className:
+      'border-orange-300/60 bg-orange-50 text-orange-700 hover:border-orange-500 hover:bg-orange-500 hover:text-white',
+  },
 ] as const
 
+/** About value chips — each color matches the feeling of the word. */
 export const ABOUT_VALUES = [
-  'Creativity',
-  'Entrepreneurship',
-  'Technology',
-  'Making',
-  'Community',
+  {
+    label: 'Creativity',
+    className:
+      'border-violet-300/60 bg-violet-50 text-violet-700 hover:border-violet-600 hover:bg-violet-600 hover:text-white',
+  },
+  {
+    label: 'Entrepreneurship',
+    className:
+      'border-amber-300/60 bg-amber-50 text-amber-700 hover:border-amber-600 hover:bg-amber-600 hover:text-white',
+  },
+  {
+    label: 'Technology',
+    className:
+      'border-cyan/30 bg-cyan/5 text-cyan hover:border-cyan hover:bg-cyan hover:text-white',
+  },
+  {
+    label: 'Making',
+    className:
+      'border-orange-300/60 bg-orange-50 text-orange-700 hover:border-orange-500 hover:bg-orange-500 hover:text-white',
+  },
+  {
+    label: 'Community',
+    className:
+      'border-emerald-300/60 bg-emerald-50 text-emerald-700 hover:border-emerald-600 hover:bg-emerald-600 hover:text-white',
+  },
 ] as const

@@ -1,4 +1,4 @@
-import { Building2, CheckCircle2 } from 'lucide-react'
+import { Building2 } from 'lucide-react'
 import { usePublicData } from '../context/PublicDataContext'
 import { SCHOOL_OFFERINGS } from '../data/products'
 import { Button } from './Button'
@@ -14,7 +14,7 @@ export function ForSchools() {
         <div className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-xl">
           <div className="grid lg:grid-cols-2">
             <ScrollReveal className="p-8 sm:p-12">
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-electric/10 px-4 py-1.5 text-sm font-semibold text-electric">
+              <div className="mb-4 inline-flex select-none items-center gap-2 rounded-full border border-electric/20 bg-electric/10 px-4 py-1.5 text-sm font-semibold text-electric transition-colors duration-150 hover:border-electric hover:bg-electric hover:text-white">
                 <Building2 size={16} /> For Educators & Staff
               </div>
               <h2 className="text-3xl font-bold tracking-tight text-navy sm:text-4xl">Bring PrintX to Your School</h2>
@@ -25,13 +25,16 @@ export function ForSchools() {
               <Button href="#contact" size="lg" className="mt-8">Contact PrintX</Button>
             </ScrollReveal>
             <ScrollReveal delay={150} className="bg-navy/5 p-8 sm:p-12">
-              <ul className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-wrap gap-2">
                 {SCHOOL_OFFERINGS.map((item) => (
-                  <li key={item} className="flex items-center gap-2.5 text-sm text-slate-700">
-                    <CheckCircle2 size={16} className="shrink-0 text-electric" />{item}
-                  </li>
+                  <span
+                    key={item.label}
+                    className={`select-none rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${item.className}`}
+                  >
+                    {item.label}
+                  </span>
                 ))}
-              </ul>
+              </div>
             </ScrollReveal>
           </div>
         </div>

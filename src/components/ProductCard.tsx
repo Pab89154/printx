@@ -28,16 +28,16 @@ export function ProductCard({ product }: Props) {
         )}
         <div className="absolute inset-0 filament-pattern opacity-60" />
         {product.available && (
-          <div className="absolute left-3 top-3 rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-electric backdrop-blur-sm">
+          <div className="absolute left-3 top-3 select-none rounded-full border border-emerald-200/80 bg-white/90 px-2.5 py-1 text-xs font-semibold text-emerald-700 backdrop-blur-sm transition-colors duration-150 hover:border-emerald-600 hover:bg-emerald-600 hover:text-white">
             Available at stands
           </div>
         )}
         {!product.available && (
-          <div className="absolute left-3 top-3 rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-red-500 backdrop-blur-sm">
+          <div className="absolute left-3 top-3 select-none rounded-full border border-red-200/80 bg-white/90 px-2.5 py-1 text-xs font-semibold text-red-500 backdrop-blur-sm transition-colors duration-150 hover:border-red-600 hover:bg-red-600 hover:text-white">
             Currently unavailable
           </div>
         )}
-        <div className="absolute bottom-3 right-3 rounded-lg bg-white/90 px-2.5 py-1 text-xs font-semibold text-navy backdrop-blur-sm">
+        <div className="absolute bottom-3 right-3 select-none rounded-full border border-navy/10 bg-white/90 px-2.5 py-1 text-xs font-semibold text-navy backdrop-blur-sm transition-colors duration-150 hover:border-cyan hover:bg-cyan hover:text-white">
           ${product.price}
         </div>
       </div>

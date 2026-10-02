@@ -39,8 +39,8 @@ export function Hero() {
       <div className="absolute inset-0 filament-pattern opacity-50 pointer-events-none" />
       <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:gap-16 lg:px-8">
         <div className="animate-fade-up">
-          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-navy/10 bg-surface px-4 py-1.5 text-sm font-medium text-navy shadow-sm">
-            <MapPin size={14} className="text-cyan" />
+          <div className="group mb-6 inline-flex select-none items-center gap-2 rounded-full border border-navy/10 bg-surface px-4 py-1.5 text-sm font-medium text-navy shadow-sm transition-colors duration-150 hover:border-cyan hover:bg-cyan hover:text-white">
+            <MapPin size={14} className="text-cyan transition-colors duration-150 group-hover:text-white" />
             McKinney, TX
           </div>
 
