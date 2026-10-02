@@ -13,6 +13,7 @@ import { AdminMessages } from './admin/AdminMessages'
 import { AdminSchools } from './admin/AdminSchools'
 import { AdminContent } from './admin/AdminContent'
 import { AdminSettings } from './admin/AdminSettings'
+import { AdminSandbox } from './admin/AdminSandbox'
 import { isPortalHost } from './lib/portal'
 
 function PortalRoutes() {
@@ -20,6 +21,7 @@ function PortalRoutes() {
     <Routes>
       <Route path="/" element={<AdminLogin />} />
       <Route element={<AdminGuard />}>
+        <Route path="sandbox" element={<AdminSandbox />} />
         <Route element={<AdminLayout />}>
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="messages" element={<AdminMessages />} />
@@ -43,6 +45,7 @@ function PublicRoutes() {
       <Route path="/" element={<PublicSite />} />
       <Route path="/admin" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminGuard />}>
+        <Route path="sandbox" element={<AdminSandbox />} />
         <Route element={<AdminLayout />}>
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="messages" element={<AdminMessages />} />

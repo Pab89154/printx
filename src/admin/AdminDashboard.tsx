@@ -60,6 +60,9 @@ export function AdminDashboard() {
         <Link to={adminPath('stands')} className="rounded-xl bg-electric px-5 py-2.5 text-sm font-semibold text-white hover:bg-electric-light">
           + Add Stand
         </Link>
+        <Link to={adminPath('sandbox')} className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-900 hover:border-amber-400">
+          Open site sandbox
+        </Link>
         <Link to={adminPath('messages')} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
           Open Inbox
         </Link>
@@ -67,6 +70,16 @@ export function AdminDashboard() {
           View Requests
         </Link>
       </div>
+
+      {!online && (
+        <p className="mt-4 text-sm text-amber-700">
+          Public site is paused. Use the{' '}
+          <Link to={adminPath('sandbox')} className="font-semibold underline underline-offset-2">
+            site sandbox
+          </Link>{' '}
+          to preview PrintX without turning the website back on.
+        </p>
+      )}
     </div>
   )
 }

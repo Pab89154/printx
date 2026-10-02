@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Building2,
   FileText,
+  FlaskConical,
   Inbox,
   LayoutDashboard,
   LogOut,
@@ -128,11 +129,20 @@ export function AdminLayout() {
         </nav>
 
         <div className="border-t border-white/10 p-3">
+          <NavLink
+            to={adminPath('sandbox')}
+            className="mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-amber-200 hover:bg-white/10 hover:text-white md:py-2.5"
+          >
+            <FlaskConical size={18} className="shrink-0" />
+            Site sandbox
+          </NavLink>
           <a
             href={publicSiteUrl('/')}
-            className="mb-2 block rounded-xl px-3 py-3 text-sm text-slate-400 hover:bg-white/10 hover:text-white md:py-2"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mb-2 block rounded-xl px-3 py-2 text-sm text-slate-400 hover:bg-white/10 hover:text-white"
           >
-            ← View Public Site
+            Open public site ↗
           </a>
           <button
             type="button"

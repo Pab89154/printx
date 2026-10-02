@@ -13,7 +13,12 @@ import { WhereToFindUs } from '../components/WhereToFindUs'
 import { WhyPrintX } from '../components/WhyPrintX'
 import { usePublicData } from '../context/PublicDataContext'
 
-export function PublicSite() {
+type Props = {
+  /** When true (admin sandbox), show the live site even if the public site is paused. */
+  forceOnline?: boolean
+}
+
+export function PublicSite({ forceOnline = false }: Props) {
   const { data, loading, error } = usePublicData()
 
   if (loading) {
@@ -32,7 +37,7 @@ export function PublicSite() {
     )
   }
 
-  if (data?.content?.websiteOnline === false) {
+  if (!forceOnline && data?.content?.websiteOnline === false) {
     return <SitePausedScreen />
   }
 
