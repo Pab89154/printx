@@ -106,28 +106,61 @@ export const HOW_TO_BUY = [
 export const SCHOOL_OFFERINGS = [
   {
     label: 'School stands',
+    description: 'A pop-up stand where students can browse and buy prints in person.',
+    icon: 'store' as const,
     className:
       'border-cyan/25 bg-cyan/5 text-cyan hover:border-cyan hover:bg-cyan hover:text-white',
+    iconClass: 'bg-cyan/10 text-cyan',
   },
   {
     label: 'STEM activities',
+    description: 'Hands-on demos that show how 3D printing turns ideas into real objects.',
+    icon: 'flask' as const,
     className:
       'border-violet-300/60 bg-violet-50 text-violet-700 hover:border-violet-600 hover:bg-violet-600 hover:text-white',
+    iconClass: 'bg-violet-100 text-violet-700',
   },
   {
     label: 'Club events',
+    description: 'Visit a club meeting with sample prints and talk about making + entrepreneurship.',
+    icon: 'users' as const,
     className:
       'border-amber-300/60 bg-amber-50 text-amber-700 hover:border-amber-600 hover:bg-amber-600 hover:text-white',
+    iconClass: 'bg-amber-100 text-amber-700',
   },
   {
     label: 'School events',
+    description: 'Fit right into fairs, open houses, and special school days.',
+    icon: 'calendar' as const,
     className:
       'border-electric/25 bg-electric/5 text-electric hover:border-electric hover:bg-electric hover:text-white',
+    iconClass: 'bg-electric/10 text-electric',
   },
   {
     label: 'Custom school items',
+    description: 'Ask about school logos, club merch, and one-off classroom prints.',
+    icon: 'sparkles' as const,
     className:
       'border-orange-300/60 bg-orange-50 text-orange-700 hover:border-orange-500 hover:bg-orange-500 hover:text-white',
+    iconClass: 'bg-orange-100 text-orange-700',
+  },
+] as const
+
+export const SCHOOL_HOST_STEPS = [
+  {
+    step: 1,
+    title: 'Email us',
+    description: 'Share your school, preferred dates, and the kind of event you have in mind.',
+  },
+  {
+    step: 2,
+    title: 'Pick a plan',
+    description: 'We’ll confirm timing, space needs, and what products to bring.',
+  },
+  {
+    step: 3,
+    title: 'We show up',
+    description: 'PrintX brings the stand, the prints, and runs it so staff can stay hands-off.',
   },
 ] as const
 
