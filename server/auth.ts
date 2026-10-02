@@ -272,20 +272,42 @@ export async function updateAdminPermissions(
   }
 }
 
-export async function deleteAdminUser(actorId: string, targetId: string): Promise<boolean> {
-  if (actorId === targetId) return false
+export async function deleteAdminUser(
+  actorId: string,
+  targetId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (actorId === targetId) {
+    return { ok: false, error: 'You cannot delete your own account.' }
+  }
+
   const db = await getDb()
+  const actor = await db.get<{ email: string }>(
+    `SELECT email FROM users WHERE id = ? AND role = 'admin'`,
+    actorId,
+  )
+  if (!actor || !isMainAdminEmail(actor.email)) {
+    return { ok: false, error: 'Only the main admin can delete accounts.' }
+  }
+
   const target = await db.get<{ email: string }>(
     `SELECT email FROM users WHERE id = ? AND role = 'admin'`,
     targetId,
   )
-  if (!target) return false
-  if (isMainAdminEmail(target.email)) return false
-  const countRow = await db.get<{ c: number | string }>('SELECT COUNT(*) as c FROM users WHERE role = ?', 'admin')
-  if (Number(countRow?.c ?? 0) <= 1) return false
+  if (!target) {
+    return { ok: false, error: 'Admin account not found.' }
+  }
+  if (isMainAdminEmail(target.email)) {
+    return { ok: false, error: 'The main admin account cannot be deleted.' }
+  }
+
   await db.run('DELETE FROM sessions WHERE user_id = ?', targetId)
-  const result = await db.run('DELETE FROM users WHERE id = ? AND role = ?', targetId, 'admin')
-  return result.changes > 0
+  await db.run('DELETE FROM users WHERE id = ? AND role = ?', targetId, 'admin')
+
+  const stillThere = await db.get('SELECT id FROM users WHERE id = ?', targetId)
+  if (stillThere) {
+    return { ok: false, error: 'Could not delete this admin account.' }
+  }
+  return { ok: true }
 }
 
 export function adminCan(user: SessionAdmin, key: PermissionKey): boolean {

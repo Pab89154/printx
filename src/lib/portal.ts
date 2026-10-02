@@ -1,7 +1,20 @@
 /** Host helpers for printx.pw (public) vs portal.printx.pw (admin). */
 
+import type { AdminPermissions, PermissionKey } from '../../shared/permissions'
+
 const PUBLIC_ORIGIN = 'https://printx.pw'
 const PORTAL_ORIGIN = 'https://portal.printx.pw'
+
+const SECTION_ORDER: { section: string; perm: PermissionKey }[] = [
+  { section: 'dashboard', perm: 'dashboard' },
+  { section: 'messages', perm: 'messages' },
+  { section: 'stands', perm: 'stands' },
+  { section: 'products', perm: 'products' },
+  { section: 'requests', perm: 'requests' },
+  { section: 'schools', perm: 'schools' },
+  { section: 'content', perm: 'content' },
+  { section: 'settings', perm: 'settings' },
+]
 
 export function isPortalHost(hostname = typeof window !== 'undefined' ? window.location.hostname : ''): boolean {
   if (!hostname) return false
@@ -48,6 +61,12 @@ export function adminPath(section: string): string {
   const s = section.replace(/^\//, '')
   if (!s) return adminHomePath()
   return isPortalHost() ? `/${s}` : `/admin/${s}`
+}
+
+/** First portal page this admin is allowed to open. */
+export function firstAllowedAdminPath(permissions: AdminPermissions): string {
+  const hit = SECTION_ORDER.find((s) => permissions[s.perm])
+  return hit ? adminPath(hit.section) : adminHomePath()
 }
 
 export { PUBLIC_ORIGIN, PORTAL_ORIGIN }

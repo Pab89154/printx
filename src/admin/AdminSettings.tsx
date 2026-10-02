@@ -220,7 +220,7 @@ export function AdminSettings() {
         <div className="mt-8 max-w-2xl rounded-2xl border bg-white p-6">
           <h2 className="mb-1 font-semibold">Admin accounts & access</h2>
           <p className="mb-4 text-sm text-muted">
-            Only you (main admin) can create regular admins and choose what each one can see and change.
+            As main admin you can create regular admins, choose what they can see, and delete their accounts.
           </p>
 
           <ul className="space-y-3">
@@ -255,7 +255,7 @@ export function AdminSettings() {
                           onClick={() => setPendingRemove(admin)}
                           className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
                         >
-                          Remove
+                          Delete account
                         </button>
                       </>
                     )}
@@ -379,13 +379,13 @@ export function AdminSettings() {
 
       <ConfirmDialog
         open={Boolean(pendingRemove)}
-        title="Remove admin?"
+        title="Delete account?"
         message={
           pendingRemove
-            ? `Remove ${pendingRemove.email}? They will no longer be able to sign in.`
+            ? `Delete ${pendingRemove.email}? They will no longer be able to sign in. This can’t be undone.`
             : ''
         }
-        confirmLabel="Remove"
+        confirmLabel="Delete account"
         cancelLabel="Cancel"
         danger
         busy={removing}

@@ -14,7 +14,13 @@ import { AdminSchools } from './admin/AdminSchools'
 import { AdminContent } from './admin/AdminContent'
 import { AdminSettings } from './admin/AdminSettings'
 import { AdminSandbox } from './admin/AdminSandbox'
-import { isPortalHost } from './lib/portal'
+import { useAdminAuth } from './context/AdminAuthContext'
+import { firstAllowedAdminPath, isPortalHost } from './lib/portal'
+
+function AdminHomeRedirect() {
+  const { permissions } = useAdminAuth()
+  return <Navigate to={firstAllowedAdminPath(permissions)} replace />
+}
 
 function PortalRoutes() {
   return (
@@ -33,7 +39,7 @@ function PortalRoutes() {
           <Route path="settings" element={<AdminSettings />} />
         </Route>
       </Route>
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<AdminHomeRedirect />} />
     </Routes>
   )
 }

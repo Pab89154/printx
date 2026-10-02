@@ -3,75 +3,139 @@ import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { DashboardStats } from '../types/api'
 import { adminPath } from '../lib/portal'
+import { useAdminAuth } from '../context/AdminAuthContext'
 
 export function AdminDashboard() {
+  const { can } = useAdminAuth()
   const [stats, setStats] = useState<DashboardStats | null>(null)
 
   useEffect(() => {
+    if (!can('dashboard')) return
     api.admin.stats().then(setStats).catch(console.error)
-  }, [])
+  }, [can])
 
   const online = stats?.websiteOnline !== false
+
+  const cards = [
+    can('stands') && (
+      <StatCard key="stands" title="Next Stand" href={adminPath('stands')}>
+        {stats?.nextStand ? (
+          <>
+            <p className="font-semibold text-navy">{stats.nextStand.schoolName}</p>
+            <p className="text-sm text-muted">{stats.nextStand.displayDate}</p>
+            <p className="text-sm text-muted">{stats.nextStand.startTime}</p>
+          </>
+        ) : (
+          <p className="text-sm text-muted">No upcoming stands</p>
+        )}
+      </StatCard>
+    ),
+    can('messages') && (
+      <StatCard key="messages" title="Inbox" href={adminPath('messages')}>
+        <p className="text-3xl font-bold text-electric">{stats?.newMessages ?? '—'}</p>
+        <p className="text-sm text-muted">New messages</p>
+      </StatCard>
+    ),
+    can('requests') && (
+      <StatCard key="requests" title="Custom Requests" href={adminPath('requests')}>
+        <p className="text-3xl font-bold text-cyan">{stats?.newRequests ?? '—'}</p>
+        <p className="text-sm text-muted">New requests</p>
+      </StatCard>
+    ),
+    (can('settings') || can('website_status')) && (
+      <StatCard
+        key="website"
+        title="Website"
+        href={can('settings') ? adminPath('settings') : undefined}
+      >
+        {online ? (
+          <>
+            <p className="text-lg font-semibold text-green-600">Online</p>
+            <p className="text-sm text-muted">Public site is live</p>
+          </>
+        ) : (
+          <>
+            <p className="text-lg font-semibold text-amber-600">Paused</p>
+            <p className="text-sm text-muted">Showing planning screen</p>
+          </>
+        )}
+      </StatCard>
+    ),
+  ].filter(Boolean)
+
+  const actions = [
+    can('stands') && (
+      <Link
+        key="add-stand"
+        to={adminPath('stands')}
+        className="rounded-xl bg-electric px-5 py-2.5 text-sm font-semibold text-white hover:bg-electric-light"
+      >
+        + Add Stand
+      </Link>
+    ),
+    can('sandbox') && (
+      <Link
+        key="sandbox"
+        to={adminPath('sandbox')}
+        className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-900 hover:border-amber-400"
+      >
+        Open site sandbox
+      </Link>
+    ),
+    can('messages') && (
+      <Link
+        key="inbox"
+        to={adminPath('messages')}
+        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric"
+      >
+        Open Inbox
+      </Link>
+    ),
+    can('requests') && (
+      <Link
+        key="requests"
+        to={adminPath('requests')}
+        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric"
+      >
+        View Requests
+      </Link>
+    ),
+    can('products') && (
+      <Link
+        key="products"
+        to={adminPath('products')}
+        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric"
+      >
+        Products
+      </Link>
+    ),
+    can('content') && (
+      <Link
+        key="content"
+        to={adminPath('content')}
+        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric"
+      >
+        Website Content
+      </Link>
+    ),
+  ].filter(Boolean)
 
   return (
     <div>
       <h1 className="text-2xl font-bold text-navy">Welcome to PrintX</h1>
       <p className="mt-1 text-muted">Here&apos;s what&apos;s happening with your business.</p>
 
-      <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Next Stand" href={adminPath('stands')}>
-          {stats?.nextStand ? (
-            <>
-              <p className="font-semibold text-navy">{stats.nextStand.schoolName}</p>
-              <p className="text-sm text-muted">{stats.nextStand.displayDate}</p>
-              <p className="text-sm text-muted">{stats.nextStand.startTime}</p>
-            </>
-          ) : (
-            <p className="text-sm text-muted">No upcoming stands</p>
-          )}
-        </StatCard>
+      {cards.length > 0 ? (
+        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">{cards}</div>
+      ) : (
+        <p className="mt-8 rounded-xl border border-dashed bg-white p-8 text-center text-muted">
+          No dashboard widgets are available for your account.
+        </p>
+      )}
 
-        <StatCard title="Inbox" href={adminPath('messages')}>
-          <p className="text-3xl font-bold text-electric">{stats?.newMessages ?? '—'}</p>
-          <p className="text-sm text-muted">New messages</p>
-        </StatCard>
+      {actions.length > 0 && <div className="mt-8 flex flex-wrap gap-3">{actions}</div>}
 
-        <StatCard title="Custom Requests" href={adminPath('requests')}>
-          <p className="text-3xl font-bold text-cyan">{stats?.newRequests ?? '—'}</p>
-          <p className="text-sm text-muted">New requests</p>
-        </StatCard>
-
-        <StatCard title="Website" href={adminPath('settings')}>
-          {online ? (
-            <>
-              <p className="text-lg font-semibold text-green-600">Online</p>
-              <p className="text-sm text-muted">Public site is live</p>
-            </>
-          ) : (
-            <>
-              <p className="text-lg font-semibold text-amber-600">Paused</p>
-              <p className="text-sm text-muted">Showing planning screen</p>
-            </>
-          )}
-        </StatCard>
-      </div>
-
-      <div className="mt-8 flex flex-wrap gap-3">
-        <Link to={adminPath('stands')} className="rounded-xl bg-electric px-5 py-2.5 text-sm font-semibold text-white hover:bg-electric-light">
-          + Add Stand
-        </Link>
-        <Link to={adminPath('sandbox')} className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-900 hover:border-amber-400">
-          Open site sandbox
-        </Link>
-        <Link to={adminPath('messages')} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
-          Open Inbox
-        </Link>
-        <Link to={adminPath('requests')} className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric">
-          View Requests
-        </Link>
-      </div>
-
-      {!online && (
+      {!online && can('sandbox') && (
         <p className="mt-4 text-sm text-amber-700">
           Public site is paused. Use the{' '}
           <Link to={adminPath('sandbox')} className="font-semibold underline underline-offset-2">

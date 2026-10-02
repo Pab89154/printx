@@ -1,13 +1,14 @@
 import { Link, Navigate } from 'react-router-dom'
 import { ArrowLeft, FlaskConical } from 'lucide-react'
 import { PublicSite } from '../pages/PublicSite'
-import { adminPath } from '../lib/portal'
+import { firstAllowedAdminPath } from '../lib/portal'
 import { useAdminAuth } from '../context/AdminAuthContext'
 
 /** Full public site preview for signed-in admins — ignores the public pause switch. */
 export function AdminSandbox() {
-  const { can } = useAdminAuth()
-  if (!can('sandbox')) return <Navigate to={adminPath('settings')} replace />
+  const { can, permissions } = useAdminAuth()
+  const backTo = firstAllowedAdminPath(permissions)
+  if (!can('sandbox')) return <Navigate to={backTo} replace />
 
   return (
     <div className="min-h-screen bg-white">
@@ -24,7 +25,7 @@ export function AdminSandbox() {
             </p>
           </div>
           <Link
-            to={adminPath('dashboard')}
+            to={backTo}
             className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-semibold text-amber-900 hover:bg-amber-100"
           >
             <ArrowLeft size={14} />

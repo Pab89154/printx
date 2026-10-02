@@ -32,6 +32,7 @@ import {
 } from './db.ts'
 import { notifyContactMessage, notifyCustomRequest } from './mail.ts'
 import type { PermissionKey } from '../shared/permissions.ts'
+import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
 
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
@@ -360,6 +361,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   if (urlPath === '/api/admin/stands' && method === 'POST') {
     if (!requirePerm(admin, 'stands', res)) return true
     const body = await readJson(req)
+    const scheduleError = validateStandSchedule({
+      date: String(body.date ?? ''),
+      startTime: String(body.startTime ?? ''),
+      endTime: String(body.endTime ?? ''),
+      status: String(body.status ?? 'upcoming'),
+    })
+    if (scheduleError) {
+      send(res, 400, { error: scheduleError })
+      return true
+    }
     const now = new Date().toISOString()
     const id = randomUUID()
     await db.run(
@@ -395,6 +406,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       const existing = await db.get('SELECT * FROM stands WHERE id = ?', id)
       if (!existing) {
         send(res, 404, { error: 'Not found' })
+        return true
+      }
+      const scheduleError = validateStandSchedule({
+        date: String(body.date ?? ''),
+        startTime: String(body.startTime ?? ''),
+        endTime: String(body.endTime ?? ''),
+        status: String(body.status ?? 'upcoming'),
+      })
+      if (scheduleError) {
+        send(res, 400, { error: scheduleError })
         return true
       }
       await db.run(
@@ -701,11 +722,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
     if (method === 'DELETE') {
-      const ok = await deleteAdminUser(admin.id, targetId)
-      if (!ok) {
-        send(res, 400, {
-          error: 'Cannot remove this admin (main admin is protected, or you cannot delete yourself).',
-        })
+      if (!admin.isMainAdmin) {
+        return forbid(res, 'Only the main admin can delete accounts.')
+      }
+      const result = await deleteAdminUser(admin.id, targetId)
+      if (!result.ok) {
+        send(res, 400, { error: result.error })
         return true
       }
       send(res, 200, { ok: true })

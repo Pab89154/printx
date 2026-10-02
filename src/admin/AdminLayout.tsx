@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { Logo } from '../components/Logo'
-import { adminHomePath, adminPath, publicSiteUrl } from '../lib/portal'
+import { adminPath, firstAllowedAdminPath, publicSiteUrl } from '../lib/portal'
 import type { PermissionKey } from '../../shared/permissions'
 
 const links: { section: string; label: string; icon: typeof LayoutDashboard; perm: PermissionKey }[] = [
@@ -57,8 +57,7 @@ export function AdminLayout() {
   useEffect(() => {
     const section = location.pathname.replace(/^\/admin\/?/, '').replace(/^\//, '').split('/')[0]
     if (!section) return
-    const first = links.find((l) => permissions[l.perm])
-    const fallback = first ? adminPath(first.section) : adminHomePath()
+    const fallback = firstAllowedAdminPath(permissions)
     if (section === 'sandbox') {
       if (!permissions.sandbox) navigate(fallback, { replace: true })
       return

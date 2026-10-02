@@ -19,7 +19,7 @@ type AuthContextValue = {
   isMainAdmin: boolean
   permissions: AdminPermissions
   can: (key: PermissionKey) => boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<AdminPermissions>
   logout: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -62,6 +62,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const login = async (loginEmail: string, password: string) => {
     const result = await api.admin.login(loginEmail, password)
     applyMe(result)
+    return result.permissions ?? defaultPermissions()
   }
 
   const logout = async () => {

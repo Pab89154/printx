@@ -1,14 +1,24 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { Product, Stand } from '../types/api'
+import { validateStandSchedule } from '../../shared/standSchedule'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
+
+function todayInputValue(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
 export function AdminStands() {
   const [stands, setStands] = useState<Stand[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [editing, setEditing] = useState<Partial<Stand> | null>(null)
+  const [formError, setFormError] = useState('')
 
   async function load() {
     const [s, p] = await Promise.all([api.admin.stands.list(), api.admin.products.list()])
@@ -21,6 +31,7 @@ export function AdminStands() {
   }, [])
 
   function newStand() {
+    setFormError('')
     setEditing({
       schoolName: '',
       date: '',
@@ -36,10 +47,21 @@ export function AdminStands() {
 
   async function save() {
     if (!editing) return
+    setFormError('')
     const name = (editing.schoolName ?? '').trim()
     const address = (editing.location ?? '').trim()
     if (!name || !address) {
-      alert('Please enter a name and an address.')
+      setFormError('Please enter a name and an address.')
+      return
+    }
+    const scheduleError = validateStandSchedule({
+      date: editing.date ?? '',
+      startTime: editing.startTime ?? '',
+      endTime: editing.endTime ?? '',
+      status: editing.status,
+    })
+    if (scheduleError) {
+      setFormError(scheduleError)
       return
     }
     const body = {
@@ -54,10 +76,14 @@ export function AdminStands() {
       products: editing.products,
       status: editing.status,
     }
-    if (editing.id) await api.admin.stands.update(editing.id, body)
-    else await api.admin.stands.create(body)
-    setEditing(null)
-    load()
+    try {
+      if (editing.id) await api.admin.stands.update(editing.id, body)
+      else await api.admin.stands.create(body)
+      setEditing(null)
+      load()
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Could not save stand')
+    }
   }
 
   return (
@@ -95,6 +121,7 @@ export function AdminStands() {
               Date
               <input
                 type="date"
+                min={editing.status === 'past' ? undefined : todayInputValue()}
                 className={inputClass}
                 value={editing.date ?? ''}
                 onChange={(e) => setEditing({ ...editing, date: e.target.value })}
@@ -168,11 +195,19 @@ export function AdminStands() {
               </div>
             </label>
           </div>
+          {formError && <p className="mt-4 text-sm text-red-600">{formError}</p>}
           <div className="mt-4 flex gap-2">
             <button type="button" onClick={save} className="rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white">
               Save
             </button>
-            <button type="button" onClick={() => setEditing(null)} className="rounded-xl border px-4 py-2 text-sm">
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(null)
+                setFormError('')
+              }}
+              className="rounded-xl border px-4 py-2 text-sm"
+            >
               Cancel
             </button>
           </div>
@@ -196,7 +231,14 @@ export function AdminStands() {
               </span>
             </div>
             <div className="flex shrink-0 gap-2">
-              <button type="button" onClick={() => setEditing(stand)} className="flex-1 rounded-lg border px-3 py-2 text-sm sm:flex-none sm:py-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setFormError('')
+                  setEditing(stand)
+                }}
+                className="flex-1 rounded-lg border px-3 py-2 text-sm sm:flex-none sm:py-1.5"
+              >
                 Edit
               </button>
               <button

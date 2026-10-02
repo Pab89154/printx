@@ -3,25 +3,25 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { Lock, Mail } from 'lucide-react'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { Logo } from '../components/Logo'
-import { adminPath } from '../lib/portal'
+import { firstAllowedAdminPath } from '../lib/portal'
 
 export function AdminLogin() {
-  const { authenticated, login } = useAdminAuth()
+  const { authenticated, login, permissions } = useAdminAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  if (authenticated) return <Navigate to={adminPath('dashboard')} replace />
+  if (authenticated) return <Navigate to={firstAllowedAdminPath(permissions)} replace />
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setError('')
     try {
-      await login(email, password)
-      navigate(adminPath('dashboard'))
+      const nextPermissions = await login(email, password)
+      navigate(firstAllowedAdminPath(nextPermissions))
     } catch {
       setError('Invalid email or password.')
     } finally {
