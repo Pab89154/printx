@@ -674,37 +674,48 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/users' && method === 'GET') {
-    if (!requirePerm(admin, 'manage_admins', res)) return true
+    if (!admin.isMainAdmin) {
+      return forbid(res, 'Only the main admin can manage accounts.')
+    }
     send(res, 200, await listAdminUsers())
     return true
   }
 
   if (urlPath === '/api/admin/users' && method === 'POST') {
-    if (!requirePerm(admin, 'manage_admins', res)) return true
+    if (!admin.isMainAdmin) {
+      return forbid(res, 'Only the main admin can create accounts.')
+    }
     const body = await readJson(req)
     const email = sanitizeEmail(body.email)
     const password = typeof body.password === 'string' ? body.password : ''
-    const created = await createAdminUser(
-      email,
-      password,
-      body.permissions && typeof body.permissions === 'object'
-        ? (body.permissions as Record<string, boolean>)
-        : undefined,
-    )
-    if (!created) {
-      send(res, 400, {
-        error:
-          'Could not create admin. Use a valid unique email and password (8+ characters). The main admin email is reserved.',
-      })
-      return true
+    try {
+      const created = await createAdminUser(
+        email,
+        password,
+        body.permissions && typeof body.permissions === 'object'
+          ? (body.permissions as Record<string, boolean>)
+          : undefined,
+      )
+      if (!created) {
+        send(res, 400, {
+          error:
+            'Could not create admin. Use a valid unique email and password (8+ characters). The main admin email is reserved.',
+        })
+        return true
+      }
+      send(res, 201, created)
+    } catch (err) {
+      console.error('[printx] create admin failed', err)
+      send(res, 500, { error: 'Could not create admin account. Try again.' })
     }
-    send(res, 201, created)
     return true
   }
 
   const userMatch = urlPath.match(/^\/api\/admin\/users\/([^/]+)$/)
   if (userMatch) {
-    if (!requirePerm(admin, 'manage_admins', res)) return true
+    if (!admin.isMainAdmin) {
+      return forbid(res, 'Only the main admin can manage accounts.')
+    }
     const targetId = userMatch[1]
     if (method === 'PATCH') {
       const body = await readJson(req)

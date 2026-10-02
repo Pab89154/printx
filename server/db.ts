@@ -133,7 +133,6 @@ function resolveAdminPassword(): string {
 async function ensurePrimaryAdmin(database: DbApi) {
   const adminEmail = resolveAdminEmail()
   const password = resolveAdminPassword()
-  const hash = bcrypt.hashSync(password, 12)
 
   const byEmail = await database.get<{ id: string }>(
     `SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1`,
@@ -141,13 +140,11 @@ async function ensurePrimaryAdmin(database: DbApi) {
   )
 
   if (byEmail) {
-    await database.run(
-      'UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?',
-      adminEmail,
-      hash,
-      byEmail.id,
-    )
+    // Keep existing password + sessions. Resetting them on every boot caused
+    // “Unauthorized” mid-session after Render cold starts / deploys.
+    await database.run('UPDATE users SET email = ?, email_verified = 1 WHERE id = ?', adminEmail, byEmail.id)
   } else {
+    const hash = bcrypt.hashSync(password, 12)
     const fallback = await database.get<{ id: string }>(
       `SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`,
     )
@@ -159,6 +156,8 @@ async function ensurePrimaryAdmin(database: DbApi) {
         hash,
         fallback.id,
       )
+      // Only wipe sessions when we actually change the account identity/password
+      await database.run('DELETE FROM sessions WHERE user_id = ?', fallback.id)
     } else {
       await database.run(
         'INSERT INTO users (id, email, password_hash, role, email_verified, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -171,15 +170,6 @@ async function ensurePrimaryAdmin(database: DbApi) {
         new Date().toISOString(),
       )
     }
-  }
-
-  // Invalidate old sessions so a fresh login is required after credential sync
-  const primary = await database.get<{ id: string }>(
-    `SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1`,
-    adminEmail,
-  )
-  if (primary) {
-    await database.run('DELETE FROM sessions WHERE user_id = ?', primary.id)
   }
 
   console.log(`[printx] Primary admin ready: ${adminEmail}`)

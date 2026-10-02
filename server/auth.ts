@@ -82,21 +82,37 @@ export async function getSessionUser(token: string | null): Promise<SessionAdmin
   if (!token) return null
   const db = await getDb()
   const tokenHash = hashToken(token)
-  const row = await db.get<{
+
+  let row: {
     id: string
     role: string
     email: string
-    permissions: string | null
+    permissions?: string | null
     expires_at: string
-  }>(
-    `
-    SELECT u.id, u.role, u.email, u.permissions, s.expires_at
-    FROM sessions s
-    JOIN users u ON u.id = s.user_id
-    WHERE s.token_hash = ?
-  `,
-    tokenHash,
-  )
+  } | null = null
+
+  try {
+    row = await db.get(
+      `
+      SELECT u.id, u.role, u.email, u.permissions, s.expires_at
+      FROM sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ?
+    `,
+      tokenHash,
+    )
+  } catch {
+    // permissions column may be missing before migrate finishes
+    row = await db.get(
+      `
+      SELECT u.id, u.role, u.email, s.expires_at
+      FROM sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ?
+    `,
+      tokenHash,
+    )
+  }
 
   if (!row) return null
   if (new Date(row.expires_at) < new Date()) {

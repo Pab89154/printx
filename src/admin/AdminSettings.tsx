@@ -105,7 +105,12 @@ export function AdminSettings() {
       setAdminMessage('Admin account created. They can sign in with the access you set.')
       loadAdmins()
     } catch (e) {
-      setAdminError(e instanceof Error ? e.message : 'Failed to create admin')
+      const msg = e instanceof Error ? e.message : 'Failed to create admin'
+      setAdminError(
+        msg === 'Unauthorized'
+          ? 'Your session expired. Sign out, sign back in as pablo.molina@printx.pw, then try again.'
+          : msg,
+      )
     }
   }
 
