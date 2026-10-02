@@ -34,9 +34,38 @@ export function AdminContent() {
         </Section>
 
         <Section title="Announcement">
-          <label className="flex items-center gap-2"><input type="checkbox" checked={content.announcementEnabled} onChange={(e) => setContent({ ...content, announcementEnabled: e.target.checked })} /> Enable announcement on homepage</label>
-          <label className="mt-3 block">Announcement text<input className={inputClass} value={content.announcementText} onChange={(e) => setContent({ ...content, announcementText: e.target.value })} /></label>
-          <label className="mt-3 block">Expiration date<input type="date" className={inputClass} value={content.announcementExpiresAt ?? ''} onChange={(e) => setContent({ ...content, announcementExpiresAt: e.target.value || null })} /></label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={content.announcementEnabled}
+              onChange={(e) => setContent({ ...content, announcementEnabled: e.target.checked })}
+            />
+            Show announcement banner on the public site
+          </label>
+          <label className="mt-3 block">
+            Announcement text
+            <input
+              className={inputClass}
+              value={content.announcementText}
+              onChange={(e) => setContent({ ...content, announcementText: e.target.value })}
+              placeholder="Next PrintX stand this Friday!"
+            />
+          </label>
+          <label className="mt-3 block">
+            Expiration date (optional)
+            <input
+              type="date"
+              className={inputClass}
+              value={content.announcementExpiresAt ?? ''}
+              onChange={(e) => setContent({ ...content, announcementExpiresAt: e.target.value || null })}
+            />
+          </label>
+          <p className="mt-2 text-xs text-muted">
+            Leave the date blank for no end date. After the expiration day, the banner hides automatically.
+          </p>
+          {content.announcementEnabled && !content.announcementText.trim() && (
+            <p className="mt-2 text-xs text-amber-700">Add announcement text, or the banner will stay hidden.</p>
+          )}
         </Section>
 
         <Section title="About">

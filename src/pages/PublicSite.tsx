@@ -1,4 +1,5 @@
 import { About } from '../components/About'
+import { AnnouncementBanner } from '../components/AnnouncementBanner'
 import { Contact } from '../components/Contact'
 import { CustomPrinting } from '../components/CustomPrinting'
 import { FeedbackButton } from '../components/FeedbackButton'
@@ -43,6 +44,9 @@ export function PublicSite({ forceOnline = false }: Props) {
 
   return (
     <div className="min-h-screen">
+      {data?.announcementActive && data.content.announcementText?.trim() ? (
+        <AnnouncementBanner text={data.content.announcementText} />
+      ) : null}
       <Header />
       <main>
         <Hero />

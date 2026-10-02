@@ -33,6 +33,19 @@ import type { RequestStatus, StandStatus } from './types.ts'
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
+/** Date-only expiry (YYYY-MM-DD) counts through end of that local day. */
+function announcementStillValid(expiresAt: string | null | undefined): boolean {
+  if (!expiresAt || !String(expiresAt).trim()) return true
+  const raw = String(expiresAt).trim()
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw)
+  if (m) {
+    const end = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999)
+    return end.getTime() >= Date.now()
+  }
+  const parsed = new Date(raw)
+  return !Number.isNaN(parsed.getTime()) && parsed.getTime() >= Date.now()
+}
+
 function isSecureRequest(req: IncomingMessage): boolean {
   const forwarded = req.headers['x-forwarded-proto']
   if (typeof forwarded === 'string') return forwarded.split(',')[0]?.trim() === 'https'
@@ -141,9 +154,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
     const schools = await db.all('SELECT * FROM schools WHERE active = 1 ORDER BY name ASC')
     const content = await getWebsiteContent(db)
-    const announcementActive =
+    const announcementActive = Boolean(
       content.announcementEnabled &&
-      (!content.announcementExpiresAt || new Date(content.announcementExpiresAt) >= new Date())
+        content.announcementText?.trim() &&
+        announcementStillValid(content.announcementExpiresAt),
+    )
 
     send(res, 200, { stands, pastStands, products, schools, content, announcementActive })
     return true

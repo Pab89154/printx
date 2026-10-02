@@ -202,6 +202,26 @@ async function migrateContactMessagesStatus(database: DbApi) {
   }
 }
 
+/** Clear the old demo expiry that kept announcements hidden after Sept 2026. */
+async function migrateStaleAnnouncementExpiry(database: DbApi) {
+  const row = await database.get<{ value: string }>(
+    "SELECT value FROM website_settings WHERE key = 'announcementExpiresAt'",
+  )
+  if (!row) return
+  try {
+    const value = JSON.parse(row.value) as string | null
+    if (value === '2026-09-13') {
+      await database.run(
+        "UPDATE website_settings SET value = ?, updated_at = ? WHERE key = 'announcementExpiresAt'",
+        JSON.stringify(null),
+        new Date().toISOString(),
+      )
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 async function migrateContactEmail(database: DbApi) {
   const row = await database.get<{ value: string }>(
     "SELECT value FROM website_settings WHERE key = 'contactEmail'",
@@ -373,8 +393,8 @@ async function seed(database: DbApi) {
     forSchoolsDescription: 'Interested in having a PrintX stand at your school? Contact us to learn more about setting up a stand for your students, clubs, or events.',
     forSchoolsInstructions: 'Email us with your school name, preferred dates, and what kind of event you are planning.',
     announcementText: 'Next PrintX Stand: Friday at McKinney School!',
-    announcementEnabled: true,
-    announcementExpiresAt: '2026-09-13',
+    announcementEnabled: false,
+    announcementExpiresAt: null,
     websiteOnline: true,
   }
   for (const [key, value] of Object.entries(defaults)) {
@@ -399,6 +419,7 @@ async function initDb(): Promise<DbApi> {
   await migrate(database)
   await migrateUserAuth(database)
   await migrateContactMessagesStatus(database)
+  await migrateStaleAnnouncementExpiry(database)
   await migrateEmojiToIcons(database)
   await migrateContactEmail(database)
   await migrateBrandGradients(database)
@@ -491,8 +512,8 @@ export async function getWebsiteContent(database: DbApi): Promise<WebsiteContent
     forSchoolsInstructions:
       'Email us with your school name, preferred dates, and what kind of event you are planning.',
     announcementText: 'Next PrintX Stand: Friday at McKinney School!',
-    announcementEnabled: true,
-    announcementExpiresAt: '2026-09-13',
+    announcementEnabled: false,
+    announcementExpiresAt: null,
     websiteOnline: true,
   }
 
@@ -501,6 +522,15 @@ export async function getWebsiteContent(database: DbApi): Promise<WebsiteContent
   // Treat blank strings as missing so wiped admin saves don't blank the public site
   for (const [key, fallback] of Object.entries(defaults) as [keyof WebsiteContent, WebsiteContent[keyof WebsiteContent]][]) {
     const value = merged[key]
+    // Optional date: empty/null means "no expiration" (do not revive an old seed date)
+    if (key === 'announcementExpiresAt') {
+      if (value === undefined) {
+        ;(merged as Record<string, unknown>)[key] = null
+      } else if (value === '' || value === null) {
+        ;(merged as Record<string, unknown>)[key] = null
+      }
+      continue
+    }
     if (typeof fallback === 'string' && typeof value === 'string' && value.trim() === '') {
       ;(merged as Record<string, unknown>)[key] = fallback
     }
