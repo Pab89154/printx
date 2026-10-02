@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import formidable from 'formidable'
 import {
+  adminCan,
   clearSessionCookieHeader,
   createSession,
   destroySession,
@@ -14,10 +15,12 @@ import {
   sessionCookieHeader,
   SESSION_COOKIE,
   updateAdminPassword,
+  updateAdminPermissions,
   verifyAdminLogin,
   listAdminUsers,
   createAdminUser,
   deleteAdminUser,
+  type SessionAdmin,
 } from './auth.ts'
 import {
   getDb,
@@ -28,6 +31,7 @@ import {
   setWebsiteSetting,
 } from './db.ts'
 import { notifyContactMessage, notifyCustomRequest } from './mail.ts'
+import type { PermissionKey } from '../shared/permissions.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
 
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
@@ -69,11 +73,22 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   }
 }
 
-async function requireAdmin(req: IncomingMessage): Promise<{ id: string; role: string; email: string } | null> {
+async function requireAdmin(req: IncomingMessage): Promise<SessionAdmin | null> {
   const cookies = parseCookies(req.headers.cookie)
   const user = await getSessionUser(cookies[SESSION_COOKIE] ?? null)
   if (!user || user.role !== 'admin') return null
   return user
+}
+
+function forbid(res: ServerResponse, message = 'You do not have permission for this action.') {
+  send(res, 403, { error: message })
+  return true
+}
+
+function requirePerm(admin: SessionAdmin, key: PermissionKey, res: ServerResponse): boolean {
+  if (adminCan(admin, key)) return true
+  forbid(res)
+  return false
 }
 
 function formatStandDate(isoDate: string): string {
@@ -230,9 +245,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
     const token = await createSession(user.id)
-    send(res, 200, { ok: true, role: user.role, email: user.email }, [
-      sessionCookieHeader(token, { secure: isSecureRequest(req) }),
-    ])
+    send(
+      res,
+      200,
+      {
+        ok: true,
+        role: user.role,
+        email: user.email,
+        isMainAdmin: user.isMainAdmin,
+        permissions: user.permissions,
+      },
+      [sessionCookieHeader(token, { secure: isSecureRequest(req) })],
+    )
     return true
   }
 
@@ -249,7 +273,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 401, { error: 'Unauthorized' })
       return true
     }
-    send(res, 200, { ok: true, role: user.role, email: user.email })
+    send(res, 200, {
+      ok: true,
+      role: user.role,
+      email: user.email,
+      isMainAdmin: user.isMainAdmin,
+      permissions: user.permissions,
+    })
     return true
   }
 
@@ -260,6 +290,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 401, { error: 'Unauthorized' })
       return true
     }
+    if (!requirePerm(adminUser, 'requests', res)) return true
     const filename = uploadMatch[1] ?? ''
     if (!/^[\w-]+\.(stl|obj)$/i.test(filename)) {
       send(res, 400, { error: 'Invalid file name' })
@@ -279,10 +310,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/stats' && method === 'GET') {
-    if (!(await requireAdmin(req))) {
+    const statsAdmin = await requireAdmin(req)
+    if (!statsAdmin) {
       send(res, 401, { error: 'Unauthorized' })
       return true
     }
+    if (!requirePerm(statsAdmin, 'dashboard', res)) return true
     const nextRow = await db.get<Record<string, unknown>>(`
       SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC LIMIT 1
     `)
@@ -318,12 +351,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/stands' && method === 'GET') {
+    if (!requirePerm(admin, 'stands', res)) return true
     const rows = await db.all<Record<string, unknown>>('SELECT * FROM stands ORDER BY date DESC')
     send(res, 200, rows.map((r) => rowToStand(r)))
     return true
   }
 
   if (urlPath === '/api/admin/stands' && method === 'POST') {
+    if (!requirePerm(admin, 'stands', res)) return true
     const body = await readJson(req)
     const now = new Date().toISOString()
     const id = randomUUID()
@@ -353,6 +388,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   const standMatch = urlPath.match(/^\/api\/admin\/stands\/([^/]+)$/)
   if (standMatch) {
+    if (!requirePerm(admin, 'stands', res)) return true
     const id = standMatch[1]
     if (method === 'PATCH') {
       const body = await readJson(req)
@@ -393,12 +429,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/products' && method === 'GET') {
+    // Stands editor also needs the product list
+    if (!adminCan(admin, 'products') && !adminCan(admin, 'stands')) {
+      return forbid(res)
+    }
+
     const rows = await db.all<Record<string, unknown>>('SELECT * FROM products ORDER BY display_order ASC')
     send(res, 200, rows.map(rowToProduct))
     return true
   }
 
   if (urlPath === '/api/admin/products' && method === 'POST') {
+    if (!requirePerm(admin, 'products', res)) return true
+
     const body = await readJson(req)
     const now = new Date().toISOString()
     const id = randomUUID()
@@ -428,6 +471,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   const productMatch = urlPath.match(/^\/api\/admin\/products\/([^/]+)$/)
   if (productMatch) {
+    if (!requirePerm(admin, 'products', res)) return true
     const id = productMatch[1]
     if (method === 'PATCH') {
       const body = await readJson(req)
@@ -463,17 +507,20 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/custom-requests' && method === 'GET') {
+    if (!requirePerm(admin, 'requests', res)) return true
     send(res, 200, await db.all('SELECT * FROM custom_requests ORDER BY created_at DESC'))
     return true
   }
 
   if (urlPath === '/api/admin/contact-messages' && method === 'GET') {
+    if (!requirePerm(admin, 'messages', res)) return true
     send(res, 200, await db.all('SELECT * FROM contact_messages ORDER BY created_at DESC'))
     return true
   }
 
   const contactMatch = urlPath.match(/^\/api\/admin\/contact-messages\/([^/]+)$/)
   if (contactMatch) {
+    if (!requirePerm(admin, 'messages', res)) return true
     const id = contactMatch[1]
     if (method === 'PATCH') {
       const body = await readJson(req)
@@ -491,6 +538,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   const requestMatch = urlPath.match(/^\/api\/admin\/custom-requests\/([^/]+)$/)
   if (requestMatch && method === 'PATCH') {
+    if (!requirePerm(admin, 'requests', res)) return true
     const id = requestMatch[1]
     const body = await readJson(req)
     const status = ['new', 'reviewing', 'approved', 'declined', 'completed'].includes(String(body.status))
@@ -502,11 +550,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/schools' && method === 'GET') {
+    // Stands editor also needs the school list
+    if (!adminCan(admin, 'schools') && !adminCan(admin, 'stands')) {
+      return forbid(res)
+    }
     send(res, 200, await db.all('SELECT * FROM schools ORDER BY name ASC'))
     return true
   }
 
   if (urlPath === '/api/admin/schools' && method === 'POST') {
+    if (!requirePerm(admin, 'schools', res)) return true
     const body = await readJson(req)
     const now = new Date().toISOString()
     const id = randomUUID()
@@ -530,6 +583,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   const schoolMatch = urlPath.match(/^\/api\/admin\/schools\/([^/]+)$/)
   if (schoolMatch) {
+    if (!requirePerm(admin, 'schools', res)) return true
     const id = schoolMatch[1]
     if (method === 'PATCH') {
       const body = await readJson(req)
@@ -557,13 +611,24 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/content' && method === 'GET') {
+    if (!adminCan(admin, 'content') && !adminCan(admin, 'website_status')) {
+      return forbid(res)
+    }
     send(res, 200, await getWebsiteContent(db))
     return true
   }
 
   if (urlPath === '/api/admin/content' && method === 'PATCH') {
     const body = await readJson(req)
+    const keys = Object.keys(body)
+    const onlyWebsiteOnline = keys.length > 0 && keys.every((k) => k === 'websiteOnline')
+    if (onlyWebsiteOnline) {
+      if (!requirePerm(admin, 'website_status', res)) return true
+    } else if (!requirePerm(admin, 'content', res)) {
+      return true
+    }
     for (const [key, value] of Object.entries(body)) {
+      if (key === 'websiteOnline' && !adminCan(admin, 'website_status')) continue
       await setWebsiteSetting(db, key, value)
     }
     send(res, 200, await getWebsiteContent(db))
@@ -571,6 +636,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/settings/password' && method === 'PATCH') {
+    if (!requirePerm(admin, 'settings', res)) return true
     const body = await readJson(req)
     const ok = await updateAdminPassword(
       db,
@@ -587,17 +653,28 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/users' && method === 'GET') {
+    if (!requirePerm(admin, 'manage_admins', res)) return true
     send(res, 200, await listAdminUsers())
     return true
   }
 
   if (urlPath === '/api/admin/users' && method === 'POST') {
+    if (!requirePerm(admin, 'manage_admins', res)) return true
     const body = await readJson(req)
     const email = sanitizeEmail(body.email)
     const password = typeof body.password === 'string' ? body.password : ''
-    const created = await createAdminUser(email, password)
+    const created = await createAdminUser(
+      email,
+      password,
+      body.permissions && typeof body.permissions === 'object'
+        ? (body.permissions as Record<string, boolean>)
+        : undefined,
+    )
     if (!created) {
-      send(res, 400, { error: 'Could not create admin. Use a valid unique email and password (8+ characters).' })
+      send(res, 400, {
+        error:
+          'Could not create admin. Use a valid unique email and password (8+ characters). The main admin email is reserved.',
+      })
       return true
     }
     send(res, 201, created)
@@ -605,15 +682,35 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   const userMatch = urlPath.match(/^\/api\/admin\/users\/([^/]+)$/)
-  if (userMatch && method === 'DELETE') {
+  if (userMatch) {
+    if (!requirePerm(admin, 'manage_admins', res)) return true
     const targetId = userMatch[1]
-    const ok = await deleteAdminUser(admin.id, targetId)
-    if (!ok) {
-      send(res, 400, { error: 'Cannot remove this admin (you may be deleting yourself or the last admin).' })
+    if (method === 'PATCH') {
+      const body = await readJson(req)
+      const updated = await updateAdminPermissions(
+        targetId,
+        body.permissions && typeof body.permissions === 'object'
+          ? (body.permissions as Record<string, boolean>)
+          : {},
+      )
+      if (!updated) {
+        send(res, 400, { error: 'Cannot update permissions for this admin.' })
+        return true
+      }
+      send(res, 200, updated)
       return true
     }
-    send(res, 200, { ok: true })
-    return true
+    if (method === 'DELETE') {
+      const ok = await deleteAdminUser(admin.id, targetId)
+      if (!ok) {
+        send(res, 400, {
+          error: 'Cannot remove this admin (main admin is protected, or you cannot delete yourself).',
+        })
+        return true
+      }
+      send(res, 200, { ok: true })
+      return true
+    }
   }
 
   return false

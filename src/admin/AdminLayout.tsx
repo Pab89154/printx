@@ -17,23 +17,28 @@ import {
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { Logo } from '../components/Logo'
 import { adminHomePath, adminPath, publicSiteUrl } from '../lib/portal'
+import type { PermissionKey } from '../../shared/permissions'
 
-const links = [
-  { section: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { section: 'messages', label: 'Inbox', icon: Inbox },
-  { section: 'stands', label: 'Stands', icon: MapPin },
-  { section: 'products', label: 'Products', icon: Package },
-  { section: 'requests', label: 'Custom Requests', icon: Sparkles },
-  { section: 'schools', label: 'Schools', icon: Building2 },
-  { section: 'content', label: 'Website Content', icon: FileText },
-  { section: 'settings', label: 'Settings', icon: Settings },
+const links: { section: string; label: string; icon: typeof LayoutDashboard; perm: PermissionKey }[] = [
+  { section: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, perm: 'dashboard' },
+  { section: 'messages', label: 'Inbox', icon: Inbox, perm: 'messages' },
+  { section: 'stands', label: 'Stands', icon: MapPin, perm: 'stands' },
+  { section: 'products', label: 'Products', icon: Package, perm: 'products' },
+  { section: 'requests', label: 'Custom Requests', icon: Sparkles, perm: 'requests' },
+  { section: 'schools', label: 'Schools', icon: Building2, perm: 'schools' },
+  { section: 'content', label: 'Website Content', icon: FileText, perm: 'content' },
+  { section: 'settings', label: 'Settings', icon: Settings, perm: 'settings' },
 ]
 
 export function AdminLayout() {
-  const { logout } = useAdminAuth()
+  const { logout, can, isMainAdmin, email, permissions } = useAdminAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
+
+  const allowedLinks = links.filter((l) => can(l.perm))
+  const navLinks = allowedLinks.map((l) => ({ ...l, to: adminPath(l.section) }))
+  const currentLabel = navLinks.find((l) => location.pathname.startsWith(l.to))?.label ?? 'Admin'
 
   useEffect(() => {
     setMenuOpen(false)
@@ -48,39 +53,48 @@ export function AdminLayout() {
     }
   }, [menuOpen])
 
+  // Redirect away from sections the admin cannot see
+  useEffect(() => {
+    const section = location.pathname.replace(/^\/admin\/?/, '').replace(/^\//, '').split('/')[0]
+    if (!section) return
+    const first = links.find((l) => permissions[l.perm])
+    const fallback = first ? adminPath(first.section) : adminHomePath()
+    if (section === 'sandbox') {
+      if (!permissions.sandbox) navigate(fallback, { replace: true })
+      return
+    }
+    const link = links.find((l) => l.section === section)
+    if (link && !permissions[link.perm]) navigate(fallback, { replace: true })
+  }, [location.pathname, permissions, navigate])
+
   async function handleLogout() {
     await logout()
     navigate(adminHomePath())
   }
 
-  const navLinks = links.map((l) => ({ ...l, to: adminPath(l.section) }))
-  const currentLabel = navLinks.find((l) => location.pathname.startsWith(l.to))?.label ?? 'Admin'
-
   return (
     <div className="flex min-h-screen bg-slate-50">
-      {/* Mobile top bar */}
       <header className="fixed inset-x-0 top-0 z-40 flex min-h-14 items-center gap-3 border-b border-slate-200 bg-navy px-4 pb-0 pt-[env(safe-area-inset-top,0px)] text-white md:hidden">
         <div className="flex h-14 w-full items-center gap-3">
-        <button
-          type="button"
-          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-          aria-expanded={menuOpen}
-          className="rounded-lg p-2 hover:bg-white/10"
-          onClick={() => setMenuOpen((o) => !o)}
-        >
-          {menuOpen ? <X size={22} /> : <Menu size={22} />}
-        </button>
-        <div className="flex min-w-0 items-center gap-2">
-          <Logo size={28} />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-bold">PrintX Admin</div>
-            <div className="truncate text-xs text-slate-400">{currentLabel}</div>
+          <button
+            type="button"
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={menuOpen}
+            className="rounded-lg p-2 hover:bg-white/10"
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            {menuOpen ? <X size={22} /> : <Menu size={22} />}
+          </button>
+          <div className="flex min-w-0 items-center gap-2">
+            <Logo size={28} />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold">PrintX Admin</div>
+              <div className="truncate text-xs text-slate-400">{currentLabel}</div>
+            </div>
           </div>
-        </div>
         </div>
       </header>
 
-      {/* Backdrop */}
       {menuOpen && (
         <button
           type="button"
@@ -97,9 +111,11 @@ export function AdminLayout() {
       >
         <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
           <Logo size={36} />
-          <div>
+          <div className="min-w-0">
             <div className="font-bold">PrintX Admin</div>
-            <div className="text-xs text-slate-400">Dashboard</div>
+            <div className="truncate text-xs text-slate-400">
+              {isMainAdmin ? 'Main admin' : email ?? 'Admin'}
+            </div>
           </div>
           <button
             type="button"
@@ -129,13 +145,15 @@ export function AdminLayout() {
         </nav>
 
         <div className="border-t border-white/10 p-3">
-          <NavLink
-            to={adminPath('sandbox')}
-            className="mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-amber-200 hover:bg-white/10 hover:text-white md:py-2.5"
-          >
-            <FlaskConical size={18} className="shrink-0" />
-            Site sandbox
-          </NavLink>
+          {can('sandbox') && (
+            <NavLink
+              to={adminPath('sandbox')}
+              className="mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-amber-200 hover:bg-white/10 hover:text-white md:py-2.5"
+            >
+              <FlaskConical size={18} className="shrink-0" />
+              Site sandbox
+            </NavLink>
+          )}
           <a
             href={publicSiteUrl('/')}
             target="_blank"

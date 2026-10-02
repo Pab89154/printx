@@ -22,9 +22,22 @@ export const api = {
       }),
   },
   admin: {
-    me: () => request<{ ok: boolean; role: string; email: string }>('/api/admin/me'),
+    me: () =>
+      request<{
+        ok: boolean
+        role: string
+        email: string
+        isMainAdmin: boolean
+        permissions: import('../types/api.ts').AdminPermissions
+      }>('/api/admin/me'),
     login: (email: string, password: string) =>
-      request<{ ok: boolean; role: string; email: string }>('/api/admin/login', {
+      request<{
+        ok: boolean
+        role: string
+        email: string
+        isMainAdmin: boolean
+        permissions: import('../types/api.ts').AdminPermissions
+      }>('/api/admin/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       }),
@@ -79,10 +92,22 @@ export const api = {
     },
     users: {
       list: () => request<import('../types/api.ts').AdminUser[]>('/api/admin/users'),
-      create: (email: string, password: string) =>
+      create: (
+        email: string,
+        password: string,
+        permissions?: Partial<import('../types/api.ts').AdminPermissions>,
+      ) =>
         request<import('../types/api.ts').AdminUser>('/api/admin/users', {
           method: 'POST',
-          body: JSON.stringify({ email, password }),
+          body: JSON.stringify({ email, password, permissions }),
+        }),
+      updatePermissions: (
+        id: string,
+        permissions: Partial<import('../types/api.ts').AdminPermissions>,
+      ) =>
+        request<import('../types/api.ts').AdminUser>(`/api/admin/users/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ permissions }),
         }),
       delete: (id: string) => request(`/api/admin/users/${id}`, { method: 'DELETE' }),
     },

@@ -2,6 +2,14 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import bcrypt from 'bcryptjs'
 import type { Db } from './db.ts'
 import { getDb } from './db.ts'
+import {
+  defaultPermissions,
+  isMainAdminEmail,
+  normalizePermissions,
+  permissionsForUser,
+  type AdminPermissions,
+  type PermissionKey,
+} from '../shared/permissions.ts'
 
 const SESSION_COOKIE = 'printx_session'
 const SESSION_DAYS = 7
@@ -37,15 +45,52 @@ export async function destroySession(token: string | null): Promise<void> {
   await db.run('DELETE FROM sessions WHERE token_hash = ?', hashToken(token))
 }
 
-export async function getSessionUser(
-  token: string | null,
-): Promise<{ id: string; role: string; email: string } | null> {
+export type SessionAdmin = {
+  id: string
+  role: string
+  email: string
+  isMainAdmin: boolean
+  permissions: AdminPermissions
+}
+
+function parseStoredPermissions(raw: string | null | undefined): unknown {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as unknown
+  } catch {
+    return null
+  }
+}
+
+function toSessionAdmin(row: {
+  id: string
+  role: string
+  email: string
+  permissions?: string | null
+}): SessionAdmin {
+  const email = row.email ?? ''
+  return {
+    id: row.id,
+    role: row.role,
+    email,
+    isMainAdmin: isMainAdminEmail(email),
+    permissions: permissionsForUser(email, parseStoredPermissions(row.permissions)),
+  }
+}
+
+export async function getSessionUser(token: string | null): Promise<SessionAdmin | null> {
   if (!token) return null
   const db = await getDb()
   const tokenHash = hashToken(token)
-  const row = await db.get<{ id: string; role: string; email: string; expires_at: string }>(
+  const row = await db.get<{
+    id: string
+    role: string
+    email: string
+    permissions: string | null
+    expires_at: string
+  }>(
     `
-    SELECT u.id, u.role, u.email, s.expires_at
+    SELECT u.id, u.role, u.email, u.permissions, s.expires_at
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ?
@@ -58,20 +103,26 @@ export async function getSessionUser(
     await db.run('DELETE FROM sessions WHERE token_hash = ?', tokenHash)
     return null
   }
-  return { id: row.id, role: row.role, email: row.email ?? '' }
+  return toSessionAdmin(row)
 }
 
 export async function verifyAdminLogin(
   email: string,
   password: string,
-): Promise<{ id: string; role: string; email: string } | null> {
+): Promise<SessionAdmin | null> {
   const normalized = sanitizeEmail(email).toLowerCase()
   if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null
 
   const db = await getDb()
-  const user = await db.get<{ id: string; password_hash: string; role: string; email: string }>(
+  const user = await db.get<{
+    id: string
+    password_hash: string
+    role: string
+    email: string
+    permissions: string | null
+  }>(
     `
-    SELECT id, password_hash, role, email
+    SELECT id, password_hash, role, email, permissions
     FROM users
     WHERE role = 'admin' AND LOWER(email) = ?
   `,
@@ -80,7 +131,7 @@ export async function verifyAdminLogin(
 
   if (!user) return null
   if (!bcrypt.compareSync(password, user.password_hash)) return null
-  return { id: user.id, role: user.role, email: user.email }
+  return toSessionAdmin(user)
 }
 
 /** @deprecated use verifyAdminLogin */
@@ -116,25 +167,45 @@ export type AdminUserRecord = {
   email: string
   emailVerified: boolean
   createdAt: string
+  isMainAdmin: boolean
+  permissions: AdminPermissions
 }
 
 export async function listAdminUsers(): Promise<AdminUserRecord[]> {
   const db = await getDb()
-  const rows = await db.all<{ id: string; email: string; email_verified: number; created_at: string }>(
-    `SELECT id, email, email_verified, created_at FROM users WHERE role = 'admin' ORDER BY created_at ASC`,
+  const rows = await db.all<{
+    id: string
+    email: string
+    email_verified: number
+    created_at: string
+    permissions: string | null
+  }>(
+    `SELECT id, email, email_verified, created_at, permissions FROM users WHERE role = 'admin' ORDER BY created_at ASC`,
   )
-  return rows.map((r) => ({
-    id: r.id,
-    email: r.email,
-    emailVerified: Boolean(r.email_verified),
-    createdAt: r.created_at,
-  }))
+  return rows.map((r) => {
+    const email = r.email
+    return {
+      id: r.id,
+      email,
+      emailVerified: Boolean(r.email_verified),
+      createdAt: r.created_at,
+      isMainAdmin: isMainAdminEmail(email),
+      permissions: permissionsForUser(email, parseStoredPermissions(r.permissions)),
+    }
+  })
 }
 
-export async function createAdminUser(email: string, password: string): Promise<AdminUserRecord | null> {
+export async function createAdminUser(
+  email: string,
+  password: string,
+  permissions?: Partial<AdminPermissions>,
+): Promise<AdminUserRecord | null> {
   const normalized = sanitizeEmail(email).toLowerCase()
   if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null
   if (password.length < 8) return null
+  // Cannot create a second main admin account via email collision with reserved address by others —
+  // only one account may use the main email.
+  if (isMainAdminEmail(normalized)) return null
 
   const db = await getDb()
   const existing = await db.get('SELECT id FROM users WHERE LOWER(email) = ?', normalized)
@@ -143,27 +214,82 @@ export async function createAdminUser(email: string, password: string): Promise<
   const id = randomUUID()
   const now = new Date().toISOString()
   const hash = bcrypt.hashSync(password, 12)
+  const perms = normalizePermissions({ ...defaultPermissions(), ...permissions })
   await db.run(
-    'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO users (id, email, password_hash, role, email_verified, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     id,
     normalized,
     hash,
     'admin',
     1,
+    JSON.stringify(perms),
     now,
   )
 
-  return { id, email: normalized, emailVerified: true, createdAt: now }
+  return {
+    id,
+    email: normalized,
+    emailVerified: true,
+    createdAt: now,
+    isMainAdmin: false,
+    permissions: perms,
+  }
+}
+
+export async function updateAdminPermissions(
+  targetId: string,
+  permissions: Partial<AdminPermissions>,
+): Promise<AdminUserRecord | null> {
+  const db = await getDb()
+  const target = await db.get<{ id: string; email: string; permissions: string | null }>(
+    `SELECT id, email, permissions FROM users WHERE id = ? AND role = 'admin'`,
+    targetId,
+  )
+  if (!target) return null
+  if (isMainAdminEmail(target.email)) return null
+
+  const next = normalizePermissions({
+    ...permissionsForUser(target.email, parseStoredPermissions(target.permissions)),
+    ...permissions,
+  })
+  await db.run('UPDATE users SET permissions = ? WHERE id = ?', JSON.stringify(next), targetId)
+
+  const row = await db.get<{
+    id: string
+    email: string
+    email_verified: number
+    created_at: string
+    permissions: string | null
+  }>(`SELECT id, email, email_verified, created_at, permissions FROM users WHERE id = ?`, targetId)
+  if (!row) return null
+  return {
+    id: row.id,
+    email: row.email,
+    emailVerified: Boolean(row.email_verified),
+    createdAt: row.created_at,
+    isMainAdmin: false,
+    permissions: permissionsForUser(row.email, parseStoredPermissions(row.permissions)),
+  }
 }
 
 export async function deleteAdminUser(actorId: string, targetId: string): Promise<boolean> {
   if (actorId === targetId) return false
   const db = await getDb()
+  const target = await db.get<{ email: string }>(
+    `SELECT email FROM users WHERE id = ? AND role = 'admin'`,
+    targetId,
+  )
+  if (!target) return false
+  if (isMainAdminEmail(target.email)) return false
   const countRow = await db.get<{ c: number | string }>('SELECT COUNT(*) as c FROM users WHERE role = ?', 'admin')
   if (Number(countRow?.c ?? 0) <= 1) return false
   await db.run('DELETE FROM sessions WHERE user_id = ?', targetId)
   const result = await db.run('DELETE FROM users WHERE id = ? AND role = ?', targetId, 'admin')
   return result.changes > 0
+}
+
+export function adminCan(user: SessionAdmin, key: PermissionKey): boolean {
+  return Boolean(user.permissions[key])
 }
 
 export function parseCookies(header: string | undefined): Record<string, string> {

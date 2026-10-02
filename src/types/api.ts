@@ -102,9 +102,25 @@ export type Stand = PublicStand & {
   updatedAt: string
 }
 
+export type AdminPermissions = {
+  dashboard: boolean
+  messages: boolean
+  stands: boolean
+  products: boolean
+  requests: boolean
+  schools: boolean
+  content: boolean
+  sandbox: boolean
+  settings: boolean
+  website_status: boolean
+  manage_admins: boolean
+}
+
 export type AdminUser = {
   id: string
   email: string
   emailVerified: boolean
   createdAt: string
+  isMainAdmin: boolean
+  permissions: AdminPermissions
 }

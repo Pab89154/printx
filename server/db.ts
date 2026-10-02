@@ -16,6 +16,7 @@ async function migrate(database: DbApi) {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'admin',
       email_verified INTEGER NOT NULL DEFAULT 0,
+      permissions TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -160,12 +161,13 @@ async function ensurePrimaryAdmin(database: DbApi) {
       )
     } else {
       await database.run(
-        'INSERT INTO users (id, email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (id, email, password_hash, role, email_verified, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
         randomUUID(),
         adminEmail,
         hash,
         'admin',
         1,
+        null,
         new Date().toISOString(),
       )
     }
@@ -186,6 +188,11 @@ async function ensurePrimaryAdmin(database: DbApi) {
 async function migrateUserAuth(database: DbApi) {
   try {
     await database.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0')
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec('ALTER TABLE users ADD COLUMN permissions TEXT')
   } catch {
     /* column already exists */
   }

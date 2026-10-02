@@ -1,10 +1,14 @@
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { ArrowLeft, FlaskConical } from 'lucide-react'
 import { PublicSite } from '../pages/PublicSite'
 import { adminPath } from '../lib/portal'
+import { useAdminAuth } from '../context/AdminAuthContext'
 
 /** Full public site preview for signed-in admins — ignores the public pause switch. */
 export function AdminSandbox() {
+  const { can } = useAdminAuth()
+  if (!can('sandbox')) return <Navigate to={adminPath('settings')} replace />
+
   return (
     <div className="min-h-screen bg-white">
       <div className="sticky top-0 z-[60] border-b border-amber-200 bg-amber-50 text-amber-950">
