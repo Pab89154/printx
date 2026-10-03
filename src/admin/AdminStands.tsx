@@ -215,7 +215,9 @@ export function AdminStands() {
       )}
 
       <div className="mt-6 space-y-3">
-        {stands.map((stand) => {
+        {stands
+          .filter((stand) => !editing?.id || stand.id !== editing.id)
+          .map((stand) => {
           const isPast = stand.status === 'past'
           return (
             <div
@@ -264,7 +266,7 @@ export function AdminStands() {
             </div>
           )
         })}
-        {stands.length === 0 && (
+        {stands.filter((stand) => !editing?.id || stand.id !== editing.id).length === 0 && !editing && (
           <p className="rounded-xl border border-dashed bg-white p-8 text-center text-muted">
             No stands yet. Add an upcoming stand to show it on the public site.
           </p>

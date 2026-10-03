@@ -94,7 +94,9 @@ export function AdminProducts() {
       )}
 
       <div className="mt-6 grid gap-3">
-        {products.map((p) => (
+        {products
+          .filter((p) => !editing?.id || p.id !== editing.id)
+          .map((p) => (
           <div
             key={p.id}
             className="flex flex-col gap-3 rounded-xl border bg-white p-4 sm:flex-row sm:items-center sm:justify-between"
@@ -128,6 +130,11 @@ export function AdminProducts() {
             </div>
           </div>
         ))}
+        {products.filter((p) => !editing?.id || p.id !== editing.id).length === 0 && !editing && (
+          <p className="rounded-xl border border-dashed bg-white p-8 text-center text-muted">
+            No products yet. Add one to show it on the public site.
+          </p>
+        )}
       </div>
     </div>
   )
