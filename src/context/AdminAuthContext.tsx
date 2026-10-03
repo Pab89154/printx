@@ -16,29 +16,40 @@ import {
 type AuthContextValue = {
   authenticated: boolean | null
   email: string | null
+  displayName: string | null
+  /** Name if set, otherwise email */
+  label: string
   isMainAdmin: boolean
   permissions: AdminPermissions
   can: (key: PermissionKey) => boolean
   login: (email: string, password: string) => Promise<AdminPermissions>
   logout: () => Promise<void>
   refresh: () => Promise<void>
+  setDisplayName: (name: string | null) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+function labelFor(displayName: string | null, email: string | null): string {
+  return displayName?.trim() || email || 'Admin'
+}
+
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [email, setEmail] = useState<string | null>(null)
+  const [displayName, setDisplayNameState] = useState<string | null>(null)
   const [isMainAdmin, setIsMainAdmin] = useState(false)
   const [permissions, setPermissions] = useState<AdminPermissions>(defaultPermissions())
 
   const applyMe = useCallback((me: {
     email: string
+    displayName?: string | null
     isMainAdmin?: boolean
     permissions?: AdminPermissions
   }) => {
     setAuthenticated(true)
     setEmail(me.email)
+    setDisplayNameState(me.displayName?.trim() || null)
     setIsMainAdmin(Boolean(me.isMainAdmin))
     setPermissions(me.permissions ?? defaultPermissions())
   }, [])
@@ -50,6 +61,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     } catch {
       setAuthenticated(false)
       setEmail(null)
+      setDisplayNameState(null)
       setIsMainAdmin(false)
       setPermissions(defaultPermissions())
     }
@@ -69,15 +81,29 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     await api.admin.logout()
     setAuthenticated(false)
     setEmail(null)
+    setDisplayNameState(null)
     setIsMainAdmin(false)
     setPermissions(defaultPermissions())
   }
 
   const can = (key: PermissionKey) => Boolean(permissions[key])
+  const setDisplayName = (name: string | null) => setDisplayNameState(name?.trim() || null)
 
   return (
     <AuthContext.Provider
-      value={{ authenticated, email, isMainAdmin, permissions, can, login, logout, refresh }}
+      value={{
+        authenticated,
+        email,
+        displayName,
+        label: labelFor(displayName, email),
+        isMainAdmin,
+        permissions,
+        can,
+        login,
+        logout,
+        refresh,
+        setDisplayName,
+      }}
     >
       {children}
     </AuthContext.Provider>

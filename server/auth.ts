@@ -49,6 +49,7 @@ export type SessionAdmin = {
   id: string
   role: string
   email: string
+  displayName: string | null
   isMainAdmin: boolean
   permissions: AdminPermissions
 }
@@ -62,10 +63,17 @@ function parseStoredPermissions(raw: string | null | undefined): unknown {
   }
 }
 
+function cleanDisplayName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const name = raw.trim().slice(0, 80)
+  return name || null
+}
+
 function toSessionAdmin(row: {
   id: string
   role: string
   email: string
+  display_name?: string | null
   permissions?: string | null
 }): SessionAdmin {
   const email = row.email ?? ''
@@ -73,6 +81,7 @@ function toSessionAdmin(row: {
     id: row.id,
     role: row.role,
     email,
+    displayName: cleanDisplayName(row.display_name),
     isMainAdmin: isMainAdminEmail(email),
     permissions: permissionsForUser(email, parseStoredPermissions(row.permissions)),
   }
@@ -87,6 +96,7 @@ export async function getSessionUser(token: string | null): Promise<SessionAdmin
     id: string
     role: string
     email: string
+    display_name?: string | null
     permissions?: string | null
     expires_at: string
   } | null = null
@@ -94,7 +104,7 @@ export async function getSessionUser(token: string | null): Promise<SessionAdmin
   try {
     row = await db.get(
       `
-      SELECT u.id, u.role, u.email, u.permissions, s.expires_at
+      SELECT u.id, u.role, u.email, u.display_name, u.permissions, s.expires_at
       FROM sessions s
       JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ?
@@ -102,7 +112,7 @@ export async function getSessionUser(token: string | null): Promise<SessionAdmin
       tokenHash,
     )
   } catch {
-    // permissions column may be missing before migrate finishes
+    // newer columns may be missing before migrate finishes
     row = await db.get(
       `
       SELECT u.id, u.role, u.email, s.expires_at
@@ -130,20 +140,33 @@ export async function verifyAdminLogin(
   if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null
 
   const db = await getDb()
-  const user = await db.get<{
+  let user: {
     id: string
     password_hash: string
     role: string
     email: string
-    permissions: string | null
-  }>(
-    `
-    SELECT id, password_hash, role, email, permissions
-    FROM users
-    WHERE role = 'admin' AND LOWER(email) = ?
-  `,
-    normalized,
-  )
+    display_name?: string | null
+    permissions?: string | null
+  } | null = null
+  try {
+    user = await db.get(
+      `
+      SELECT id, password_hash, role, email, display_name, permissions
+      FROM users
+      WHERE role = 'admin' AND LOWER(email) = ?
+    `,
+      normalized,
+    )
+  } catch {
+    user = await db.get(
+      `
+      SELECT id, password_hash, role, email
+      FROM users
+      WHERE role = 'admin' AND LOWER(email) = ?
+    `,
+      normalized,
+    )
+  }
 
   if (!user) return null
   if (!bcrypt.compareSync(password, user.password_hash)) return null
@@ -181,6 +204,7 @@ export async function updateAdminPassword(
 export type AdminUserRecord = {
   id: string
   email: string
+  displayName: string | null
   emailVerified: boolean
   createdAt: string
   isMainAdmin: boolean
@@ -189,20 +213,29 @@ export type AdminUserRecord = {
 
 export async function listAdminUsers(): Promise<AdminUserRecord[]> {
   const db = await getDb()
-  const rows = await db.all<{
+  let rows: {
     id: string
     email: string
+    display_name?: string | null
     email_verified: number
     created_at: string
     permissions: string | null
-  }>(
-    `SELECT id, email, email_verified, created_at, permissions FROM users WHERE role = 'admin' ORDER BY created_at ASC`,
-  )
+  }[] = []
+  try {
+    rows = await db.all(
+      `SELECT id, email, display_name, email_verified, created_at, permissions FROM users WHERE role = 'admin' ORDER BY created_at ASC`,
+    )
+  } catch {
+    rows = await db.all(
+      `SELECT id, email, email_verified, created_at, permissions FROM users WHERE role = 'admin' ORDER BY created_at ASC`,
+    )
+  }
   return rows.map((r) => {
     const email = r.email
     return {
       id: r.id,
       email,
+      displayName: cleanDisplayName(r.display_name),
       emailVerified: Boolean(r.email_verified),
       createdAt: r.created_at,
       isMainAdmin: isMainAdminEmail(email),
@@ -211,10 +244,21 @@ export async function listAdminUsers(): Promise<AdminUserRecord[]> {
   })
 }
 
+export async function updateAdminDisplayName(
+  userId: string,
+  displayName: unknown,
+): Promise<string | null> {
+  const db = await getDb()
+  const name = cleanDisplayName(displayName)
+  await db.run('UPDATE users SET display_name = ? WHERE id = ? AND role = ?', name, userId, 'admin')
+  return name
+}
+
 export async function createAdminUser(
   email: string,
   password: string,
   permissions?: Partial<AdminPermissions>,
+  displayName?: unknown,
 ): Promise<AdminUserRecord | null> {
   const normalized = sanitizeEmail(email).toLowerCase()
   if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null
@@ -231,20 +275,23 @@ export async function createAdminUser(
   const now = new Date().toISOString()
   const hash = bcrypt.hashSync(password, 12)
   const perms = normalizePermissions({ ...defaultPermissions(), ...permissions })
+  const name = cleanDisplayName(displayName)
   await db.run(
-    'INSERT INTO users (id, email, password_hash, role, email_verified, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO users (id, email, password_hash, role, email_verified, permissions, display_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     id,
     normalized,
     hash,
     'admin',
     1,
     JSON.stringify(perms),
+    name,
     now,
   )
 
   return {
     id,
     email: normalized,
+    displayName: name,
     emailVerified: true,
     createdAt: now,
     isMainAdmin: false,
@@ -273,14 +320,16 @@ export async function updateAdminPermissions(
   const row = await db.get<{
     id: string
     email: string
+    display_name?: string | null
     email_verified: number
     created_at: string
     permissions: string | null
-  }>(`SELECT id, email, email_verified, created_at, permissions FROM users WHERE id = ?`, targetId)
+  }>(`SELECT id, email, display_name, email_verified, created_at, permissions FROM users WHERE id = ?`, targetId)
   if (!row) return null
   return {
     id: row.id,
     email: row.email,
+    displayName: cleanDisplayName(row.display_name),
     emailVerified: Boolean(row.email_verified),
     createdAt: row.created_at,
     isMainAdmin: false,

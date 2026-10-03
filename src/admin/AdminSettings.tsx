@@ -19,16 +19,21 @@ const inputClass =
 const EDITABLE_PERMS = PERMISSION_KEYS.filter((k) => k !== 'manage_admins')
 
 export function AdminSettings() {
-  const { email, isMainAdmin, can, refresh } = useAdminAuth()
+  const { email, displayName, label, isMainAdmin, can, refresh, setDisplayName } = useAdminAuth()
   const navigate = useNavigate()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [nameDraft, setNameDraft] = useState('')
+  const [nameMessage, setNameMessage] = useState('')
+  const [nameError, setNameError] = useState('')
+  const [nameSaving, setNameSaving] = useState(false)
 
   const [admins, setAdmins] = useState<AdminUser[]>([])
   const [newAdminEmail, setNewAdminEmail] = useState('')
   const [newAdminPassword, setNewAdminPassword] = useState('')
+  const [newAdminName, setNewAdminName] = useState('')
   const [newAdminPerms, setNewAdminPerms] = useState<AdminPermissions>(defaultPermissions())
   const [adminError, setAdminError] = useState('')
   const [adminMessage, setAdminMessage] = useState('')
@@ -57,10 +62,31 @@ export function AdminSettings() {
   }
 
   useEffect(() => {
+    setNameDraft(displayName ?? '')
+  }, [displayName])
+
+  useEffect(() => {
     loadAdmins().catch(console.error)
     loadSiteStatus().catch(console.error)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when role/access identity changes
   }, [isMainAdmin, email])
+
+  async function saveDisplayName(e: React.FormEvent) {
+    e.preventDefault()
+    setNameError('')
+    setNameMessage('')
+    setNameSaving(true)
+    try {
+      const result = await api.admin.settings.updateProfile(nameDraft)
+      setDisplayName(result.displayName)
+      setNameDraft(result.displayName ?? '')
+      setNameMessage(result.displayName ? 'Name saved.' : 'Name cleared — email will be shown instead.')
+    } catch (err) {
+      setNameError(err instanceof Error ? err.message : 'Could not save name')
+    } finally {
+      setNameSaving(false)
+    }
+  }
 
   async function toggleWebsiteOnline(next: boolean) {
     setSiteStatusSaving(true)
@@ -98,9 +124,10 @@ export function AdminSettings() {
     setAdminError('')
     setAdminMessage('')
     try {
-      await api.admin.users.create(newAdminEmail, newAdminPassword, newAdminPerms)
+      await api.admin.users.create(newAdminEmail, newAdminPassword, newAdminPerms, newAdminName)
       setNewAdminEmail('')
       setNewAdminPassword('')
+      setNewAdminName('')
       setNewAdminPerms(defaultPermissions())
       setAdminMessage('Admin account created. They can sign in with the access you set.')
       loadAdmins()
@@ -174,11 +201,39 @@ export function AdminSettings() {
       <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
         <h2 className="mb-2 font-semibold">Your account</h2>
         <p className="text-sm text-muted">Signed in as</p>
-        <p className="font-medium text-navy">{email ?? '—'}</p>
+        <p className="font-medium text-navy">{label}</p>
+        <p className="mt-0.5 text-sm text-muted">{email ?? '—'}</p>
         {isMainAdmin ? (
           <p className="mt-1 text-xs font-semibold text-electric">Main admin</p>
         ) : (
           <p className="mt-1 text-xs text-green-600">Regular admin</p>
+        )}
+
+        {can('settings') && (
+          <form onSubmit={saveDisplayName} className="mt-5 border-t pt-5">
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-navy">Display name (optional)</span>
+              <input
+                className={inputClass}
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                placeholder="e.g. Pablo Molina"
+                maxLength={80}
+              />
+            </label>
+            <p className="mt-2 text-xs text-muted">
+              Shown in the portal instead of your email. Leave blank to show your email.
+            </p>
+            {nameError && <p className="mt-2 text-sm text-red-600">{nameError}</p>}
+            {nameMessage && <p className="mt-2 text-sm text-green-600">{nameMessage}</p>}
+            <button
+              type="submit"
+              disabled={nameSaving}
+              className="mt-3 rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {nameSaving ? 'Saving…' : 'Save name'}
+            </button>
+          </form>
         )}
       </div>
 
@@ -233,7 +288,10 @@ export function AdminSettings() {
               <li key={admin.id} className="rounded-xl border px-4 py-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="font-medium text-navy">{admin.email}</p>
+                    <p className="font-medium text-navy">{admin.displayName?.trim() || admin.email}</p>
+                    {admin.displayName?.trim() && (
+                      <p className="text-sm text-muted">{admin.email}</p>
+                    )}
                     <p className="text-xs text-muted">
                       {admin.isMainAdmin ? 'Main admin — full access' : 'Regular admin'} · Joined{' '}
                       {new Date(admin.createdAt).toLocaleDateString()}
@@ -301,6 +359,16 @@ export function AdminSettings() {
             <h3 className="mb-3 font-medium text-navy">Add regular admin</h3>
             <div className="grid gap-3 sm:grid-cols-2">
               <label>
+                Name (optional)
+                <input
+                  className={`mt-1 ${inputClass}`}
+                  value={newAdminName}
+                  onChange={(e) => setNewAdminName(e.target.value)}
+                  placeholder="First Last"
+                  maxLength={80}
+                />
+              </label>
+              <label>
                 Email
                 <input
                   type="email"
@@ -311,7 +379,7 @@ export function AdminSettings() {
                   placeholder="name@printx.pw"
                 />
               </label>
-              <label>
+              <label className="sm:col-span-2">
                 Temporary password
                 <input
                   type="password"

@@ -16,6 +16,7 @@ import {
   SESSION_COOKIE,
   updateAdminPassword,
   updateAdminPermissions,
+  updateAdminDisplayName,
   verifyAdminLogin,
   listAdminUsers,
   createAdminUser,
@@ -253,6 +254,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         ok: true,
         role: user.role,
         email: user.email,
+        displayName: user.displayName,
         isMainAdmin: user.isMainAdmin,
         permissions: user.permissions,
       },
@@ -278,6 +280,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       ok: true,
       role: user.role,
       email: user.email,
+      displayName: user.displayName,
       isMainAdmin: user.isMainAdmin,
       permissions: user.permissions,
     })
@@ -673,6 +676,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
+  if (urlPath === '/api/admin/settings/profile' && method === 'PATCH') {
+    if (!requirePerm(admin, 'settings', res)) return true
+    const body = await readJson(req)
+    const displayName = await updateAdminDisplayName(admin.id, body.displayName)
+    send(res, 200, { ok: true, displayName })
+    return true
+  }
+
   if (urlPath === '/api/admin/users' && method === 'GET') {
     if (!admin.isMainAdmin) {
       return forbid(res, 'Only the main admin can manage accounts.')
@@ -695,6 +706,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         body.permissions && typeof body.permissions === 'object'
           ? (body.permissions as Record<string, boolean>)
           : undefined,
+        body.displayName,
       )
       if (!created) {
         send(res, 400, {

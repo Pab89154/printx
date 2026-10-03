@@ -27,6 +27,7 @@ export const api = {
         ok: boolean
         role: string
         email: string
+        displayName: string | null
         isMainAdmin: boolean
         permissions: import('../types/api.ts').AdminPermissions
       }>('/api/admin/me'),
@@ -35,6 +36,7 @@ export const api = {
         ok: boolean
         role: string
         email: string
+        displayName: string | null
         isMainAdmin: boolean
         permissions: import('../types/api.ts').AdminPermissions
       }>('/api/admin/login', {
@@ -89,6 +91,11 @@ export const api = {
           method: 'PATCH',
           body: JSON.stringify({ currentPassword, newPassword }),
         }),
+      updateProfile: (displayName: string) =>
+        request<{ ok: boolean; displayName: string | null }>('/api/admin/settings/profile', {
+          method: 'PATCH',
+          body: JSON.stringify({ displayName }),
+        }),
     },
     users: {
       list: () => request<import('../types/api.ts').AdminUser[]>('/api/admin/users'),
@@ -96,10 +103,11 @@ export const api = {
         email: string,
         password: string,
         permissions?: Partial<import('../types/api.ts').AdminPermissions>,
+        displayName?: string,
       ) =>
         request<import('../types/api.ts').AdminUser>('/api/admin/users', {
           method: 'POST',
-          body: JSON.stringify({ email, password, permissions }),
+          body: JSON.stringify({ email, password, permissions, displayName }),
         }),
       updatePermissions: (
         id: string,

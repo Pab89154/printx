@@ -119,6 +119,7 @@ export type AdminPermissions = {
 export type AdminUser = {
   id: string
   email: string
+  displayName: string | null
   emailVerified: boolean
   createdAt: string
   isMainAdmin: boolean

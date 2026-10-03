@@ -16,11 +16,13 @@ create table if not exists users (
   role text not null default 'admin',
   email_verified integer not null default 1,
   permissions text,
+  display_name text,
   created_at text not null
 );
 
--- If users already exists without permissions:
+-- If users already exists without newer columns:
 -- alter table users add column if not exists permissions text;
+-- alter table users add column if not exists display_name text;
 
 create unique index if not exists users_email_lower_idx on users (lower(email));
 

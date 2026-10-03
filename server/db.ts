@@ -17,6 +17,7 @@ async function migrate(database: DbApi) {
       role TEXT NOT NULL DEFAULT 'admin',
       email_verified INTEGER NOT NULL DEFAULT 0,
       permissions TEXT,
+      display_name TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -183,6 +184,11 @@ async function migrateUserAuth(database: DbApi) {
   }
   try {
     await database.exec('ALTER TABLE users ADD COLUMN permissions TEXT')
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec('ALTER TABLE users ADD COLUMN display_name TEXT')
   } catch {
     /* column already exists */
   }

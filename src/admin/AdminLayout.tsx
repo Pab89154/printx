@@ -31,7 +31,7 @@ const links: { section: string; label: string; icon: typeof LayoutDashboard; per
 ]
 
 export function AdminLayout() {
-  const { logout, can, isMainAdmin, email, permissions } = useAdminAuth()
+  const { logout, can, isMainAdmin, label, permissions } = useAdminAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -113,7 +113,8 @@ export function AdminLayout() {
           <div className="min-w-0">
             <div className="font-bold">PrintX Admin</div>
             <div className="truncate text-xs text-slate-400">
-              {isMainAdmin ? 'Main admin' : email ?? 'Admin'}
+              {label}
+              {isMainAdmin ? ' · Main admin' : ''}
             </div>
           </div>
           <button
