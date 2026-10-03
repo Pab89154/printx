@@ -217,7 +217,7 @@ export function AdminSettings() {
                 className={inputClass}
                 value={nameDraft}
                 onChange={(e) => setNameDraft(e.target.value)}
-                placeholder="e.g. Pablo Molina"
+                placeholder="Your name"
                 maxLength={80}
               />
             </label>

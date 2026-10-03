@@ -17,7 +17,7 @@ import {
   updateAdminPassword,
   updateAdminPermissions,
   updateAdminDisplayName,
-  verifyAdminLogin,
+  attemptAdminLogin,
   listAdminUsers,
   createAdminUser,
   deleteAdminUser,
@@ -241,11 +241,21 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const email = typeof body.email === 'string' ? body.email : ''
     const password = typeof body.password === 'string' ? body.password : ''
-    const user = await verifyAdminLogin(email, password)
-    if (!user) {
+    const cookies = parseCookies(req.headers.cookie)
+    const existingToken = cookies[SESSION_COOKIE] ?? null
+    const attempt = await attemptAdminLogin(email, password, existingToken)
+    if (attempt.status === 'invalid') {
       send(res, 401, { error: 'Invalid email or password.' })
       return true
     }
+    if (attempt.status === 'in_use') {
+      send(res, 409, {
+        error:
+          'This account is already signed in somewhere else. Only one person can use an account at a time. Sign out on the other device first.',
+      })
+      return true
+    }
+    const user = attempt.user
     const token = await createSession(user.id)
     send(
       res,
