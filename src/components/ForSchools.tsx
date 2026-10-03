@@ -58,16 +58,6 @@ export function ForSchools() {
 
             <ScrollReveal delay={150} className="bg-navy/5 p-8 sm:p-12">
               <p className="mb-4 text-xs font-bold uppercase tracking-wider text-muted">What we can bring</p>
-              <div className="mb-5 flex flex-wrap gap-2">
-                {SCHOOL_OFFERINGS.map((item) => (
-                  <span
-                    key={item.label}
-                    className={`select-none rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${item.className}`}
-                  >
-                    {item.label}
-                  </span>
-                ))}
-              </div>
 
               <ul className="space-y-3">
                 {SCHOOL_OFFERINGS.map((item) => {
@@ -75,26 +65,39 @@ export function ForSchools() {
                   return (
                     <li
                       key={item.label}
-                      className="flex gap-3 rounded-2xl border border-white/80 bg-white p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+                      className={`group flex select-none gap-3 rounded-2xl border bg-white p-4 shadow-sm transition-colors duration-150 ${item.cardClassName}`}
                     >
                       <div
-                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${item.iconClass}`}
+                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors duration-150 ${item.iconClass} ${item.iconHoverClass}`}
                       >
                         <Icon size={18} strokeWidth={2} />
                       </div>
                       <div className="min-w-0">
-                        <p className="font-semibold text-navy">{item.label}</p>
-                        <p className="mt-0.5 text-sm leading-relaxed text-muted">{item.description}</p>
+                        <p className="font-semibold text-navy transition-colors duration-150 group-hover:text-white">
+                          {item.label}
+                        </p>
+                        <p className="mt-0.5 text-sm leading-relaxed text-muted transition-colors duration-150 group-hover:text-white/90">
+                          {item.description}
+                        </p>
                       </div>
                     </li>
                   )
                 })}
               </ul>
 
-              <div className="mt-5 rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4">
+              <div className="mt-5 rounded-2xl border border-amber-200/80 bg-amber-50/90 p-4">
+                <p className="text-sm font-semibold text-amber-900">When we can visit</p>
+                <p className="mt-1 text-sm leading-relaxed text-amber-950/80">
+                  We can&apos;t bring PrintX to schools from <span className="font-semibold">9:00 AM – 4:30 PM</span>.
+                  Stands work best before school, after school, or at evening events.
+                </p>
+              </div>
+
+              <div className="mt-3 rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4">
                 <p className="text-sm font-semibold text-emerald-800">Easy for schools</p>
                 <p className="mt-1 text-sm leading-relaxed text-emerald-900/80">
-                  Student-run, local to McKinney, and set up for lunch periods, club meetings, or bigger campus events.
+                  Student-run, local to McKinney, and set up for after-school clubs, evening events, or bigger campus
+                  days outside class hours.
                 </p>
               </div>
             </ScrollReveal>

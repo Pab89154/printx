@@ -45,44 +45,6 @@ export async function destroySession(token: string | null): Promise<void> {
   await db.run('DELETE FROM sessions WHERE token_hash = ?', hashToken(token))
 }
 
-async function purgeExpiredSessions(userId?: string): Promise<void> {
-  const db = await getDb()
-  const now = new Date().toISOString()
-  if (userId) {
-    await db.run('DELETE FROM sessions WHERE user_id = ? AND expires_at < ?', userId, now)
-  } else {
-    await db.run('DELETE FROM sessions WHERE expires_at < ?', now)
-  }
-}
-
-/** True if this account already has another active signed-in session. */
-export async function accountHasActiveSession(
-  userId: string,
-  exceptToken: string | null = null,
-): Promise<boolean> {
-  await purgeExpiredSessions(userId)
-  const db = await getDb()
-  const now = new Date().toISOString()
-  if (exceptToken) {
-    const row = await db.get<{ c: number | string }>(
-      `
-      SELECT COUNT(*) as c FROM sessions
-      WHERE user_id = ? AND expires_at >= ? AND token_hash != ?
-    `,
-      userId,
-      now,
-      hashToken(exceptToken),
-    )
-    return Number(row?.c ?? 0) > 0
-  }
-  const row = await db.get<{ c: number | string }>(
-    `SELECT COUNT(*) as c FROM sessions WHERE user_id = ? AND expires_at >= ?`,
-    userId,
-    now,
-  )
-  return Number(row?.c ?? 0) > 0
-}
-
 export type SessionAdmin = {
   id: string
   role: string
@@ -170,31 +132,12 @@ export async function getSessionUser(token: string | null): Promise<SessionAdmin
   return toSessionAdmin(row)
 }
 
-export type AdminLoginAttempt =
-  | { status: 'ok'; user: SessionAdmin }
-  | { status: 'invalid' }
-  | { status: 'in_use' }
-
 export async function verifyAdminLogin(
   email: string,
   password: string,
 ): Promise<SessionAdmin | null> {
-  const result = await attemptAdminLogin(email, password, null)
-  return result.status === 'ok' ? result.user : null
-}
-
-/**
- * Password check + single-session rule.
- * If this account is already signed in elsewhere, login is rejected.
- * Re-login with the same browser cookie is allowed (same session owner).
- */
-export async function attemptAdminLogin(
-  email: string,
-  password: string,
-  existingToken: string | null,
-): Promise<AdminLoginAttempt> {
   const normalized = sanitizeEmail(email).toLowerCase()
-  if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return { status: 'invalid' }
+  if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null
 
   const db = await getDb()
   let user: {
@@ -225,23 +168,9 @@ export async function attemptAdminLogin(
     )
   }
 
-  if (!user) return { status: 'invalid' }
-  if (!bcrypt.compareSync(password, user.password_hash)) return { status: 'invalid' }
-
-  // Same browser already has this account's session — replace it with a fresh one
-  if (existingToken) {
-    const current = await getSessionUser(existingToken)
-    if (current?.id === user.id) {
-      await destroySession(existingToken)
-      return { status: 'ok', user: toSessionAdmin(user) }
-    }
-  }
-
-  if (await accountHasActiveSession(user.id, existingToken)) {
-    return { status: 'in_use' }
-  }
-
-  return { status: 'ok', user: toSessionAdmin(user) }
+  if (!user) return null
+  if (!bcrypt.compareSync(password, user.password_hash)) return null
+  return toSessionAdmin(user)
 }
 
 /** @deprecated use verifyAdminLogin */
@@ -460,9 +389,16 @@ export function parseCookies(header: string | undefined): Record<string, string>
   )
 }
 
+export function sessionCookieDomain(hostname: string | undefined): string | undefined {
+  const host = (hostname ?? '').split(':')[0]?.toLowerCase() ?? ''
+  // Share the admin session across printx.pw and portal.printx.pw
+  if (host === 'printx.pw' || host.endsWith('.printx.pw')) return '.printx.pw'
+  return undefined
+}
+
 export function sessionCookieHeader(
   token: string,
-  options?: { maxAgeSeconds?: number; secure?: boolean },
+  options?: { maxAgeSeconds?: number; secure?: boolean; domain?: string },
 ): string {
   const maxAgeSeconds = options?.maxAgeSeconds ?? SESSION_DAYS * 86400
   const parts = [
@@ -473,12 +409,14 @@ export function sessionCookieHeader(
     `Max-Age=${maxAgeSeconds}`,
   ]
   if (options?.secure) parts.push('Secure')
+  if (options?.domain) parts.push(`Domain=${options.domain}`)
   return parts.join('; ')
 }
 
-export function clearSessionCookieHeader(secure = false): string {
+export function clearSessionCookieHeader(secure = false, domain?: string): string {
   const parts = [`${SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0']
   if (secure) parts.push('Secure')
+  if (domain) parts.push(`Domain=${domain}`)
   return parts.join('; ')
 }
 

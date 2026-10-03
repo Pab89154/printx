@@ -112,9 +112,9 @@ export function AdminLayout() {
           <Logo size={36} />
           <div className="min-w-0">
             <div className="font-bold">PrintX Admin</div>
-            <div className="truncate text-xs text-slate-400">
-              {label}
-              {isMainAdmin ? ' · Main admin' : ''}
+            <div className="truncate text-xs text-slate-300">{label}</div>
+            <div className="truncate text-[11px] text-slate-400">
+              {isMainAdmin ? 'Main admin' : 'Admin'}
             </div>
           </div>
           <button

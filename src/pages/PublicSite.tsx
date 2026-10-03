@@ -12,17 +12,32 @@ import { SitePausedScreen } from '../components/SitePausedScreen'
 import { WhatWePrint } from '../components/WhatWePrint'
 import { WhereToFindUs } from '../components/WhereToFindUs'
 import { WhyPrintX } from '../components/WhyPrintX'
+import { useAdminAuth } from '../context/AdminAuthContext'
 import { usePublicData } from '../context/PublicDataContext'
 
 type Props = {
-  /** When true (admin sandbox), show the live site even if the public site is paused. */
+  /** When true, show the live site even if the public site is paused. */
   forceOnline?: boolean
+}
+
+function usePreviewUnlocked(forceOnline: boolean): { ready: boolean; unlocked: boolean } {
+  const { authenticated } = useAdminAuth()
+  const isPreview =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('admin_preview') === '1'
+
+  if (forceOnline) return { ready: true, unlocked: true }
+  if (!isPreview) return { ready: true, unlocked: false }
+  // Wait for AdminAuthProvider's /me check (same cookie the iframe shares).
+  if (authenticated === null) return { ready: false, unlocked: false }
+  return { ready: true, unlocked: authenticated === true }
 }
 
 export function PublicSite({ forceOnline = false }: Props) {
   const { data, loading, error } = usePublicData()
+  const preview = usePreviewUnlocked(forceOnline)
 
-  if (loading) {
+  if (loading || !preview.ready) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white">
         <p className="text-muted">Loading PrintX…</p>
@@ -38,7 +53,7 @@ export function PublicSite({ forceOnline = false }: Props) {
     )
   }
 
-  if (!forceOnline && data?.content?.websiteOnline === false) {
+  if (!preview.unlocked && data?.content?.websiteOnline === false) {
     return <SitePausedScreen />
   }
 

@@ -6,7 +6,9 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
+import { isPortalHost } from '../lib/portal'
 import {
   defaultPermissions,
   type AdminPermissions,
@@ -34,7 +36,16 @@ function labelFor(displayName: string | null, email: string | null): string {
   return displayName?.trim() || email || 'Admin'
 }
 
+function needsAdminSession(pathname: string): boolean {
+  if (isPortalHost()) return true
+  if (pathname.startsWith('/admin')) return true
+  // Sandbox iframe on the public host uses admin_preview + cookie
+  if (new URLSearchParams(window.location.search).get('admin_preview') === '1') return true
+  return false
+}
+
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
+  const location = useLocation()
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [email, setEmail] = useState<string | null>(null)
   const [displayName, setDisplayNameState] = useState<string | null>(null)
@@ -68,8 +79,14 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   }, [applyMe])
 
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    if (!needsAdminSession(location.pathname)) {
+      // Public homepage: skip /api/admin/me so visitors aren't blocked on auth.
+      setAuthenticated(false)
+      return
+    }
+    setAuthenticated(null)
+    void refresh()
+  }, [location.pathname, refresh])
 
   const login = async (loginEmail: string, password: string) => {
     const result = await api.admin.login(loginEmail, password)

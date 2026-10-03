@@ -12,12 +12,13 @@ import {
   parseCookies,
   sanitizeEmail,
   sanitizeText,
+  sessionCookieDomain,
   sessionCookieHeader,
   SESSION_COOKIE,
   updateAdminPassword,
   updateAdminPermissions,
   updateAdminDisplayName,
-  attemptAdminLogin,
+  verifyAdminLogin,
   listAdminUsers,
   createAdminUser,
   deleteAdminUser,
@@ -32,6 +33,11 @@ import {
   setWebsiteSetting,
 } from './db.ts'
 import { notifyContactMessage, notifyCustomRequest } from './mail.ts'
+import {
+  getCachedBootstrap,
+  invalidateBootstrapCache,
+  setCachedBootstrap,
+} from './bootstrapCache.ts'
 import type { PermissionKey } from '../shared/permissions.ts'
 import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
@@ -56,6 +62,14 @@ function isSecureRequest(req: IncomingMessage): boolean {
   const forwarded = req.headers['x-forwarded-proto']
   if (typeof forwarded === 'string') return forwarded.split(',')[0]?.trim() === 'https'
   return process.env.NODE_ENV === 'production'
+}
+
+function cookieOptions(req: IncomingMessage): { secure: boolean; domain?: string } {
+  const host = typeof req.headers.host === 'string' ? req.headers.host : ''
+  return {
+    secure: isSecureRequest(req),
+    domain: sessionCookieDomain(host),
+  }
 }
 
 function send(res: ServerResponse, status: number, body: unknown, cookies?: string[]) {
@@ -85,6 +99,10 @@ async function requireAdmin(req: IncomingMessage): Promise<SessionAdmin | null> 
 function forbid(res: ServerResponse, message = 'You do not have permission for this action.') {
   send(res, 403, { error: message })
   return true
+}
+
+function bumpPublicCache() {
+  invalidateBootstrapCache()
 }
 
 function requirePerm(admin: SessionAdmin, key: PermissionKey, res: ServerResponse): boolean {
@@ -151,25 +169,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   const db = await getDb()
 
   if (urlPath === '/api/public/bootstrap' && method === 'GET') {
-    const stands = (
-      await db.all<Record<string, unknown>>(`
-      SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC, start_time ASC
-    `)
-    ).map((r) => publicStand(rowToStand(r)))
+    const qs = (req.url ?? '').split('?')[1] ?? ''
+    const wantFull = new URLSearchParams(qs).get('full') === '1'
 
-    const pastStands = (
-      await db.all<Record<string, unknown>>(`
-      SELECT * FROM stands WHERE status = 'past' ORDER BY date DESC LIMIT 10
-    `)
-    ).map((r) => publicStand(rowToStand(r)))
+    const cached = getCachedBootstrap(wantFull)
+    if (cached) {
+      res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=30')
+      send(res, 200, cached)
+      return true
+    }
 
-    const products = (
-      await db.all<Record<string, unknown>>(`
-      SELECT * FROM products ORDER BY display_order ASC, name ASC
-    `)
-    ).map(rowToProduct)
-
-    const schools = await db.all('SELECT * FROM schools WHERE active = 1 ORDER BY name ASC')
     const content = await getWebsiteContent(db)
     const announcementActive = Boolean(
       content.announcementEnabled &&
@@ -177,7 +186,49 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         announcementStillValid(content.announcementExpiresAt),
     )
 
-    send(res, 200, { stands, pastStands, products, schools, content, announcementActive })
+    // Public visitors on a paused site only need the pause flag — skip the heavy queries.
+    if (!wantFull && content.websiteOnline === false) {
+      const body = {
+        stands: [],
+        pastStands: [],
+        products: [],
+        schools: [],
+        content,
+        announcementActive: false,
+      }
+      setCachedBootstrap(false, body)
+      res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=30')
+      send(res, 200, body)
+      return true
+    }
+
+    const [standRows, pastRows, productRows, schools] = await Promise.all([
+      db.all<Record<string, unknown>>(`
+        SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC, start_time ASC
+      `),
+      db.all<Record<string, unknown>>(`
+        SELECT * FROM stands WHERE status = 'past' ORDER BY date DESC LIMIT 10
+      `),
+      db.all<Record<string, unknown>>(`
+        SELECT * FROM products ORDER BY display_order ASC, name ASC
+      `),
+      db.all('SELECT * FROM schools WHERE active = 1 ORDER BY name ASC'),
+    ])
+
+    const body = {
+      stands: standRows.map((r) => publicStand(rowToStand(r))),
+      pastStands: pastRows.map((r) => publicStand(rowToStand(r))),
+      products: productRows.map(rowToProduct),
+      schools,
+      content,
+      announcementActive,
+    }
+    setCachedBootstrap(true, body)
+    // Also warm the paused cache shape when online so toggling pause is snappy.
+    if (content.websiteOnline !== false) setCachedBootstrap(false, body)
+
+    res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=30')
+    send(res, 200, body)
     return true
   }
 
@@ -241,21 +292,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const email = typeof body.email === 'string' ? body.email : ''
     const password = typeof body.password === 'string' ? body.password : ''
-    const cookies = parseCookies(req.headers.cookie)
-    const existingToken = cookies[SESSION_COOKIE] ?? null
-    const attempt = await attemptAdminLogin(email, password, existingToken)
-    if (attempt.status === 'invalid') {
+    const user = await verifyAdminLogin(email, password)
+    if (!user) {
       send(res, 401, { error: 'Invalid email or password.' })
       return true
     }
-    if (attempt.status === 'in_use') {
-      send(res, 409, {
-        error:
-          'This account is already signed in somewhere else. Only one person can use an account at a time. Sign out on the other device first.',
-      })
-      return true
-    }
-    const user = attempt.user
     const token = await createSession(user.id)
     send(
       res,
@@ -268,7 +309,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         isMainAdmin: user.isMainAdmin,
         permissions: user.permissions,
       },
-      [sessionCookieHeader(token, { secure: isSecureRequest(req) })],
+      [sessionCookieHeader(token, cookieOptions(req))],
     )
     return true
   }
@@ -276,7 +317,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   if (urlPath === '/api/admin/logout' && method === 'POST') {
     const cookies = parseCookies(req.headers.cookie)
     await destroySession(cookies[SESSION_COOKIE] ?? null)
-    send(res, 200, { ok: true }, [clearSessionCookieHeader(isSecureRequest(req))])
+    const opts = cookieOptions(req)
+    send(res, 200, { ok: true }, [clearSessionCookieHeader(opts.secure, opts.domain)])
     return true
   }
 
@@ -406,6 +448,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       now,
     )
     const row = (await db.get<Record<string, unknown>>('SELECT * FROM stands WHERE id = ?', id))!
+    bumpPublicCache()
     send(res, 201, rowToStand(row))
     return true
   }
@@ -452,11 +495,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         id,
       )
       const row = (await db.get<Record<string, unknown>>('SELECT * FROM stands WHERE id = ?', id))!
+      bumpPublicCache()
       send(res, 200, rowToStand(row))
       return true
     }
     if (method === 'DELETE') {
       await db.run('DELETE FROM stands WHERE id = ?', id)
+      bumpPublicCache()
       send(res, 200, { ok: true })
       return true
     }
@@ -499,6 +544,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       now,
     )
     const row = (await db.get<Record<string, unknown>>('SELECT * FROM products WHERE id = ?', id))!
+    bumpPublicCache()
     send(res, 201, rowToProduct(row))
     return true
   }
@@ -530,11 +576,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         id,
       )
       const row = (await db.get<Record<string, unknown>>('SELECT * FROM products WHERE id = ?', id))!
+      bumpPublicCache()
       send(res, 200, rowToProduct(row))
       return true
     }
     if (method === 'DELETE') {
       await db.run('DELETE FROM products WHERE id = ?', id)
+      bumpPublicCache()
       send(res, 200, { ok: true })
       return true
     }
@@ -611,6 +659,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       now,
       now,
     )
+    bumpPublicCache()
     send(res, 201, await db.get('SELECT * FROM schools WHERE id = ?', id))
     return true
   }
@@ -634,11 +683,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         new Date().toISOString(),
         id,
       )
+      bumpPublicCache()
       send(res, 200, await db.get('SELECT * FROM schools WHERE id = ?', id))
       return true
     }
     if (method === 'DELETE') {
       await db.run('DELETE FROM schools WHERE id = ?', id)
+      bumpPublicCache()
       send(res, 200, { ok: true })
       return true
     }
@@ -665,6 +716,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       if (key === 'websiteOnline' && !adminCan(admin, 'website_status')) continue
       await setWebsiteSetting(db, key, value)
     }
+    bumpPublicCache()
     send(res, 200, await getWebsiteContent(db))
     return true
   }
@@ -682,7 +734,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 400, { error: 'Current password is incorrect' })
       return true
     }
-    send(res, 200, { ok: true }, [clearSessionCookieHeader(isSecureRequest(req))])
+    {
+      const opts = cookieOptions(req)
+      send(res, 200, { ok: true }, [clearSessionCookieHeader(opts.secure, opts.domain)])
+    }
     return true
   }
 

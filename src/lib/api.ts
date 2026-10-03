@@ -11,7 +11,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   public: {
-    bootstrap: () => request<import('../types/api.ts').PublicBootstrap>('/api/public/bootstrap'),
+    bootstrap: (opts?: { full?: boolean }) =>
+      request<import('../types/api.ts').PublicBootstrap>(
+        opts?.full ? '/api/public/bootstrap?full=1' : '/api/public/bootstrap',
+      ),
     contact: (body: { name: string; email: string; inquiryType: string; message: string }) =>
       request('/api/public/contact', { method: 'POST', body: JSON.stringify(body) }),
     customRequest: (formData: FormData) =>

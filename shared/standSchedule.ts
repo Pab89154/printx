@@ -39,8 +39,19 @@ export function standDateTime(date: string, time: string): Date | null {
   return new Date(year, month, day, parsedTime.hours, parsedTime.minutes, 0, 0)
 }
 
+/** School-day window when PrintX cannot run stands (minutes from midnight). */
+const SCHOOL_BLOCK_START_MIN = 9 * 60 // 9:00 AM
+const SCHOOL_BLOCK_END_MIN = 16 * 60 + 30 // 4:30 PM
+
+function timeToMinutes(raw: string): number | null {
+  const parsed = parseStandTime(raw)
+  if (!parsed) return null
+  return parsed.hours * 60 + parsed.minutes
+}
+
 /**
- * Upcoming/active stands cannot be scheduled in the past.
+ * Upcoming/active stands cannot be scheduled in the past,
+ * and cannot overlap school hours (9:00 AM – 4:30 PM).
  * Status "past" is allowed for historical records.
  */
 export function validateStandSchedule(input: {
@@ -64,11 +75,24 @@ export function validateStandSchedule(input: {
     return 'That stand time is in the past. Pick a future date and time.'
   }
 
+  const startMin = timeToMinutes(input.startTime)
+  if (startMin == null) {
+    return 'Use a valid date and time (for example 3:00 PM).'
+  }
+
+  let endMin = startMin
   if (input.endTime?.trim()) {
     const end = standDateTime(input.date, input.endTime)
     if (end && end.getTime() < start.getTime()) {
       return 'End time must be after the start time.'
     }
+    const parsedEnd = timeToMinutes(input.endTime)
+    if (parsedEnd != null) endMin = parsedEnd
+  }
+
+  // Overlaps [9:00 AM, 4:30 PM)
+  if (startMin < SCHOOL_BLOCK_END_MIN && endMin > SCHOOL_BLOCK_START_MIN) {
+    return 'Stands can’t run during school hours (9:00 AM – 4:30 PM). Choose a time before 9:00 AM or at/after 4:30 PM.'
   }
 
   return null
