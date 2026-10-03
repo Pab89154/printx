@@ -380,7 +380,7 @@ export function AdminSettings() {
                 />
               </label>
               <label className="sm:col-span-2">
-                Temporary password
+                Password
                 <input
                   type="password"
                   required
