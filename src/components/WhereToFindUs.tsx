@@ -4,7 +4,7 @@ import { usePublicData } from '../context/PublicDataContext'
 import { ScrollReveal } from './ScrollReveal'
 import { SectionHeading } from './SectionHeading'
 
-const statusStyles: Record<PublicStand['status'], { label: string; className: string }> = {
+const statusStyles: Record<Exclude<PublicStand['status'], 'past'>, { label: string; className: string }> = {
   upcoming: {
     label: 'Upcoming',
     className:
@@ -15,18 +15,13 @@ const statusStyles: Record<PublicStand['status'], { label: string; className: st
     className:
       'border border-cyan/25 bg-cyan/10 text-cyan hover:border-cyan hover:bg-cyan hover:text-white',
   },
-  past: {
-    label: 'Past',
-    className:
-      'border border-navy/10 bg-navy/5 text-muted hover:border-navy hover:bg-navy hover:text-white',
-  },
 }
 
 function StandCard({ stand }: { stand: PublicStand }) {
-  const status = statusStyles[stand.status]
+  const status = statusStyles[stand.status === 'past' ? 'upcoming' : stand.status]
 
   return (
-    <article className={`rounded-2xl border bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${stand.status === 'past' ? 'border-slate-100 opacity-75' : 'border-slate-100 hover:border-electric/20'}`}>
+    <article className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-electric/20 hover:shadow-lg">
       <div className="mb-4 flex items-start justify-between gap-3">
         <h3 className="text-xl font-bold text-navy">{stand.schoolName}</h3>
         <span
@@ -64,7 +59,6 @@ function StandCard({ stand }: { stand: PublicStand }) {
 export function WhereToFindUs() {
   const { data } = usePublicData()
   const upcoming = data?.stands ?? []
-  const past = data?.pastStands ?? []
 
   return (
     <section id="stands" className="py-20 sm:py-28">
@@ -88,17 +82,6 @@ export function WhereToFindUs() {
           <ScrollReveal>
             <div className="rounded-2xl border border-dashed border-slate-200 bg-surface px-6 py-16 text-center">
               <p className="text-lg font-medium text-navy">No upcoming stands right now. Check back soon!</p>
-            </div>
-          </ScrollReveal>
-        )}
-
-        {past.length > 0 && (
-          <ScrollReveal className="mt-16">
-            <h3 className="mb-6 text-sm font-bold uppercase tracking-wider text-muted">Past Stands</h3>
-            <div className="grid gap-6 md:grid-cols-2">
-              {past.map((stand) => (
-                <StandCard key={stand.id} stand={stand} />
-              ))}
             </div>
           </ScrollReveal>
         )}

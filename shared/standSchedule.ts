@@ -39,6 +39,40 @@ export function standDateTime(date: string, time: string): Date | null {
   return new Date(year, month, day, parsedTime.hours, parsedTime.minutes, 0, 0)
 }
 
+/** End of the stand (end time if set, otherwise start time). */
+export function standEndDateTime(
+  date: string,
+  startTime: string,
+  endTime?: string | null,
+): Date | null {
+  if (endTime?.trim()) {
+    const end = standDateTime(date, endTime)
+    if (end) return end
+  }
+  return standDateTime(date, startTime)
+}
+
+/** True once the stand's end time has passed. */
+export function isStandFinished(
+  date: string,
+  startTime: string,
+  endTime?: string | null,
+  now = new Date(),
+): boolean {
+  const end = standEndDateTime(date, startTime, endTime)
+  if (!end) return false
+  return end.getTime() < now.getTime()
+}
+
+/** True when the stand date is a year or more before today (local calendar). */
+export function isStandOlderThanOneYear(date: string, now = new Date()): boolean {
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim())
+  if (!dateMatch) return false
+  const standDay = new Date(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]))
+  const oneYearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate())
+  return standDay.getTime() <= oneYearAgo.getTime()
+}
+
 /** School-day window when PrintX cannot run stands (minutes from midnight). */
 const SCHOOL_BLOCK_START_MIN = 9 * 60 // 9:00 AM
 const SCHOOL_BLOCK_END_MIN = 16 * 60 + 30 // 4:30 PM

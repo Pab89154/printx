@@ -38,6 +38,7 @@ import {
   invalidateBootstrapCache,
   setCachedBootstrap,
 } from './bootstrapCache.ts'
+import { syncStandLifecycle } from './standLifecycle.ts'
 import type { PermissionKey } from '../shared/permissions.ts'
 import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
@@ -172,6 +173,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const qs = (req.url ?? '').split('?')[1] ?? ''
     const wantFull = new URLSearchParams(qs).get('full') === '1'
 
+    // Move finished stands to "past" / purge 1+ year-old rows before serving public data.
+    await syncStandLifecycle(db)
+
     const cached = getCachedBootstrap(wantFull)
     if (cached) {
       res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=30')
@@ -202,12 +206,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
 
-    const [standRows, pastRows, productRows, schools] = await Promise.all([
+    const [standRows, productRows, schools] = await Promise.all([
       db.all<Record<string, unknown>>(`
         SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC, start_time ASC
-      `),
-      db.all<Record<string, unknown>>(`
-        SELECT * FROM stands WHERE status = 'past' ORDER BY date DESC LIMIT 10
       `),
       db.all<Record<string, unknown>>(`
         SELECT * FROM products ORDER BY display_order ASC, name ASC
@@ -217,7 +218,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
     const body = {
       stands: standRows.map((r) => publicStand(rowToStand(r))),
-      pastStands: pastRows.map((r) => publicStand(rowToStand(r))),
+      // Past stands stay in admin only — never shown on the public site.
+      pastStands: [],
       products: productRows.map(rowToProduct),
       schools,
       content,
@@ -372,6 +374,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
     if (!requirePerm(statsAdmin, 'dashboard', res)) return true
+    await syncStandLifecycle(db)
     const nextRow = await db.get<Record<string, unknown>>(`
       SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC LIMIT 1
     `)
@@ -408,7 +411,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/admin/stands' && method === 'GET') {
     if (!requirePerm(admin, 'stands', res)) return true
-    const rows = await db.all<Record<string, unknown>>('SELECT * FROM stands ORDER BY date DESC')
+    await syncStandLifecycle(db)
+    const rows = await db.all<Record<string, unknown>>(`
+      SELECT * FROM stands
+      ORDER BY
+        CASE status WHEN 'past' THEN 1 ELSE 0 END ASC,
+        date ASC,
+        start_time ASC
+    `)
     send(res, 200, rows.map((r) => rowToStand(r)))
     return true
   }

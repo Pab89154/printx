@@ -215,42 +215,60 @@ export function AdminStands() {
       )}
 
       <div className="mt-6 space-y-3">
-        {stands.map((stand) => (
-          <div
-            key={stand.id}
-            className="flex flex-col gap-3 rounded-xl border bg-white p-4 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div className="min-w-0">
-              <p className="font-semibold text-navy">{stand.schoolName}</p>
-              <p className="break-words text-sm text-muted">{stand.location}</p>
-              <p className="text-sm text-muted">
-                {stand.date} · {stand.startTime} – {stand.endTime}
-              </p>
-              <span className="mt-1 inline-block rounded-full bg-electric/10 px-2 py-0.5 text-xs font-medium text-electric">
-                {stand.status}
-              </span>
+        {stands.map((stand) => {
+          const isPast = stand.status === 'past'
+          return (
+            <div
+              key={stand.id}
+              className={`flex flex-col gap-3 rounded-xl border bg-white p-4 sm:flex-row sm:items-center sm:justify-between ${
+                isPast ? 'border-slate-200 opacity-90' : 'border-slate-100'
+              }`}
+            >
+              <div className="min-w-0">
+                <p className="font-semibold text-navy">{stand.schoolName}</p>
+                <p className="break-words text-sm text-muted">{stand.location}</p>
+                <p className="text-sm text-muted">
+                  {stand.date} · {stand.startTime} – {stand.endTime}
+                </p>
+                <span
+                  className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-medium capitalize ${
+                    isPast
+                      ? 'bg-slate-100 text-slate-600'
+                      : stand.status === 'active'
+                        ? 'bg-cyan/10 text-cyan'
+                        : 'bg-electric/10 text-electric'
+                  }`}
+                >
+                  {isPast ? 'Past' : stand.status}
+                </span>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormError('')
+                    setEditing(stand)
+                  }}
+                  className="flex-1 rounded-lg border px-3 py-2 text-sm sm:flex-none sm:py-1.5"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => api.admin.stands.delete(stand.id).then(load)}
+                  className="flex-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 sm:flex-none sm:py-1.5"
+                >
+                  Delete
+                </button>
+              </div>
             </div>
-            <div className="flex shrink-0 gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setFormError('')
-                  setEditing(stand)
-                }}
-                className="flex-1 rounded-lg border px-3 py-2 text-sm sm:flex-none sm:py-1.5"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => api.admin.stands.delete(stand.id).then(load)}
-                className="flex-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 sm:flex-none sm:py-1.5"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        ))}
+          )
+        })}
+        {stands.length === 0 && (
+          <p className="rounded-xl border border-dashed bg-white p-8 text-center text-muted">
+            No stands yet. Add an upcoming stand to show it on the public site.
+          </p>
+        )}
       </div>
     </div>
   )
