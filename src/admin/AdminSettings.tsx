@@ -219,10 +219,12 @@ export function AdminSettings() {
                 onChange={(e) => setNameDraft(e.target.value)}
                 placeholder="Your name"
                 maxLength={80}
+                autoComplete="nickname"
               />
             </label>
             <p className="mt-2 text-xs text-muted">
-              Shown in the portal instead of your email. Leave blank to show your email.
+              Shown in the portal only — you cannot sign in with this name. Always log in with your email and
+              password. Leave blank to show your email instead.
             </p>
             {nameError && <p className="mt-2 text-sm text-red-600">{nameError}</p>}
             {nameMessage && <p className="mt-2 text-sm text-green-600">{nameMessage}</p>}

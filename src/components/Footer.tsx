@@ -120,10 +120,6 @@ export function Footer() {
             </div>
           </div>
         </div>
-
-        <div className="mt-12 border-t border-white/10 pt-8 text-center text-sm text-slate-500">
-          © {new Date().getFullYear()} PrintX. All rights reserved.
-        </div>
       </div>
     </footer>
   )
