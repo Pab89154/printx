@@ -1,8 +1,9 @@
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const { headers: initHeaders, ...rest } = init ?? {}
   const res = await fetch(url, {
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init,
+    ...rest,
+    headers: { 'Content-Type': 'application/json', ...initHeaders },
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Request failed')
@@ -86,7 +87,10 @@ export const api = {
     content: {
       get: () => request<import('../types/api.ts').WebsiteContent>('/api/admin/content'),
       update: (body: Partial<import('../types/api.ts').WebsiteContent>) =>
-        request('/api/admin/content', { method: 'PATCH', body: JSON.stringify(body) }),
+        request<import('../types/api.ts').WebsiteContent>('/api/admin/content', {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        }),
     },
     settings: {
       changePassword: (currentPassword: string, newPassword: string) =>

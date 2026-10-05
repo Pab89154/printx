@@ -8,24 +8,79 @@ const inputClass =
 export function AdminContent() {
   const [content, setContent] = useState<WebsiteContent | null>(null)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [bannerSaving, setBannerSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [bannerMessage, setBannerMessage] = useState('')
 
   useEffect(() => {
-    api.admin.content.get().then(setContent)
+    api.admin.content
+      .get()
+      .then(setContent)
+      .catch((e) => setError(e instanceof Error ? e.message : 'Could not load content'))
   }, [])
 
   async function save() {
-    if (!content) return
-    await api.admin.content.update(content)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    if (!content || saving) return
+    setSaving(true)
+    setError('')
+    try {
+      const next = await api.admin.content.update(content)
+      setContent(next)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save content')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  if (!content) return <p>Loading…</p>
+  async function toggleAnnouncement(enabled: boolean) {
+    if (!content || bannerSaving) return
+    const previous = content
+    setContent({ ...content, announcementEnabled: enabled })
+    setBannerSaving(true)
+    setBannerMessage('')
+    setError('')
+    try {
+      const next = await api.admin.content.update({
+        announcementEnabled: enabled,
+        announcementText: content.announcementText,
+        announcementExpiresAt: content.announcementExpiresAt,
+      })
+      setContent(next)
+      if (enabled && next.websiteOnline === false) {
+        setBannerMessage(
+          'Banner is on, but the public site is paused — visitors won’t see it until you turn the website back on in Settings.',
+        )
+      } else if (enabled && !next.announcementText?.trim()) {
+        setBannerMessage('Banner is on, but it stays hidden until you add announcement text and save.')
+      } else {
+        setBannerMessage(enabled ? 'Announcement banner is on.' : 'Announcement banner is off.')
+      }
+    } catch (e) {
+      setContent(previous)
+      setError(e instanceof Error ? e.message : 'Could not update announcement banner')
+    } finally {
+      setBannerSaving(false)
+    }
+  }
+
+  if (!content) {
+    return <p className="text-muted">{error || 'Loading…'}</p>
+  }
+
+  const sitePaused = content.websiteOnline === false
 
   return (
     <div>
       <h1 className="text-2xl font-bold text-navy">Website Content</h1>
       <p className="mt-1 text-muted">Edit homepage, about, contact, and announcement content.</p>
+
+      {error && (
+        <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>
+      )}
 
       <div className="mt-6 space-y-8">
         <Section title="Homepage">
@@ -38,10 +93,21 @@ export function AdminContent() {
             <input
               type="checkbox"
               checked={content.announcementEnabled}
-              onChange={(e) => setContent({ ...content, announcementEnabled: e.target.checked })}
+              disabled={bannerSaving}
+              onChange={(e) => void toggleAnnouncement(e.target.checked)}
             />
             Show announcement banner on the public site
           </label>
+          {bannerMessage && (
+            <p className={`mt-2 text-xs ${sitePaused && content.announcementEnabled ? 'text-amber-700' : 'text-muted'}`}>
+              {bannerMessage}
+            </p>
+          )}
+          {sitePaused && content.announcementEnabled && !bannerMessage && (
+            <p className="mt-2 text-xs text-amber-700">
+              Public site is paused — the banner won’t appear for visitors until the website is online again (Settings).
+            </p>
+          )}
           <label className="mt-3 block">
             Announcement text
             <input
@@ -61,7 +127,8 @@ export function AdminContent() {
             />
           </label>
           <p className="mt-2 text-xs text-muted">
-            Leave the date blank for no end date. After the expiration day, the banner hides automatically.
+            The on/off switch saves immediately. Text and expiration still need <span className="font-medium">Save All Changes</span>.
+            Leave the date blank for no end date.
           </p>
           {content.announcementEnabled && !content.announcementText.trim() && (
             <p className="mt-2 text-xs text-amber-700">Add announcement text, or the banner will stay hidden.</p>
@@ -85,8 +152,8 @@ export function AdminContent() {
         </Section>
       </div>
 
-      <button type="button" onClick={save} className="btn btn-primary mt-8">
-        {saved ? 'Saved!' : 'Save All Changes'}
+      <button type="button" onClick={() => void save()} disabled={saving} className="btn btn-primary mt-8">
+        {saving ? 'Saving…' : saved ? 'Saved!' : 'Save All Changes'}
       </button>
     </div>
   )
