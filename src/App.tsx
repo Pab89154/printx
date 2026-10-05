@@ -1,4 +1,5 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { AdminAuthProvider } from './context/AdminAuthContext'
 import { PublicDataProvider } from './context/PublicDataContext'
 import { PublicSite } from './pages/PublicSite'
@@ -15,7 +16,22 @@ import { AdminContent } from './admin/AdminContent'
 import { AdminSettings } from './admin/AdminSettings'
 import { AdminSandbox } from './admin/AdminSandbox'
 import { useAdminAuth } from './context/AdminAuthContext'
+import { BTN_POP_NAV_EVENT } from './lib/buttonPop'
 import { firstAllowedAdminPath, isPortalHost } from './lib/portal'
+
+/** Completes in-app Link navigation after the button pop animation. */
+function ButtonPopNavBridge() {
+  const navigate = useNavigate()
+  useEffect(() => {
+    const onNav = (event: Event) => {
+      const to = (event as CustomEvent<{ to?: string }>).detail?.to
+      if (typeof to === 'string' && to) navigate(to)
+    }
+    window.addEventListener(BTN_POP_NAV_EVENT, onNav)
+    return () => window.removeEventListener(BTN_POP_NAV_EVENT, onNav)
+  }, [navigate])
+  return null
+}
 
 function AdminHomeRedirect() {
   const { permissions } = useAdminAuth()
@@ -73,6 +89,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <ButtonPopNavBridge />
       <PublicDataProvider>
         <AdminAuthProvider>
           {portal ? <PortalRoutes /> : <PublicRoutes />}

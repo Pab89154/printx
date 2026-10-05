@@ -159,28 +159,28 @@ a.btn {
   opacity: 0.5;
 }
 
-/* Finger/mouse down — squash + highlight grows in */
-.btn.is-pressing:not(:disabled) {
-  transform: translateY(1px) scale(0.92) !important;
+/* Finger/mouse down — squash + highlight grows in (data-attr survives React re-renders) */
+.btn[data-btn-pop='pressing']:not(:disabled) {
+  transform: translateY(2px) scale(0.9) !important;
   transition-duration: 60ms !important;
 }
 
-.btn.is-pressing:not(:disabled)::before {
-  opacity: 0.22;
-  transform: translate(-50%, -50%) scale(0.92);
+.btn[data-btn-pop='pressing']:not(:disabled)::before {
+  opacity: 0.34;
+  transform: translate(-50%, -50%) scale(1);
   transition-duration: 70ms;
 }
 
 /* Release — spring scale + highlight blooms outward */
 @keyframes btn-pop {
   0% {
-    transform: translateY(1px) scale(0.92);
+    transform: translateY(2px) scale(0.9);
   }
   40% {
-    transform: translateY(-4px) scale(1.08);
+    transform: translateY(-5px) scale(1.1);
   }
   70% {
-    transform: translateY(0) scale(0.98);
+    transform: translateY(0) scale(0.97);
   }
   100% {
     transform: translateY(0) scale(1);
@@ -189,24 +189,24 @@ a.btn {
 
 @keyframes btn-highlight-pop {
   0% {
-    opacity: 0.28;
-    transform: translate(-50%, -50%) scale(0.85);
+    opacity: 0.4;
+    transform: translate(-50%, -50%) scale(0.9);
   }
   55% {
-    opacity: 0.16;
-    transform: translate(-50%, -50%) scale(1.15);
+    opacity: 0.22;
+    transform: translate(-50%, -50%) scale(1.25);
   }
   100% {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(1.55);
+    transform: translate(-50%, -50%) scale(1.7);
   }
 }
 
-.btn.is-popping:not(:disabled) {
+.btn[data-btn-pop='popping']:not(:disabled) {
   animation: btn-pop 360ms cubic-bezier(0.22, 1.45, 0.36, 1);
 }
 
-.btn.is-popping:not(:disabled)::before {
+.btn[data-btn-pop='popping']:not(:disabled)::before {
   animation: btn-highlight-pop 360ms cubic-bezier(0.22, 1.2, 0.36, 1);
 }
 
@@ -222,7 +222,7 @@ a.btn {
   background: #fff;
 }
 
-.btn-primary.is-pressing:not(:disabled) {
+.btn-primary[data-btn-pop='pressing']:not(:disabled) {
   background: var(--color-cyan);
   border-color: var(--color-cyan);
 }
@@ -238,7 +238,7 @@ a.btn {
   background: var(--color-electric);
 }
 
-.btn-secondary.is-pressing:not(:disabled) {
+.btn-secondary[data-btn-pop='pressing']:not(:disabled) {
   background: color-mix(in srgb, var(--color-electric) 14%, #fff);
   border-color: var(--color-electric);
   color: var(--color-electric);
@@ -255,7 +255,7 @@ a.btn {
   background: #dc2626;
 }
 
-.btn-danger.is-pressing:not(:disabled) {
+.btn-danger[data-btn-pop='pressing']:not(:disabled) {
   background: #dc2626;
   border-color: #dc2626;
   color: #fff;
@@ -273,7 +273,7 @@ a.btn {
   background: #fff;
 }
 
-.btn-danger-solid.is-pressing:not(:disabled) {
+.btn-danger-solid[data-btn-pop='pressing']:not(:disabled) {
   background: #b91c1c;
   border-color: #b91c1c;
 }
@@ -289,7 +289,7 @@ a.btn {
   background: var(--color-navy);
 }
 
-.btn-ghost.is-pressing:not(:disabled) {
+.btn-ghost[data-btn-pop='pressing']:not(:disabled) {
   background: #e2e8f0;
 }
 
@@ -304,21 +304,21 @@ a.btn {
   background: #fff;
 }
 
-.btn-outline.is-pressing:not(:disabled) {
+.btn-outline[data-btn-pop='pressing']:not(:disabled) {
   background: rgb(255 255 255 / 18%);
   border-color: rgb(255 255 255 / 65%);
 }
 
 /* Lift / color swap on real hover pointers */
 @media (hover: hover) and (pointer: fine) {
-  .btn-primary:hover:not(:disabled):not(.is-pressing):not(.is-popping) {
+  .btn-primary:hover:not(:disabled):not([data-btn-pop]) {
     background: var(--color-cyan);
     border-color: var(--color-cyan);
     box-shadow: 0 16px 28px -10px color-mix(in srgb, var(--color-cyan) 55%, transparent);
     transform: translateY(-4px) scale(1.03);
   }
 
-  .btn-secondary:hover:not(:disabled):not(.is-pressing):not(.is-popping) {
+  .btn-secondary:hover:not(:disabled):not([data-btn-pop]) {
     border-color: var(--color-electric);
     background: color-mix(in srgb, var(--color-electric) 12%, #fff);
     color: var(--color-electric);
@@ -326,12 +326,12 @@ a.btn {
     transform: translateY(-3px) scale(1.02);
   }
 
-  .btn-secondary:hover:not(:disabled):not(.is-pressing):not(.is-popping)::before {
+  .btn-secondary:hover:not(:disabled):not([data-btn-pop])::before {
     opacity: 0.1;
     transform: translate(-50%, -50%) scale(1);
   }
 
-  .btn-danger:hover:not(:disabled):not(.is-pressing):not(.is-popping) {
+  .btn-danger:hover:not(:disabled):not([data-btn-pop]) {
     border-color: #dc2626;
     background: #dc2626;
     color: #fff;
@@ -339,19 +339,19 @@ a.btn {
     transform: translateY(-4px) scale(1.03);
   }
 
-  .btn-danger-solid:hover:not(:disabled):not(.is-pressing):not(.is-popping) {
+  .btn-danger-solid:hover:not(:disabled):not([data-btn-pop]) {
     background: #ef4444;
     border-color: #ef4444;
     transform: translateY(-4px) scale(1.03);
   }
 
-  .btn-ghost:hover:not(:disabled):not(.is-pressing):not(.is-popping) {
+  .btn-ghost:hover:not(:disabled):not([data-btn-pop]) {
     border-color: #cbd5e1;
     background: #f1f5f9;
     transform: translateY(-2px) scale(1.02);
   }
 
-  .btn-outline:hover:not(:disabled):not(.is-pressing):not(.is-popping) {
+  .btn-outline:hover:not(:disabled):not([data-btn-pop]) {
     background: rgb(255 255 255 / 14%);
     border-color: rgb(255 255 255 / 60%);
     transform: translateY(-4px) scale(1.03);
@@ -360,8 +360,7 @@ a.btn {
 
 @media (prefers-reduced-motion: reduce) {
   .btn,
-  .btn.is-pressing:not(:disabled),
-  .btn.is-popping:not(:disabled),
+  .btn[data-btn-pop]:not(:disabled),
   .btn::before {
     animation: none !important;
     transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease !important;
