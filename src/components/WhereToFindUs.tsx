@@ -21,34 +21,45 @@ function StandCard({ stand }: { stand: PublicStand }) {
   const status = statusStyles[stand.status === 'past' ? 'upcoming' : stand.status]
 
   return (
-    <article className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-electric/20 hover:shadow-lg">
+    <article className="group flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-electric/20 hover:shadow-lg">
       <div className="mb-4 flex items-start justify-between gap-3">
         <h3 className="text-xl font-bold text-navy">{stand.schoolName}</h3>
         <span
-          className={`shrink-0 select-none rounded-full px-3 py-1 text-xs font-semibold transition-colors duration-150 ${status.className}`}
+          className={`shrink-0 select-none rounded-full px-3 py-1 text-xs font-semibold transition-all duration-300 group-hover:-translate-y-0.5 ${status.className}`}
         >
           {status.label}
         </span>
       </div>
       <ul className="space-y-2.5 text-sm text-slate-600">
-        <li className="flex items-center gap-2.5"><Calendar size={16} className="shrink-0 text-electric" />{stand.displayDate}</li>
-        <li className="flex items-center gap-2.5"><Clock size={16} className="shrink-0 text-electric" />{stand.time}</li>
-        <li className="flex items-center gap-2.5"><MapPin size={16} className="shrink-0 text-electric" />{stand.location}</li>
+        <li className="flex items-center gap-2.5">
+          <Calendar size={16} className="shrink-0 text-electric transition-transform duration-300 group-hover:-translate-y-0.5" />
+          {stand.displayDate}
+        </li>
+        <li className="flex items-center gap-2.5">
+          <Clock size={16} className="shrink-0 text-electric transition-transform duration-300 group-hover:-translate-y-0.5" />
+          {stand.time}
+        </li>
+        <li className="flex items-center gap-2.5">
+          <MapPin size={16} className="shrink-0 text-electric transition-transform duration-300 group-hover:-translate-y-0.5" />
+          {stand.location}
+        </li>
       </ul>
       {stand.products.length > 0 && (
-        <div className="mt-4 rounded-xl bg-surface p-3">
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
-            <Package size={14} /> Available products
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {stand.products.map((product) => (
-              <span
-                key={product}
-                className="select-none rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors duration-150 hover:border-navy hover:bg-navy hover:text-white"
-              >
-                {product}
-              </span>
-            ))}
+        <div className="mt-auto pt-4">
+          <div className="rounded-xl bg-surface p-3">
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
+              <Package size={14} /> Available products
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {stand.products.map((product) => (
+                <span
+                  key={product}
+                  className="select-none rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors duration-150 hover:border-navy hover:bg-navy hover:text-white"
+                >
+                  {product}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -66,14 +77,14 @@ export function WhereToFindUs() {
         <ScrollReveal>
           <SectionHeading
             title="Find a PrintX Stand Near You"
-            subtitle="We sell our prints in person at stands around McKinney — schools, clubs, and local spots."
+            subtitle="We sell our prints in person at stands around the DFW area — schools, clubs, and local spots."
           />
         </ScrollReveal>
 
         {upcoming.length > 0 ? (
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="grid items-stretch gap-6 md:grid-cols-2">
             {upcoming.map((stand, i) => (
-              <ScrollReveal key={stand.id} delay={i * 100}>
+              <ScrollReveal key={stand.id} delay={i * 100} className="h-full">
                 <StandCard stand={stand} />
               </ScrollReveal>
             ))}

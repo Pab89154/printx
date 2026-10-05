@@ -286,6 +286,42 @@ async function migrateContactEmail(database: DbApi) {
 }
 
 /** Remap product card gradients to logo navy / cyan / electric only. */
+/** Swap old McKinney-only default copy to DFW area (only when still the exact old defaults). */
+async function migrateDfwAreaCopy(database: DbApi) {
+  const replacements: Record<string, { from: string; to: string }> = {
+    heroDescription: {
+      from: 'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.',
+      to: 'Student-made 3D prints, sold locally at school stands throughout the DFW area.',
+    },
+    aboutText: {
+      from: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across McKinney — where students can see, touch, and buy 3D-printed products made by people their age.',
+      to: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across the DFW area — where students can see, touch, and buy 3D-printed products made by people their age.',
+    },
+  }
+
+  const now = new Date().toISOString()
+  for (const [key, { from, to }] of Object.entries(replacements)) {
+    const row = await database.get<{ value: string }>(
+      'SELECT value FROM website_settings WHERE key = ?',
+      key,
+    )
+    if (!row) continue
+    try {
+      const current = JSON.parse(row.value) as string
+      if (current === from) {
+        await database.run(
+          'UPDATE website_settings SET value = ?, updated_at = ? WHERE key = ?',
+          JSON.stringify(to),
+          now,
+          key,
+        )
+      }
+    } catch {
+      /* ignore malformed settings */
+    }
+  }
+}
+
 async function migrateBrandGradients(database: DbApi) {
   const remaps: Array<[string, string]> = [
     ['from-blue-500 to-cyan-400', 'from-navy to-electric'],
@@ -387,8 +423,8 @@ async function seed(database: DbApi) {
 
   const defaults: WebsiteContent = {
     heroHeadline: 'Your Ideas. Our Prints.',
-    heroDescription: 'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.',
-    aboutText: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across McKinney — where students can see, touch, and buy 3D-printed products made by people their age.',
+    heroDescription: 'Student-made 3D prints, sold locally at school stands throughout the DFW area.',
+    aboutText: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across the DFW area — where students can see, touch, and buy 3D-printed products made by people their age.',
     aboutTeam: 'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
     contactEmail: 'hello@printx.pw',
     contactInstagram: 'https://instagram.com',
@@ -426,6 +462,7 @@ async function initDb(): Promise<DbApi> {
   await migrateEmojiToIcons(database)
   await migrateContactEmail(database)
   await migrateBrandGradients(database)
+  await migrateDfwAreaCopy(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
   ready = true
@@ -502,9 +539,9 @@ export async function getWebsiteContent(database: DbApi): Promise<WebsiteContent
 
   const defaults: WebsiteContent = {
     heroHeadline: 'Your Ideas. Our Prints.',
-    heroDescription: 'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.',
+    heroDescription: 'Student-made 3D prints, sold locally at school stands throughout the DFW area.',
     aboutText:
-      'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across McKinney — where students can see, touch, and buy 3D-printed products made by people their age.',
+      'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across the DFW area — where students can see, touch, and buy 3D-printed products made by people their age.',
     aboutTeam:
       'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
     contactEmail: 'hello@printx.pw',

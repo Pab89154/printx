@@ -64,20 +64,13 @@ export function ConfirmDialog({
           {message}
         </p>
         <div className="mt-6 flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-navy hover:border-slate-300 disabled:opacity-50"
-            onClick={onCancel}
-          >
+          <button type="button" disabled={busy} className="btn btn-ghost" onClick={onCancel}>
             {cancelLabel}
           </button>
           <button
             type="button"
             disabled={busy}
-            className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 ${
-              danger ? 'bg-red-600 hover:bg-red-700' : 'bg-electric hover:bg-electric-light'
-            }`}
+            className={danger ? 'btn btn-danger-solid' : 'btn btn-primary'}
             onClick={onConfirm}
           >
             {busy ? 'Working…' : confirmLabel}

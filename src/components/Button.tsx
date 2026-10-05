@@ -1,7 +1,7 @@
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react'
 import { onHashLinkClick } from '../lib/scroll'
 
-type Variant = 'primary' | 'secondary' | 'outline' | 'ghost'
+type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger'
 type Size = 'sm' | 'md' | 'lg'
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -12,19 +12,17 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 }
 
 const variants: Record<Variant, string> = {
-  primary:
-    'bg-electric text-white hover:bg-electric-light shadow-lg shadow-electric/30 hover:shadow-cyan/25 hover:-translate-y-0.5',
-  secondary:
-    'bg-white text-navy border border-navy/10 hover:border-electric hover:text-electric hover:-translate-y-0.5 shadow-sm',
-  outline:
-    'border-2 border-white/30 text-white hover:bg-white/10 hover:-translate-y-0.5',
-  ghost: 'text-electric hover:bg-electric/5 hover:text-cyan',
+  primary: 'btn-primary',
+  secondary: 'btn-secondary',
+  outline: 'btn-outline',
+  ghost: 'btn-ghost',
+  danger: 'btn-danger',
 }
 
 const sizes: Record<Size, string> = {
-  sm: 'px-4 py-2 text-sm',
-  md: 'px-6 py-3 text-sm',
-  lg: 'px-8 py-3.5 text-base',
+  sm: '!min-h-10 !px-4 !text-sm',
+  md: '!min-h-11 !px-6 !text-sm',
+  lg: '!min-h-12 !px-8 !text-base',
 }
 
 export function Button({
@@ -37,7 +35,7 @@ export function Button({
   onClick,
   ...props
 }: ButtonProps) {
-  const classes = `inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-all duration-300 cursor-pointer ${variants[variant]} ${sizes[size]} ${className}`
+  const classes = `btn ${variants[variant]} ${sizes[size]} ${className}`.trim()
 
   if (href) {
     const isHash = href.startsWith('#')

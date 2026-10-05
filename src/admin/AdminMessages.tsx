@@ -47,7 +47,7 @@ export function AdminMessages() {
             key={msg.id}
             className={`rounded-xl border bg-white p-5 ${msg.status === 'new' ? 'border-electric/40' : ''}`}
           >
-            <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="font-semibold text-navy">{msg.name}</p>
@@ -71,11 +71,11 @@ export function AdminMessages() {
                   Received {new Date(msg.created_at).toLocaleString()}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
                 {msg.status === 'new' && (
                   <button
                     type="button"
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-navy hover:border-electric"
+                    className="btn btn-secondary"
                     onClick={() => api.admin.messages.updateStatus(msg.id, 'read').then(load)}
                   >
                     Mark read
@@ -83,7 +83,7 @@ export function AdminMessages() {
                 )}
                 <button
                   type="button"
-                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-red-600 hover:border-red-300"
+                  className="btn btn-danger"
                   onClick={() => setPendingDelete(msg)}
                 >
                   Delete

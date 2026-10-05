@@ -23,9 +23,9 @@ export function HowToBuy() {
             return (
               <ScrollReveal key={step.step} delay={i * 120} className="h-full">
                 <div
-                  className={`group flex h-full select-none flex-col rounded-2xl border bg-white p-8 text-center shadow-sm transition-colors duration-150 hover:shadow-lg ${step.className}`}
+                  className={`group flex h-full select-none flex-col rounded-2xl border bg-white p-8 text-center shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${step.className}`}
                 >
-                  <div className="mx-auto mb-5 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-electric to-cyan text-white shadow-lg shadow-electric/25 transition-colors duration-150 group-hover:from-white/25 group-hover:to-white/10 group-hover:shadow-none">
+                  <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-electric to-cyan text-white shadow-lg shadow-electric/25 transition-all duration-300 group-hover:-translate-y-1 group-hover:from-white/25 group-hover:to-white/10 group-hover:shadow-md">
                     <Icon size={28} strokeWidth={2} />
                   </div>
                   <div className="mb-2 text-sm font-bold uppercase tracking-wider text-electric transition-colors duration-150 group-hover:text-white/90">

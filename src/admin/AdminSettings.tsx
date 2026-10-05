@@ -231,7 +231,7 @@ export function AdminSettings() {
             <button
               type="submit"
               disabled={nameSaving}
-              className="mt-3 rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              className="btn btn-primary mt-3"
             >
               {nameSaving ? 'Saving…' : 'Save name'}
             </button>
@@ -266,7 +266,7 @@ export function AdminSettings() {
             <>
               <Link
                 to={adminPath('sandbox')}
-                className="mt-4 inline-flex rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 hover:border-amber-400"
+                className="btn btn-secondary mt-4 !border-amber-200 !bg-amber-50 !text-amber-900 hover:!border-amber-400 hover:!bg-amber-100 hover:!text-amber-950"
               >
                 Open site sandbox
               </Link>
@@ -288,8 +288,8 @@ export function AdminSettings() {
           <ul className="space-y-3">
             {admins.map((admin) => (
               <li key={admin.id} className="rounded-xl border px-4 py-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
                     <p className="font-medium text-navy">{admin.displayName?.trim() || admin.email}</p>
                     {admin.displayName?.trim() && (
                       <p className="text-sm text-muted">{admin.email}</p>
@@ -299,7 +299,7 @@ export function AdminSettings() {
                       {new Date(admin.createdAt).toLocaleDateString()}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
                     {admin.isMainAdmin ? (
                       <span className="text-xs font-medium text-electric">You</span>
                     ) : (
@@ -311,14 +311,14 @@ export function AdminSettings() {
                               ? (setEditingId(null), setEditPerms(null))
                               : startEdit(admin)
                           }
-                          className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-navy hover:border-electric"
+                          className="btn btn-secondary"
                         >
                           {editingId === admin.id ? 'Close' : 'Edit access'}
                         </button>
                         <button
                           type="button"
                           onClick={() => setPendingRemove(admin)}
-                          className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                          className="btn btn-danger"
                         >
                           Delete account
                         </button>
@@ -347,7 +347,7 @@ export function AdminSettings() {
                       type="button"
                       disabled={savingPerms}
                       onClick={saveEditPerms}
-                      className="mt-4 rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                      className="btn btn-primary mt-4"
                     >
                       {savingPerms ? 'Saving…' : 'Save access'}
                     </button>
@@ -413,7 +413,7 @@ export function AdminSettings() {
             </p>
             {adminError && <p className="mt-3 text-sm text-red-600">{adminError}</p>}
             {adminMessage && <p className="mt-3 text-sm text-green-600">{adminMessage}</p>}
-            <button type="submit" className="mt-4 rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white">
+            <button type="submit" className="btn btn-primary mt-4">
               Create admin account
             </button>
           </form>
@@ -446,7 +446,7 @@ export function AdminSettings() {
           </label>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
           {message && <p className="mt-3 text-sm text-green-600">{message}</p>}
-          <button type="submit" className="mt-4 rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white">
+          <button type="submit" className="btn btn-primary mt-4">
             Update Password
           </button>
         </form>

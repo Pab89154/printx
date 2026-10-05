@@ -96,6 +96,163 @@ section[id] {
   @apply w-full rounded-xl border border-navy/10 px-4 py-2.5 text-base outline-none transition-colors focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm;
 }
 
+/*
+  Shared button system — use with class="btn btn-primary" (etc.)
+  - Important: hover swaps light↔dark brand color + lifts
+  - Regular: highlight border/background
+  - All: press “pop” (quick squash) so clicks feel intentional
+*/
+.btn {
+  display: inline-flex;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  min-height: 2.75rem;
+  padding: 0.625rem 1.25rem;
+  border: 1px solid transparent;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
+  transition:
+    transform 180ms cubic-bezier(0.34, 1.45, 0.64, 1),
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease;
+  transform: translateY(0) scale(1);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.94);
+  transition-duration: 70ms;
+}
+
+.btn:disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* Important — light electric → dark cyan on hover + lift */
+.btn-primary {
+  background: var(--color-electric);
+  border-color: var(--color-electric);
+  color: #fff;
+  box-shadow: 0 10px 20px -8px color-mix(in srgb, var(--color-electric) 45%, transparent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-cyan);
+  border-color: var(--color-cyan);
+  box-shadow: 0 12px 22px -8px color-mix(in srgb, var(--color-cyan) 40%, transparent);
+  transform: translateY(-3px) scale(1);
+}
+
+.btn-primary:active:not(:disabled) {
+  background: var(--color-cyan);
+  border-color: var(--color-cyan);
+  transform: translateY(0) scale(0.94);
+}
+
+/* Regular — highlight, then press pop */
+.btn-secondary {
+  background: #fff;
+  color: var(--color-navy);
+  border-color: #e2e8f0;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--color-electric);
+  background: color-mix(in srgb, var(--color-electric) 8%, #fff);
+  color: var(--color-electric);
+  transform: translateY(-1px) scale(1);
+}
+
+.btn-secondary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-electric) 14%, #fff);
+  transform: translateY(0) scale(0.94);
+}
+
+/* Outlined danger */
+.btn-danger {
+  background: #fff;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.btn-danger:hover:not(:disabled) {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #fff;
+  box-shadow: 0 10px 18px -8px rgb(220 38 38 / 30%);
+  transform: translateY(-3px) scale(1);
+}
+
+.btn-danger:active:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #fff;
+  transform: translateY(0) scale(0.94);
+}
+
+/* Filled danger (Confirm / Delete) — dark red → lighter on hover */
+.btn-danger-solid {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+  box-shadow: 0 10px 18px -8px rgb(220 38 38 / 30%);
+}
+
+.btn-danger-solid:hover:not(:disabled) {
+  background: #ef4444;
+  border-color: #ef4444;
+  transform: translateY(-3px) scale(1);
+}
+
+.btn-danger-solid:active:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  transform: translateY(0) scale(0.94);
+}
+
+/* Quiet cancel */
+.btn-ghost {
+  background: transparent;
+  color: var(--color-navy);
+  border-color: #e2e8f0;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  transform: translateY(-1px) scale(1);
+}
+
+.btn-ghost:active:not(:disabled) {
+  background: #f1f5f9;
+  transform: translateY(0) scale(0.94);
+}
+
+/* Outline on dark backgrounds (hero secondary-style) */
+.btn-outline {
+  background: transparent;
+  color: #fff;
+  border-color: rgb(255 255 255 / 30%);
+}
+
+.btn-outline:hover:not(:disabled) {
+  background: rgb(255 255 255 / 12%);
+  border-color: rgb(255 255 255 / 55%);
+  transform: translateY(-3px) scale(1);
+}
+
+.btn-outline:active:not(:disabled) {
+  background: rgb(255 255 255 / 18%);
+  transform: translateY(0) scale(0.94);
+}
+
 .safe-top {
   padding-top: env(safe-area-inset-top, 0px);
 }

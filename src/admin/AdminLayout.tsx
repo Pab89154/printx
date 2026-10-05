@@ -165,7 +165,7 @@ export function AdminLayout() {
           <button
             type="button"
             onClick={handleLogout}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white md:py-2.5"
+            className="btn flex w-full items-center gap-3 !justify-start !rounded-xl !border-0 !bg-transparent px-3 py-3 text-sm font-medium !text-slate-300 hover:!bg-white/10 hover:!text-white md:py-2.5"
           >
             <LogOut size={18} />
             Logout

@@ -32,13 +32,13 @@ export function AdminDashboard() {
     ),
     can('messages') && (
       <StatCard key="messages" title="Inbox" href={adminPath('messages')}>
-        <p className="text-3xl font-bold text-electric">{stats?.newMessages ?? '—'}</p>
+        <p className="text-3xl font-bold leading-none text-electric">{stats?.newMessages ?? '—'}</p>
         <p className="text-sm text-muted">New messages</p>
       </StatCard>
     ),
     can('requests') && (
       <StatCard key="requests" title="Custom Requests" href={adminPath('requests')}>
-        <p className="text-3xl font-bold text-cyan">{stats?.newRequests ?? '—'}</p>
+        <p className="text-3xl font-bold leading-none text-cyan">{stats?.newRequests ?? '—'}</p>
         <p className="text-sm text-muted">New requests</p>
       </StatCard>
     ),
@@ -65,11 +65,7 @@ export function AdminDashboard() {
 
   const actions = [
     can('stands') && (
-      <Link
-        key="add-stand"
-        to={adminPath('stands')}
-        className="rounded-xl bg-electric px-5 py-2.5 text-sm font-semibold text-white hover:bg-electric-light"
-      >
+      <Link key="add-stand" to={adminPath('stands')} className="btn btn-primary">
         + Add Stand
       </Link>
     ),
@@ -77,44 +73,28 @@ export function AdminDashboard() {
       <Link
         key="sandbox"
         to={adminPath('sandbox')}
-        className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-900 hover:border-amber-400"
+        className="btn btn-secondary !border-amber-300 !bg-amber-50 !text-amber-900 hover:!border-amber-500 hover:!bg-amber-100 hover:!text-amber-950"
       >
         Open site sandbox
       </Link>
     ),
     can('messages') && (
-      <Link
-        key="inbox"
-        to={adminPath('messages')}
-        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric"
-      >
+      <Link key="inbox" to={adminPath('messages')} className="btn btn-secondary">
         Open Inbox
       </Link>
     ),
     can('requests') && (
-      <Link
-        key="requests"
-        to={adminPath('requests')}
-        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric"
-      >
+      <Link key="requests" to={adminPath('requests')} className="btn btn-secondary">
         View Requests
       </Link>
     ),
     can('products') && (
-      <Link
-        key="products"
-        to={adminPath('products')}
-        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric"
-      >
+      <Link key="products" to={adminPath('products')} className="btn btn-secondary">
         Products
       </Link>
     ),
     can('content') && (
-      <Link
-        key="content"
-        to={adminPath('content')}
-        className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-navy hover:border-electric"
-      >
+      <Link key="content" to={adminPath('content')} className="btn btn-secondary">
         Website Content
       </Link>
     ),
@@ -126,17 +106,19 @@ export function AdminDashboard() {
       <p className="mt-1 text-muted">Here&apos;s what&apos;s happening with your business.</p>
 
       {cards.length > 0 ? (
-        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">{cards}</div>
+        <div className="mt-8 grid items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-4">{cards}</div>
       ) : (
         <p className="mt-8 rounded-xl border border-dashed bg-white p-8 text-center text-muted">
           No dashboard widgets are available for your account.
         </p>
       )}
 
-      {actions.length > 0 && <div className="mt-8 flex flex-wrap gap-3">{actions}</div>}
+      {actions.length > 0 && (
+        <div className="mt-8 flex flex-wrap items-center gap-3">{actions}</div>
+      )}
 
       {!online && can('sandbox') && (
-        <p className="mt-4 text-sm text-amber-700">
+        <p className="mt-6 text-sm text-amber-700">
           Public site is paused. Use the{' '}
           <Link to={adminPath('sandbox')} className="font-semibold underline underline-offset-2">
             site sandbox
@@ -150,10 +132,16 @@ export function AdminDashboard() {
 
 function StatCard({ title, href, children }: { title: string; href?: string; children: React.ReactNode }) {
   const inner = (
-    <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm transition-shadow hover:shadow-md">
+    <div className="flex h-full min-h-[8.5rem] flex-col rounded-2xl border border-slate-100 bg-white p-5 shadow-sm transition-shadow hover:shadow-md">
       <h3 className="text-sm font-bold uppercase tracking-wider text-muted">{title}</h3>
-      <div className="mt-3">{children}</div>
+      <div className="mt-3 flex flex-1 flex-col justify-center gap-1">{children}</div>
     </div>
   )
-  return href ? <Link to={href}>{inner}</Link> : inner
+  return href ? (
+    <Link to={href} className="block h-full">
+      {inner}
+    </Link>
+  ) : (
+    inner
+  )
 }

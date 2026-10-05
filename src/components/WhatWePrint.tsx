@@ -13,13 +13,13 @@ export function WhatWePrint() {
         <ScrollReveal>
           <SectionHeading
             title="What We Print"
-            subtitle="Browse our products — available in person at PrintX stands around McKinney."
+            subtitle="Browse our products — available in person at PrintX stands around the DFW area."
           />
         </ScrollReveal>
 
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {products.map((product, i) => (
-            <ScrollReveal key={product.id} delay={i * 80}>
+            <ScrollReveal key={product.id} delay={i * 80} className="h-full">
               <ProductCard product={product} />
             </ScrollReveal>
           ))}

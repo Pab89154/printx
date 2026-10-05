@@ -61,7 +61,7 @@ export const PRODUCTS: Product[] = [
 export const WHY_FEATURES = [
   {
     title: 'Local',
-    description: 'Based in McKinney, Texas.',
+    description: 'Based in the DFW area.',
     icon: 'map-pin' as const,
   },
   {

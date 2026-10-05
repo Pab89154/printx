@@ -38,9 +38,9 @@ export function AdminSchools() {
 
   return (
     <div>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold text-navy">Manage Schools</h1>
-        <button type="button" onClick={newSchool} className="rounded-xl bg-electric px-4 py-2.5 text-sm font-semibold text-white">
+        <button type="button" onClick={newSchool} className="btn btn-primary self-start sm:self-auto">
           + Add School
         </button>
       </div>
@@ -57,8 +57,8 @@ export function AdminSchools() {
             <label className="flex items-center gap-2"><input type="checkbox" checked={editing.active !== 0} onChange={(e) => setEditing({ ...editing, active: e.target.checked ? 1 : 0 })} /> Active</label>
           </div>
           <div className="mt-4 flex gap-2">
-            <button type="button" onClick={save} className="rounded-xl bg-electric px-4 py-2 text-sm font-semibold text-white">Save</button>
-            <button type="button" onClick={() => setEditing(null)} className="rounded-xl border px-4 py-2 text-sm">Cancel</button>
+            <button type="button" onClick={save} className="btn btn-primary">Save</button>
+            <button type="button" onClick={() => setEditing(null)} className="btn btn-ghost">Cancel</button>
           </div>
         </div>
       )}
@@ -76,14 +76,14 @@ export function AdminSchools() {
                 {school.active ? 'Active' : 'Inactive'}
               </span>
             </div>
-            <div className="flex shrink-0 gap-2">
-              <button type="button" onClick={() => setEditing(school)} className="flex-1 rounded-lg border px-3 py-2 text-sm sm:flex-none sm:py-1.5">
+            <div className="flex shrink-0 items-center gap-2">
+              <button type="button" onClick={() => setEditing(school)} className="btn btn-secondary flex-1 sm:flex-none">
                 Edit
               </button>
               <button
                 type="button"
                 onClick={() => api.admin.schools.delete(school.id).then(load)}
-                className="flex-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 sm:flex-none sm:py-1.5"
+                className="btn btn-danger flex-1 sm:flex-none"
               >
                 Delete
               </button>

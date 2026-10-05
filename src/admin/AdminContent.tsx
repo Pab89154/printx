@@ -85,7 +85,7 @@ export function AdminContent() {
         </Section>
       </div>
 
-      <button type="button" onClick={save} className="mt-8 rounded-xl bg-electric px-6 py-3 text-sm font-semibold text-white">
+      <button type="button" onClick={save} className="btn btn-primary mt-8">
         {saved ? 'Saved!' : 'Save All Changes'}
       </button>
     </div>

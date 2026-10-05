@@ -40,10 +40,10 @@ export function Footer() {
               size={40}
               withWordmark
               light
-              subtitle="3D Printing • McKinney, TX"
+              subtitle="3D Printing • DFW Area"
             />
             <p className="mt-4 text-sm leading-relaxed text-slate-400">
-              Made locally in McKinney, Texas.
+              Made locally in the DFW area.
             </p>
           </div>
 
@@ -71,7 +71,7 @@ export function Footer() {
               Contact
             </h3>
             <ul className="space-y-2.5 text-sm text-slate-400">
-              <li>McKinney, Texas</li>
+              <li>Dallas–Fort Worth, TX</li>
               <li>
                 <a href={emailDraftHref} className="transition-colors hover:text-cyan">
                   {contactEmail}

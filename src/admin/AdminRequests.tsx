@@ -28,8 +28,8 @@ export function AdminRequests() {
         )}
         {requests.map((req) => (
           <div key={req.id} className="rounded-xl border bg-white p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
                 <p className="font-semibold text-navy">{req.name}</p>
                 <p className="text-sm text-muted">{req.email} · {req.school || 'No school listed'}</p>
                 <p className="mt-2 text-sm">{req.description}</p>
@@ -47,7 +47,7 @@ export function AdminRequests() {
               <select
                 value={req.status}
                 onChange={(e) => api.admin.requests.updateStatus(req.id, e.target.value).then(load)}
-                className="w-full rounded-lg border px-3 py-2.5 text-base capitalize sm:w-auto sm:py-1.5 sm:text-sm"
+                className="h-11 w-full shrink-0 rounded-lg border border-slate-200 px-3 text-sm capitalize sm:w-auto"
               >
                 {statuses.map((s) => (
                   <option key={s} value={s}>{s}</option>

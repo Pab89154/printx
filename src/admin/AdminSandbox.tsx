@@ -39,7 +39,7 @@ export function AdminSandbox() {
           </div>
           <Link
             to={backTo}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-semibold text-amber-900 hover:bg-amber-100"
+            className="btn btn-secondary !border-amber-300 !text-amber-900 hover:!bg-amber-100 hover:!text-amber-950"
           >
             <ArrowLeft size={14} />
             Back to portal

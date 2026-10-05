@@ -39,9 +39,9 @@ export function Hero() {
       <div className="absolute inset-0 filament-pattern opacity-50 pointer-events-none" />
       <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:gap-16 lg:px-8">
         <div className="animate-fade-up">
-          <div className="group mb-6 inline-flex select-none items-center gap-2 rounded-full border border-navy/10 bg-surface px-4 py-1.5 text-sm font-medium text-navy shadow-sm transition-colors duration-150 hover:border-cyan hover:bg-cyan hover:text-white">
-            <MapPin size={14} className="text-cyan transition-colors duration-150 group-hover:text-white" />
-            McKinney, TX
+          <div className="group mb-6 inline-flex select-none items-center gap-2 rounded-full border border-navy/10 bg-surface px-4 py-1.5 text-sm font-medium text-navy shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-cyan hover:bg-cyan hover:text-white hover:shadow-md">
+            <MapPin size={14} className="text-cyan transition-all duration-300 group-hover:-translate-y-0.5 group-hover:text-white" />
+            DFW Area
           </div>
 
           <h1 className="text-4xl font-extrabold leading-tight tracking-tight text-navy sm:text-5xl lg:text-6xl">
@@ -50,10 +50,10 @@ export function Hero() {
 
           <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted">
             {content?.heroDescription?.trim() ||
-              'Student-made 3D prints, sold locally at school stands throughout McKinney, Texas.'}
+              'Student-made 3D prints, sold locally at school stands throughout the DFW area.'}
           </p>
 
-          <div className="mt-8 flex flex-wrap gap-4">
+          <div className="mt-8 flex flex-wrap items-center gap-4">
             <Button href="#products" size="lg">See Our Products</Button>
             <Button href="#stands" variant="secondary" size="lg">Find Our Next Stand</Button>
           </div>

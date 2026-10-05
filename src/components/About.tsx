@@ -27,7 +27,7 @@ export function About() {
               {ABOUT_VALUES.map((value) => (
                 <span
                   key={value.label}
-                  className={`select-none rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${value.className}`}
+                  className={`select-none rounded-full border px-3.5 py-1.5 text-sm font-medium transition-all duration-300 hover:-translate-y-1 hover:shadow-md ${value.className}`}
                 >
                   {value.label}
                 </span>

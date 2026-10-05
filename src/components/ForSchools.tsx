@@ -27,9 +27,9 @@ export function ForSchools() {
     <section id="schools" className="bg-surface py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
         <div className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-xl">
-          <div className="grid lg:grid-cols-2">
-            <ScrollReveal className="p-8 sm:p-12">
-              <div className="mb-4 inline-flex select-none items-center gap-2 rounded-full border border-electric/20 bg-electric/10 px-4 py-1.5 text-sm font-semibold text-electric transition-colors duration-150 hover:border-electric hover:bg-electric hover:text-white">
+          <div className="grid items-stretch lg:grid-cols-2">
+            <ScrollReveal className="h-full p-8 sm:p-12">
+              <div className="mb-4 inline-flex select-none items-center gap-2 rounded-full border border-electric/20 bg-electric/10 px-4 py-1.5 text-sm font-semibold text-electric transition-all duration-300 hover:-translate-y-1 hover:border-electric hover:bg-electric hover:text-white hover:shadow-md">
                 <Building2 size={16} /> For Educators & Staff
               </div>
               <h2 className="text-3xl font-bold tracking-tight text-navy sm:text-4xl">Bring PrintX to Your School</h2>
@@ -41,8 +41,8 @@ export function ForSchools() {
               <div className="mt-8 space-y-4">
                 <p className="text-xs font-bold uppercase tracking-wider text-muted">How hosting works</p>
                 {SCHOOL_HOST_STEPS.map((step) => (
-                  <div key={step.step} className="flex gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-electric text-sm font-bold text-white">
+                  <div key={step.step} className="group/step flex gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-electric text-sm font-bold text-white transition-transform duration-300 group-hover/step:-translate-y-1">
                       {step.step}
                     </div>
                     <div>
@@ -56,7 +56,7 @@ export function ForSchools() {
               <Button href="#contact" size="lg" className="mt-8">Contact PrintX</Button>
             </ScrollReveal>
 
-            <ScrollReveal delay={150} className="bg-navy/5 p-8 sm:p-12">
+            <ScrollReveal delay={150} className="h-full bg-navy/5 p-8 sm:p-12">
               <p className="mb-4 text-xs font-bold uppercase tracking-wider text-muted">What we can bring</p>
 
               <ul className="space-y-3">
@@ -65,10 +65,10 @@ export function ForSchools() {
                   return (
                     <li
                       key={item.label}
-                      className={`group flex select-none gap-3 rounded-2xl border bg-white p-4 shadow-sm transition-colors duration-150 ${item.cardClassName}`}
+                      className={`group flex select-none gap-3 rounded-2xl border bg-white p-4 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md ${item.cardClassName}`}
                     >
                       <div
-                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors duration-150 ${item.iconClass} ${item.iconHoverClass}`}
+                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all duration-300 group-hover:-translate-y-1 ${item.iconClass} ${item.iconHoverClass}`}
                       >
                         <Icon size={18} strokeWidth={2} />
                       </div>
@@ -96,7 +96,7 @@ export function ForSchools() {
               <div className="mt-3 rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4">
                 <p className="text-sm font-semibold text-emerald-800">Easy for schools</p>
                 <p className="mt-1 text-sm leading-relaxed text-emerald-900/80">
-                  Student-run, local to McKinney, and set up for after-school clubs, evening events, or bigger campus
+                  Student-run, local to the DFW area, and set up for after-school clubs, evening events, or bigger campus
                   days outside class hours.
                 </p>
               </div>

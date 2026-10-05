@@ -19,7 +19,7 @@ export function Header() {
           <Logo size={40} className="transition-opacity group-hover:opacity-90" />
           <span className="hidden min-w-0 sm:block">
             <span className="block text-lg font-extrabold tracking-tight leading-none text-navy">PrintX</span>
-            <span className="mt-0.5 block text-xs font-medium text-muted">3D Printing • McKinney, TX</span>
+            <span className="mt-0.5 block text-xs font-medium text-muted">3D Printing • DFW Area</span>
           </span>
         </a>
 
