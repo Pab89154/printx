@@ -13,6 +13,14 @@ export function AdminLogin() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  if (authenticated === null) {
+    return (
+      <div className="brand-panel flex min-h-screen items-center justify-center p-4">
+        <p className="text-sm font-medium text-white/80">Checking authentication…</p>
+      </div>
+    )
+  }
+
   if (authenticated) return <Navigate to={firstAllowedAdminPath(permissions)} replace />
 
   async function handleSubmit(e: React.FormEvent) {

@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { Logo } from '../components/Logo'
-import { adminPath, firstAllowedAdminPath, publicSiteUrl } from '../lib/portal'
+import { adminHomePath, adminPath, firstAllowedAdminPath, publicSiteUrl } from '../lib/portal'
 import type { PermissionKey } from '../../shared/permissions'
 
 const links: { section: string; label: string; icon: typeof LayoutDashboard; perm: PermissionKey }[] = [

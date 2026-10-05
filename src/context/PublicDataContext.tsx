@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
+import { useLocation } from 'react-router-dom'
 import { api } from '../lib/api'
 import { isPortalHost } from '../lib/portal'
 import type { PublicBootstrap } from '../types/api'
@@ -12,6 +13,12 @@ type PublicDataContextValue = {
 
 const PublicDataContext = createContext<PublicDataContextValue | null>(null)
 
+function needsPublicBootstrap(pathname: string): boolean {
+  // Portal admin pages don't need the public catalog — only the sandbox preview does.
+  if (isPortalHost()) return pathname.includes('sandbox')
+  return true
+}
+
 /** Full catalog (stands/products) even when the public site is paused. */
 function shouldFetchFull(forced?: boolean): boolean {
   if (forced) return true
@@ -23,13 +30,18 @@ function shouldFetchFull(forced?: boolean): boolean {
 }
 
 export function PublicDataProvider({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  const wantsData = needsPublicBootstrap(location.pathname)
   const [data, setData] = useState<PublicBootstrap | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() =>
+    typeof window !== 'undefined' ? needsPublicBootstrap(window.location.pathname) : true,
+  )
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async (opts?: { full?: boolean }) => {
     try {
       setError(null)
+      setLoading(true)
       const bootstrap = await api.public.bootstrap({ full: shouldFetchFull(opts?.full) })
       setData(bootstrap)
     } catch (e) {
@@ -40,8 +52,12 @@ export function PublicDataProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
+    if (!wantsData) {
+      setLoading(false)
+      return
+    }
     void refresh()
-  }, [refresh])
+  }, [wantsData, refresh])
 
   return (
     <PublicDataContext.Provider value={{ data, loading, error, refresh }}>
