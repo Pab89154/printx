@@ -5,14 +5,39 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useAdminAuth } from '../context/AdminAuthContext'
 
 type Tab = 'inbox' | 'sent' | 'compose'
+type ComposeMode = 'new' | 'reply' | 'reply-all' | 'forward'
 
 function labelFor(user: { email: string; displayName?: string | null }) {
   return user.displayName?.trim() || user.email
 }
 
+function withPrefix(subject: string, prefix: 'Re:' | 'Fwd:') {
+  const trimmed = subject.trim() || '(no subject)'
+  const re = new RegExp(`^${prefix}\\s*`, 'i')
+  return re.test(trimmed) ? trimmed : `${prefix} ${trimmed}`
+}
+
+function quotedOriginal(msg: MailMessage) {
+  const when = new Date(msg.createdAt).toLocaleString()
+  const from = labelFor({ email: msg.senderEmail, displayName: msg.senderDisplayName })
+  const to = msg.recipients.map(labelFor).join(', ') || '—'
+  return [
+    '',
+    '---------- Original message ----------',
+    `From: ${from}`,
+    `To: ${to}`,
+    `Date: ${when}`,
+    `Subject: ${msg.subject}`,
+    '',
+    msg.body || '(empty message)',
+  ].join('\n')
+}
+
 export function AdminMail() {
   const { email: myEmail } = useAdminAuth()
+  const myEmailLower = (myEmail ?? '').toLowerCase()
   const [tab, setTab] = useState<Tab>('inbox')
+  const [composeMode, setComposeMode] = useState<ComposeMode>('new')
   const [inbox, setInbox] = useState<MailMessage[]>([])
   const [sent, setSent] = useState<MailMessage[]>([])
   const [recipients, setRecipients] = useState<MailRecipientOption[]>([])
@@ -41,11 +66,16 @@ export function AdminMail() {
   }, [])
 
   const openMessage = useMemo(() => {
-    const list = tab === 'sent' ? sent : inbox
+    const list = tab === 'sent' ? sent : tab === 'inbox' ? inbox : [...inbox, ...sent]
     return list.find((m) => m.id === openId) ?? null
   }, [tab, sent, inbox, openId])
 
   const unreadCount = inbox.filter((m) => !m.readAt).length
+
+  const meId = useMemo(
+    () => recipients.find((r) => r.email.toLowerCase() === myEmailLower)?.id ?? null,
+    [recipients, myEmailLower],
+  )
 
   async function openAndMark(msg: MailMessage) {
     setOpenId(msg.id)
@@ -59,14 +89,50 @@ export function AdminMail() {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
+  function resetCompose() {
+    setComposeMode('new')
+    setSubject('')
+    setBody('')
+    setSelectedIds([])
+  }
+
+  function startReply(msg: MailMessage, all: boolean) {
+    const ids = new Set<string>()
+    if (all) {
+      if (msg.senderId) ids.add(msg.senderId)
+      for (const r of msg.recipients) ids.add(r.id)
+      if (meId) ids.delete(meId)
+      // If you were the only recipient and try reply-all, fall back to the sender.
+      if (ids.size === 0 && msg.senderId) ids.add(msg.senderId)
+    } else if (msg.senderId) {
+      ids.add(msg.senderId)
+    }
+
+    setComposeMode(all ? 'reply-all' : 'reply')
+    setSelectedIds([...ids])
+    setSubject(withPrefix(msg.subject, 'Re:'))
+    setBody(quotedOriginal(msg))
+    setOpenId(null)
+    setError('')
+    setTab('compose')
+  }
+
+  function startForward(msg: MailMessage) {
+    setComposeMode('forward')
+    setSelectedIds([])
+    setSubject(withPrefix(msg.subject, 'Fwd:'))
+    setBody(quotedOriginal(msg))
+    setOpenId(null)
+    setError('')
+    setTab('compose')
+  }
+
   async function sendMail() {
     setError('')
     setSending(true)
     try {
       await api.admin.mail.send({ subject, body, recipientIds: selectedIds })
-      setSubject('')
-      setBody('')
-      setSelectedIds([])
+      resetCompose()
       await loadLists()
       setTab('sent')
     } catch (err) {
@@ -90,6 +156,14 @@ export function AdminMail() {
   }
 
   const list = tab === 'sent' ? sent : inbox
+  const composeTitle =
+    composeMode === 'reply'
+      ? 'Reply'
+      : composeMode === 'reply-all'
+        ? 'Reply all'
+        : composeMode === 'forward'
+          ? 'Forward'
+          : 'New message'
 
   return (
     <div>
@@ -114,6 +188,12 @@ export function AdminMail() {
               setTab(t.id)
               setOpenId(null)
               setError('')
+              if (t.id === 'compose' && composeMode !== 'new' && !subject && !body) {
+                resetCompose()
+              }
+              if (t.id === 'compose' && composeMode === 'new') {
+                // keep draft if any
+              }
             }}
           >
             {t.label}
@@ -125,14 +205,21 @@ export function AdminMail() {
 
       {tab === 'compose' ? (
         <div className="mt-6 rounded-2xl border bg-white p-6">
-          <h2 className="font-semibold text-navy">New message</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-semibold text-navy">{composeTitle}</h2>
+            {composeMode !== 'new' && (
+              <button type="button" className="btn btn-ghost" onClick={resetCompose}>
+                Start fresh
+              </button>
+            )}
+          </div>
           <div className="mt-4 space-y-4">
             <div>
               <p className="mb-2 text-sm font-medium text-navy">To</p>
               <div className="flex flex-wrap gap-2">
                 {recipients.map((person) => {
                   const selected = selectedIds.includes(person.id)
-                  const isMe = person.email.toLowerCase() === (myEmail ?? '').toLowerCase()
+                  const isMe = person.email.toLowerCase() === myEmailLower
                   return (
                     <button
                       key={person.id}
@@ -167,7 +254,7 @@ export function AdminMail() {
               Message
               <textarea
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm"
-                rows={8}
+                rows={10}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 placeholder="Write your message…"
@@ -239,13 +326,36 @@ export function AdminMail() {
                       {new Date(openMessage.createdAt).toLocaleString()}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    onClick={() => setPendingDelete(openMessage)}
-                  >
-                    Delete
-                  </button>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => startReply(openMessage, false)}
+                    >
+                      Reply
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => startReply(openMessage, true)}
+                    >
+                      Reply all
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => startForward(openMessage)}
+                    >
+                      Forward
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() => setPendingDelete(openMessage)}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
                 <p className="mt-5 whitespace-pre-wrap text-sm leading-relaxed text-navy">
                   {openMessage.body || '(empty message)'}
