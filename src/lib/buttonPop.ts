@@ -1,35 +1,87 @@
-/** Make `.btn` presses feel like a spring “pop” (visible even on quick taps).
+/** Soft expanding highlight “pop” — matches the reference screen recording.
  *
- * Uses `data-btn-pop` instead of classNames so React re-renders (portal auth,
- * stats, route updates) cannot wipe the press/pop state mid-animation.
+ * Targets `.btn` and `.press-pop`. Uses a real ripple node (not classNames) so
+ * React re-renders cannot wipe the animation mid-flight.
  */
 
 export const BTN_POP_NAV_EVENT = 'printx:btn-pop-nav'
 
-const ATTR = 'data-btn-pop'
+const TARGET = '.btn, .press-pop'
 const NAV_LOCK = 'data-btn-nav-lock'
-const POP_MS = 360
+const POP_MS = 420
+const RIPPLE_CLASS = 'press-pop-ripple'
 
 let pressedBtn: HTMLElement | null = null
+let lastPointer = { x: 0, y: 0 }
 
-function closestBtn(target: EventTarget | null): HTMLElement | null {
+function closestTarget(target: EventTarget | null): HTMLElement | null {
   if (!(target instanceof Element)) return null
-  const el = target.closest('.btn')
+  const el = target.closest(TARGET)
   if (!(el instanceof HTMLElement)) return null
   if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') return null
   return el
 }
 
-function setPopState(btn: HTMLElement, state: 'pressing' | 'popping' | null) {
-  if (state) btn.setAttribute(ATTR, state)
-  else btn.removeAttribute(ATTR)
+function ensureHostStyles(btn: HTMLElement) {
+  const style = getComputedStyle(btn)
+  if (style.position === 'static') btn.style.position = 'relative'
+  if (style.overflow === 'visible') btn.style.overflow = 'hidden'
 }
 
-function releasePop(btn: HTMLElement) {
-  // Restart spring so rapid clicks always pop.
-  setPopState(btn, null)
-  void btn.offsetWidth
-  setPopState(btn, 'popping')
+function clearRipples(btn: HTMLElement) {
+  btn.querySelectorAll(`.${RIPPLE_CLASS}`).forEach((node) => node.remove())
+}
+
+function spawnRipple(
+  btn: HTMLElement,
+  clientX: number,
+  clientY: number,
+  kind: 'press' | 'bloom',
+) {
+  ensureHostStyles(btn)
+  const rect = btn.getBoundingClientRect()
+  // Keep the circle edge inside the control so the bloom reads like the video
+  // (oversized ripples look like a flat wash, not an expanding oval).
+  const size = Math.max(rect.width * 0.92, rect.height * 2.4) * (kind === 'bloom' ? 1.25 : 0.85)
+  const x = clientX - rect.left
+  const y = clientY - rect.top
+
+  const ripple = document.createElement('span')
+  ripple.className = `${RIPPLE_CLASS} ${RIPPLE_CLASS}--${kind}`
+  ripple.setAttribute('aria-hidden', 'true')
+  ripple.style.width = `${size}px`
+  ripple.style.height = `${size}px`
+  ripple.style.left = `${x}px`
+  ripple.style.top = `${y}px`
+  btn.appendChild(ripple)
+
+  // Start from a tiny seed so the expand always reads, even on instant taps.
+  void ripple.offsetWidth
+  ripple.classList.add('is-on')
+
+  ripple.addEventListener(
+    'animationend',
+    () => {
+      ripple.remove()
+    },
+    { once: true },
+  )
+
+  return ripple
+}
+
+function pressIn(btn: HTMLElement, clientX: number, clientY: number) {
+  clearRipples(btn)
+  btn.dataset.btnPop = 'pressing'
+  spawnRipple(btn, clientX, clientY, 'press')
+}
+
+function releasePop(btn: HTMLElement, clientX: number, clientY: number) {
+  btn.dataset.btnPop = 'popping'
+  spawnRipple(btn, clientX, clientY, 'bloom')
+  window.setTimeout(() => {
+    if (btn.dataset.btnPop === 'popping') delete btn.dataset.btnPop
+  }, POP_MS)
 }
 
 function isModifiedClick(e: MouseEvent) {
@@ -57,21 +109,23 @@ export function installButtonPop() {
     'pointerdown',
     (e) => {
       if (e.button !== 0 && e.pointerType === 'mouse') return
-      const btn = closestBtn(e.target)
+      const btn = closestTarget(e.target)
       if (!btn) return
       pressedBtn = btn
-      setPopState(btn, 'pressing')
+      lastPointer = { x: e.clientX, y: e.clientY }
+      pressIn(btn, e.clientX, e.clientY)
     },
     { passive: true },
   )
 
   document.addEventListener(
     'pointerup',
-    () => {
+    (e) => {
       if (!pressedBtn) return
       const btn = pressedBtn
       pressedBtn = null
-      releasePop(btn)
+      lastPointer = { x: e.clientX, y: e.clientY }
+      releasePop(btn, e.clientX, e.clientY)
     },
     { passive: true },
   )
@@ -80,47 +134,37 @@ export function installButtonPop() {
     'pointercancel',
     () => {
       if (!pressedBtn) return
-      setPopState(pressedBtn, null)
+      clearRipples(pressedBtn)
+      delete pressedBtn.dataset.btnPop
       pressedBtn = null
     },
     { passive: true },
   )
 
-  // Let the spring finish before React Router unmounts the control.
+  // Let the bloom finish before React Router unmounts the control.
   document.addEventListener(
     'click',
     (e) => {
       if (!(e.target instanceof Element) || e.defaultPrevented || isModifiedClick(e)) return
-      const btn = closestBtn(e.target)
+      const btn = closestTarget(e.target)
       if (!btn || !(btn instanceof HTMLAnchorElement) || !shouldDelayNav(btn)) return
       if (btn.hasAttribute(NAV_LOCK)) return
 
       e.preventDefault()
       e.stopPropagation()
-      releasePop(btn)
+      releasePop(btn, lastPointer.x, lastPointer.y)
       btn.setAttribute(NAV_LOCK, '1')
 
       const url = new URL(btn.href)
       const to = `${url.pathname}${url.search}${url.hash}`
 
       window.setTimeout(() => {
-        setPopState(btn, null)
+        delete btn.dataset.btnPop
         btn.removeAttribute(NAV_LOCK)
+        clearRipples(btn)
         window.dispatchEvent(new CustomEvent(BTN_POP_NAV_EVENT, { detail: { to } }))
       }, POP_MS)
     },
     true,
-  )
-
-  document.addEventListener(
-    'animationend',
-    (e) => {
-      if (!(e.target instanceof HTMLElement)) return
-      if (e.animationName !== 'btn-pop' && e.animationName !== 'btn-highlight-pop') return
-      if (e.animationName === 'btn-pop' && e.target.getAttribute(ATTR) === 'popping') {
-        setPopState(e.target, null)
-      }
-    },
-    { passive: true },
   )
 }

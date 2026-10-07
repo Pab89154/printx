@@ -44,7 +44,15 @@ import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
 
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
+const ALLOWED_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+const IMAGE_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+}
 
 /** Date-only expiry (YYYY-MM-DD) counts through end of that local day. */
 function announcementStillValid(expiresAt: string | null | undefined): boolean {
@@ -130,7 +138,12 @@ function publicStand(row: ReturnType<typeof rowToStand>) {
   }
 }
 
-async function parseMultipart(req: IncomingMessage): Promise<{ fields: Record<string, string>; filePath: string | null }> {
+async function parseMultipart(
+  req: IncomingMessage,
+  opts?: { allowedExt?: Set<string>; invalidTypeMessage?: string },
+): Promise<{ fields: Record<string, string>; filePath: string | null }> {
+  const allowedExt = opts?.allowedExt ?? ALLOWED_UPLOAD_EXT
+  const invalidTypeMessage = opts?.invalidTypeMessage ?? 'Invalid file type. Only .stl and .obj allowed.'
   const uploadsDir = await getUploadsDir()
   const form = formidable({
     uploadDir: uploadsDir,
@@ -152,9 +165,9 @@ async function parseMultipart(req: IncomingMessage): Promise<{ fields: Record<st
       const file = Array.isArray(upload) ? upload[0] : upload
       if (file?.filepath) {
         const ext = path.extname(file.originalFilename ?? file.filepath).toLowerCase()
-        if (!ALLOWED_UPLOAD_EXT.has(ext)) {
+        if (!allowedExt.has(ext)) {
           fs.unlinkSync(file.filepath)
-          return reject(new Error('Invalid file type. Only .stl and .obj allowed.'))
+          return reject(new Error(invalidTypeMessage))
         }
         const safeName = `${randomUUID()}${ext}`
         const dest = path.join(uploadsDir, safeName)
@@ -164,6 +177,79 @@ async function parseMultipart(req: IncomingMessage): Promise<{ fields: Record<st
       resolve({ fields: normalized, filePath })
     })
   })
+}
+
+type MailUserRow = {
+  id: string
+  email: string
+  display_name: string | null
+}
+
+async function loadMailMessage(
+  db: Awaited<ReturnType<typeof getDb>>,
+  messageId: string,
+  viewerId: string,
+  asRecipient: boolean,
+) {
+  const msg = await db.get<{
+    id: string
+    subject: string
+    body: string
+    created_at: string
+    sender_id: string
+    sender_email: string
+    sender_display_name: string | null
+  }>(
+    `
+    SELECT m.id, m.subject, m.body, m.created_at, m.sender_id,
+           u.email as sender_email, u.display_name as sender_display_name
+    FROM mail_messages m
+    JOIN users u ON u.id = m.sender_id
+    WHERE m.id = ?
+  `,
+    messageId,
+  )
+  if (!msg) return null
+
+  let readAt: string | null = null
+  if (asRecipient) {
+    const mine = await db.get<{ read_at: string | null }>(
+      'SELECT read_at FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
+      messageId,
+      viewerId,
+    )
+    if (!mine) return null
+    readAt = mine.read_at
+  } else if (msg.sender_id !== viewerId) {
+    return null
+  }
+
+  const recipients = await db.all<MailUserRow>(
+    `
+    SELECT u.id, u.email, u.display_name
+    FROM mail_recipients r
+    JOIN users u ON u.id = r.recipient_id
+    WHERE r.message_id = ?
+    ORDER BY lower(u.email) ASC
+  `,
+    messageId,
+  )
+
+  return {
+    id: msg.id,
+    subject: msg.subject,
+    body: msg.body,
+    createdAt: msg.created_at,
+    senderId: msg.sender_id,
+    senderEmail: msg.sender_email,
+    senderDisplayName: msg.sender_display_name,
+    readAt,
+    recipients: recipients.map((r) => ({
+      id: r.id,
+      email: r.email,
+      displayName: r.display_name,
+    })),
+  }
 }
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPath: string, method: string): Promise<boolean> {
@@ -287,6 +373,28 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     )
     void notifyContactMessage({ name, email, inquiryType, message })
     send(res, 201, { ok: true })
+    return true
+  }
+
+  // Public product images (uploaded by admins). Custom-request STL/OBJ stay admin-only.
+  const publicUploadMatch = urlPath.match(/^\/api\/public\/uploads\/([^/]+)$/)
+  if (publicUploadMatch && method === 'GET') {
+    const filename = publicUploadMatch[1] ?? ''
+    if (!/^[\w-]+\.(jpe?g|png|webp|gif)$/i.test(filename)) {
+      send(res, 400, { error: 'Invalid file name' })
+      return true
+    }
+    const uploadsDir = await getUploadsDir()
+    const filePath = path.join(uploadsDir, filename)
+    if (!filePath.startsWith(uploadsDir) || !fs.existsSync(filePath)) {
+      send(res, 404, { error: 'File not found' })
+      return true
+    }
+    const ext = path.extname(filename).toLowerCase()
+    res.statusCode = 200
+    res.setHeader('Content-Type', IMAGE_MIME[ext] ?? 'application/octet-stream')
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    fs.createReadStream(filePath).pipe(res)
     return true
   }
 
@@ -559,6 +667,25 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
+  if (urlPath === '/api/admin/products/upload-image' && method === 'POST') {
+    if (!requirePerm(admin, 'products', res)) return true
+    try {
+      const { filePath } = await parseMultipart(req, {
+        allowedExt: ALLOWED_IMAGE_EXT,
+        invalidTypeMessage: 'Invalid image type. Use JPG, PNG, WEBP, or GIF.',
+      })
+      if (!filePath) {
+        send(res, 400, { error: 'Image file is required.' })
+        return true
+      }
+      send(res, 201, { url: `/api/public/uploads/${filePath}` })
+      return true
+    } catch (err) {
+      send(res, 400, { error: err instanceof Error ? err.message : 'Upload failed' })
+      return true
+    }
+  }
+
   const productMatch = urlPath.match(/^\/api\/admin\/products\/([^/]+)$/)
   if (productMatch) {
     if (!requirePerm(admin, 'products', res)) return true
@@ -608,6 +735,169 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     if (!requirePerm(admin, 'messages', res)) return true
     send(res, 200, await db.all('SELECT * FROM contact_messages ORDER BY created_at DESC'))
     return true
+  }
+
+  if (urlPath === '/api/admin/mail/recipients' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    const rows = await db.all<MailUserRow>(
+      'SELECT id, email, display_name FROM users ORDER BY lower(email) ASC',
+    )
+    send(
+      res,
+      200,
+      rows.map((r) => ({ id: r.id, email: r.email, displayName: r.display_name })),
+    )
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/inbox' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    const rows = await db.all<{ id: string }>(
+      `
+      SELECT m.id
+      FROM mail_messages m
+      JOIN mail_recipients r ON r.message_id = m.id
+      WHERE r.recipient_id = ?
+      ORDER BY m.created_at DESC
+    `,
+      admin.id,
+    )
+    const messages = []
+    for (const row of rows) {
+      const full = await loadMailMessage(db, row.id, admin.id, true)
+      if (full) messages.push(full)
+    }
+    send(res, 200, messages)
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/sent' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    const rows = await db.all<{ id: string }>(
+      `
+      SELECT id FROM mail_messages
+      WHERE sender_id = ?
+      ORDER BY created_at DESC
+    `,
+      admin.id,
+    )
+    const messages = []
+    for (const row of rows) {
+      const full = await loadMailMessage(db, row.id, admin.id, false)
+      if (full) messages.push(full)
+    }
+    send(res, 200, messages)
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail' && method === 'POST') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    const body = await readJson(req)
+    const subject = sanitizeText(body.subject, 200)
+    const messageBody = sanitizeText(body.body, 8000)
+    const recipientIds = Array.isArray(body.recipientIds)
+      ? [...new Set(body.recipientIds.map((id) => String(id)).filter(Boolean))]
+      : []
+    if (!subject.trim() && !messageBody.trim()) {
+      send(res, 400, { error: 'Subject or message is required.' })
+      return true
+    }
+    if (recipientIds.length === 0) {
+      send(res, 400, { error: 'Pick at least one recipient.' })
+      return true
+    }
+    const validRecipients = await db.all<{ id: string }>(
+      `SELECT id FROM users WHERE id IN (${recipientIds.map(() => '?').join(',')})`,
+      ...recipientIds,
+    )
+    if (validRecipients.length === 0) {
+      send(res, 400, { error: 'No valid recipients found.' })
+      return true
+    }
+    const messageId = randomUUID()
+    const now = new Date().toISOString()
+    await db.run(
+      'INSERT INTO mail_messages (id, sender_id, subject, body, created_at) VALUES (?, ?, ?, ?, ?)',
+      messageId,
+      admin.id,
+      subject || '(no subject)',
+      messageBody,
+      now,
+    )
+    for (const recipient of validRecipients) {
+      await db.run(
+        'INSERT INTO mail_recipients (id, message_id, recipient_id, read_at) VALUES (?, ?, ?, ?)',
+        randomUUID(),
+        messageId,
+        recipient.id,
+        recipient.id === admin.id ? now : null,
+      )
+    }
+    const created = await loadMailMessage(db, messageId, admin.id, false)
+    send(res, 201, created)
+    return true
+  }
+
+  const mailMatch = urlPath.match(/^\/api\/admin\/mail\/([^/]+)(?:\/(read))?$/)
+  if (mailMatch) {
+    if (!requirePerm(admin, 'mail', res)) return true
+    const messageId = mailMatch[1]
+    const action = mailMatch[2]
+
+    if (method === 'PATCH' && action === 'read') {
+      const updated = await db.run(
+        `
+        UPDATE mail_recipients
+        SET read_at = ?
+        WHERE message_id = ? AND recipient_id = ? AND read_at IS NULL
+      `,
+        new Date().toISOString(),
+        messageId,
+        admin.id,
+      )
+      if (!updated) {
+        // still ok if already read or not a recipient
+      }
+      const full = await loadMailMessage(db, messageId, admin.id, true)
+      if (!full) {
+        send(res, 404, { error: 'Message not found' })
+        return true
+      }
+      send(res, 200, full)
+      return true
+    }
+
+    if (method === 'DELETE' && !action) {
+      const asSender = await db.get<{ id: string }>(
+        'SELECT id FROM mail_messages WHERE id = ? AND sender_id = ?',
+        messageId,
+        admin.id,
+      )
+      if (asSender) {
+        await db.run('DELETE FROM mail_messages WHERE id = ?', messageId)
+        send(res, 200, { ok: true })
+        return true
+      }
+      const asRecipient = await db.get<{ id: string }>(
+        'SELECT id FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
+        messageId,
+        admin.id,
+      )
+      if (!asRecipient) {
+        send(res, 404, { error: 'Message not found' })
+        return true
+      }
+      await db.run('DELETE FROM mail_recipients WHERE id = ?', asRecipient.id)
+      const remaining = await db.get<{ c: number | string }>(
+        'SELECT COUNT(*) as c FROM mail_recipients WHERE message_id = ?',
+        messageId,
+      )
+      if (Number(remaining?.c ?? 0) === 0) {
+        await db.run('DELETE FROM mail_messages WHERE id = ?', messageId)
+      }
+      send(res, 200, { ok: true })
+      return true
+    }
   }
 
   const contactMatch = urlPath.match(/^\/api\/admin\/contact-messages\/([^/]+)$/)

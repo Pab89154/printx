@@ -100,6 +100,22 @@ create table if not exists contact_messages (
   created_at text not null
 );
 
+create table if not exists mail_messages (
+  id text primary key,
+  sender_id text not null references users(id) on delete cascade,
+  subject text not null default '',
+  body text not null default '',
+  created_at text not null
+);
+
+create table if not exists mail_recipients (
+  id text primary key,
+  message_id text not null references mail_messages(id) on delete cascade,
+  recipient_id text not null references users(id) on delete cascade,
+  read_at text,
+  unique (message_id, recipient_id)
+);
+
 create table if not exists website_settings (
   key text primary key,
   value text not null,
@@ -120,6 +136,8 @@ alter table stands enable row level security;
 alter table products enable row level security;
 alter table custom_requests enable row level security;
 alter table contact_messages enable row level security;
+alter table mail_messages enable row level security;
+alter table mail_recipients enable row level security;
 alter table website_settings enable row level security;
 
 revoke all on table users from anon, authenticated;
@@ -129,4 +147,6 @@ revoke all on table stands from anon, authenticated;
 revoke all on table products from anon, authenticated;
 revoke all on table custom_requests from anon, authenticated;
 revoke all on table contact_messages from anon, authenticated;
+revoke all on table mail_messages from anon, authenticated;
+revoke all on table mail_recipients from anon, authenticated;
 revoke all on table website_settings from anon, authenticated;

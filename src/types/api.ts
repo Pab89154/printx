@@ -105,6 +105,7 @@ export type Stand = PublicStand & {
 export type AdminPermissions = {
   dashboard: boolean
   messages: boolean
+  mail: boolean
   stands: boolean
   products: boolean
   requests: boolean
@@ -114,6 +115,24 @@ export type AdminPermissions = {
   settings: boolean
   website_status: boolean
   manage_admins: boolean
+}
+
+export type MailRecipientOption = {
+  id: string
+  email: string
+  displayName: string | null
+}
+
+export type MailMessage = {
+  id: string
+  subject: string
+  body: string
+  createdAt: string
+  senderId: string
+  senderEmail: string
+  senderDisplayName: string | null
+  readAt: string | null
+  recipients: MailRecipientOption[]
 }
 
 export type AdminUser = {

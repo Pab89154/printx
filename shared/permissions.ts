@@ -4,6 +4,7 @@ export const MAIN_ADMIN_EMAIL = 'pablo.molina@printx.pw'
 export const PERMISSION_KEYS = [
   'dashboard',
   'messages',
+  'mail',
   'stands',
   'products',
   'requests',
@@ -22,6 +23,7 @@ export type AdminPermissions = Record<PermissionKey, boolean>
 export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   dashboard: 'Dashboard',
   messages: 'Inbox (feedback & contact)',
+  mail: 'Mail (admin messages)',
   stands: 'Stands',
   products: 'Products',
   requests: 'Custom Requests',
@@ -38,6 +40,7 @@ export function defaultPermissions(): AdminPermissions {
   return {
     dashboard: true,
     messages: true,
+    mail: true,
     stands: true,
     products: true,
     requests: true,

@@ -98,18 +98,24 @@ section[id] {
 
 /*
   Shared button system — matched to the reference screen recording:
-  soft expanding oval highlight behind the label + spring scale on release.
+  soft expanding circular highlight under the label (ripple) + light spring.
 */
-.btn {
+.btn,
+.press-pop {
   position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  transform-origin: center center;
+}
+
+.btn {
   display: inline-flex;
   cursor: pointer;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   box-sizing: border-box;
-  isolation: isolate;
-  overflow: hidden;
   min-height: 2.75rem;
   padding: 0.625rem 1.25rem;
   border: 1px solid transparent;
@@ -119,8 +125,6 @@ section[id] {
   line-height: 1.25;
   text-decoration: none;
   user-select: none;
-  -webkit-tap-highlight-color: transparent;
-  transform-origin: center center;
   will-change: transform;
   transition:
     transform 160ms cubic-bezier(0.34, 1.45, 0.64, 1),
@@ -129,25 +133,6 @@ section[id] {
     color 180ms ease,
     box-shadow 180ms ease;
   transform: translateY(0) scale(1);
-}
-
-/* Soft oval highlight that expands on press (the “pop” from the video) */
-.btn::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  z-index: -1;
-  width: 140%;
-  aspect-ratio: 1;
-  border-radius: 999px;
-  background: currentColor;
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, -50%) scale(0.35);
-  transition:
-    transform 160ms cubic-bezier(0.22, 1.35, 0.36, 1),
-    opacity 160ms ease;
 }
 
 a.btn {
@@ -159,55 +144,107 @@ a.btn {
   opacity: 0.5;
 }
 
-/* Finger/mouse down — squash + highlight grows in (data-attr survives React re-renders) */
-.btn[data-btn-pop='pressing']:not(:disabled) {
-  transform: translateY(2px) scale(0.9) !important;
-  transition-duration: 60ms !important;
+/* Expanding soft oval — the “pop” from the video */
+.press-pop-ripple {
+  position: absolute;
+  /* Above the solid fill (z-index:-1 sits under opaque backgrounds and never shows) */
+  z-index: 1;
+  border-radius: 999px;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0);
+  opacity: 0;
+  background: radial-gradient(
+    circle,
+    rgb(255 255 255 / 0.72) 0%,
+    rgb(255 255 255 / 0.4) 32%,
+    rgb(255 255 255 / 0.14) 58%,
+    rgb(255 255 255 / 0) 74%
+  );
 }
 
-.btn[data-btn-pop='pressing']:not(:disabled)::before {
-  opacity: 0.34;
-  transform: translate(-50%, -50%) scale(1);
-  transition-duration: 70ms;
+.btn > *:not(.press-pop-ripple),
+.press-pop > *:not(.press-pop-ripple) {
+  position: relative;
+  z-index: 2;
 }
 
-/* Release — spring scale + highlight blooms outward */
-@keyframes btn-pop {
+/* Light surfaces — brand-tinted mint bloom like the reference */
+.btn-secondary .press-pop-ripple,
+.btn-ghost .press-pop-ripple {
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--color-electric) 55%, #fff) 0%,
+    color-mix(in srgb, var(--color-electric) 32%, transparent) 36%,
+    color-mix(in srgb, var(--color-electric) 12%, transparent) 60%,
+    transparent 76%
+  );
+}
+
+.btn-danger .press-pop-ripple {
+  background: radial-gradient(
+    circle,
+    rgb(220 38 38 / 0.4) 0%,
+    rgb(220 38 38 / 0.16) 42%,
+    transparent 74%
+  );
+}
+
+@keyframes press-pop-in {
   0% {
-    transform: translateY(2px) scale(0.9);
+    transform: translate(-50%, -50%) scale(0.15);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.85;
+  }
+}
+
+@keyframes press-pop-bloom {
+  0% {
+    transform: translate(-50%, -50%) scale(0.2);
+    opacity: 1;
   }
   40% {
-    transform: translateY(-5px) scale(1.1);
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.75;
   }
-  70% {
-    transform: translateY(0) scale(0.97);
+  100% {
+    transform: translate(-50%, -50%) scale(1.35);
+    opacity: 0;
+  }
+}
+
+.press-pop-ripple--press.is-on {
+  animation: press-pop-in 220ms cubic-bezier(0.22, 1.2, 0.36, 1) forwards;
+}
+
+.press-pop-ripple--bloom.is-on {
+  animation: press-pop-bloom 420ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Light spring on the host so the press still feels physical */
+.btn[data-btn-pop='pressing']:not(:disabled),
+.press-pop[data-btn-pop='pressing'] {
+  transform: translateY(1px) scale(0.97) !important;
+  transition-duration: 70ms !important;
+}
+
+.btn[data-btn-pop='popping']:not(:disabled),
+.press-pop[data-btn-pop='popping'] {
+  animation: btn-host-pop 420ms cubic-bezier(0.22, 1.45, 0.36, 1);
+}
+
+@keyframes btn-host-pop {
+  0% {
+    transform: translateY(1px) scale(0.97);
+  }
+  40% {
+    transform: translateY(-3px) scale(1.04);
   }
   100% {
     transform: translateY(0) scale(1);
   }
-}
-
-@keyframes btn-highlight-pop {
-  0% {
-    opacity: 0.4;
-    transform: translate(-50%, -50%) scale(0.9);
-  }
-  55% {
-    opacity: 0.22;
-    transform: translate(-50%, -50%) scale(1.25);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(1.7);
-  }
-}
-
-.btn[data-btn-pop='popping']:not(:disabled) {
-  animation: btn-pop 360ms cubic-bezier(0.22, 1.45, 0.36, 1);
-}
-
-.btn[data-btn-pop='popping']:not(:disabled)::before {
-  animation: btn-highlight-pop 360ms cubic-bezier(0.22, 1.2, 0.36, 1);
 }
 
 /* Important — light electric → dark cyan on hover + lift */
@@ -216,10 +253,6 @@ a.btn {
   border-color: var(--color-electric);
   color: #fff;
   box-shadow: 0 10px 20px -8px color-mix(in srgb, var(--color-electric) 45%, transparent);
-}
-
-.btn-primary::before {
-  background: #fff;
 }
 
 .btn-primary[data-btn-pop='pressing']:not(:disabled) {
@@ -234,10 +267,6 @@ a.btn {
   border-color: #e2e8f0;
 }
 
-.btn-secondary::before {
-  background: var(--color-electric);
-}
-
 .btn-secondary[data-btn-pop='pressing']:not(:disabled) {
   background: color-mix(in srgb, var(--color-electric) 14%, #fff);
   border-color: var(--color-electric);
@@ -249,10 +278,6 @@ a.btn {
   background: #fff;
   color: #dc2626;
   border-color: #fecaca;
-}
-
-.btn-danger::before {
-  background: #dc2626;
 }
 
 .btn-danger[data-btn-pop='pressing']:not(:disabled) {
@@ -269,10 +294,6 @@ a.btn {
   box-shadow: 0 10px 18px -8px rgb(220 38 38 / 30%);
 }
 
-.btn-danger-solid::before {
-  background: #fff;
-}
-
 .btn-danger-solid[data-btn-pop='pressing']:not(:disabled) {
   background: #b91c1c;
   border-color: #b91c1c;
@@ -285,10 +306,6 @@ a.btn {
   border-color: #e2e8f0;
 }
 
-.btn-ghost::before {
-  background: var(--color-navy);
-}
-
 .btn-ghost[data-btn-pop='pressing']:not(:disabled) {
   background: #e2e8f0;
 }
@@ -298,10 +315,6 @@ a.btn {
   background: transparent;
   color: #fff;
   border-color: rgb(255 255 255 / 30%);
-}
-
-.btn-outline::before {
-  background: #fff;
 }
 
 .btn-outline[data-btn-pop='pressing']:not(:disabled) {
@@ -324,11 +337,6 @@ a.btn {
     color: var(--color-electric);
     box-shadow: 0 10px 18px -10px color-mix(in srgb, var(--color-electric) 35%, transparent);
     transform: translateY(-3px) scale(1.02);
-  }
-
-  .btn-secondary:hover:not(:disabled):not([data-btn-pop])::before {
-    opacity: 0.1;
-    transform: translate(-50%, -50%) scale(1);
   }
 
   .btn-danger:hover:not(:disabled):not([data-btn-pop]) {
@@ -361,7 +369,9 @@ a.btn {
 @media (prefers-reduced-motion: reduce) {
   .btn,
   .btn[data-btn-pop]:not(:disabled),
-  .btn::before {
+  .press-pop,
+  .press-pop[data-btn-pop],
+  .press-pop-ripple {
     animation: none !important;
     transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease !important;
     transform: none !important;

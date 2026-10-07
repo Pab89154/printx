@@ -64,6 +64,19 @@ export const api = {
       update: (id: string, body: Record<string, unknown>) =>
         request(`/api/admin/products/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
       delete: (id: string) => request(`/api/admin/products/${id}`, { method: 'DELETE' }),
+      uploadImage: (file: File) => {
+        const formData = new FormData()
+        formData.append('file', file)
+        return fetch('/api/admin/products/upload-image', {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        }).then(async (res) => {
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error ?? 'Upload failed')
+          return data as { url: string }
+        })
+      },
     },
     requests: {
       list: () => request<import('../types/api.ts').CustomRequest[]>('/api/admin/custom-requests'),
@@ -75,6 +88,19 @@ export const api = {
       updateStatus: (id: string, status: 'new' | 'read') =>
         request(`/api/admin/contact-messages/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
       delete: (id: string) => request(`/api/admin/contact-messages/${id}`, { method: 'DELETE' }),
+    },
+    mail: {
+      recipients: () => request<import('../types/api.ts').MailRecipientOption[]>('/api/admin/mail/recipients'),
+      inbox: () => request<import('../types/api.ts').MailMessage[]>('/api/admin/mail/inbox'),
+      sent: () => request<import('../types/api.ts').MailMessage[]>('/api/admin/mail/sent'),
+      send: (body: { subject: string; body: string; recipientIds: string[] }) =>
+        request<import('../types/api.ts').MailMessage>('/api/admin/mail', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+      markRead: (id: string) =>
+        request<import('../types/api.ts').MailMessage>(`/api/admin/mail/${id}/read`, { method: 'PATCH' }),
+      delete: (id: string) => request(`/api/admin/mail/${id}`, { method: 'DELETE' }),
     },
     schools: {
       list: () => request<import('../types/api.ts').School[]>('/api/admin/schools'),

@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs'
 import { randomUUID } from 'node:crypto'
+import { resolveImageUrl } from '../shared/imageUrl.ts'
 import type { Stand, WebsiteContent } from './types.ts'
 import { getDbApi, UPLOADS_DIR, type DbApi } from './dbClient.ts'
 
@@ -93,6 +94,22 @@ async function migrate(database: DbApi) {
       message TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'new',
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mail_messages (
+      id TEXT PRIMARY KEY,
+      sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      subject TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mail_recipients (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL REFERENCES mail_messages(id) ON DELETE CASCADE,
+      recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      read_at TEXT,
+      UNIQUE (message_id, recipient_id)
     );
 
     CREATE TABLE IF NOT EXISTS website_settings (
@@ -515,7 +532,8 @@ export function rowToProduct(row: Record<string, unknown>) {
     description: row.description as string,
     price: row.price as number,
     category: row.category as string,
-    image: row.image as string,
+    // Unwrap Brave/search proxy URLs — those proxies block hotlinking in the browser.
+    image: resolveImageUrl(row.image as string),
     emoji: row.emoji as string,
     imageGradient: row.image_gradient as string,
     available: Boolean(row.available),

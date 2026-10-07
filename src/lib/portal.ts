@@ -8,6 +8,7 @@ const PORTAL_ORIGIN = 'https://portal.printx.pw'
 const SECTION_ORDER: { section: string; perm: PermissionKey }[] = [
   { section: 'dashboard', perm: 'dashboard' },
   { section: 'messages', perm: 'messages' },
+  { section: 'mail', perm: 'mail' },
   { section: 'stands', perm: 'stands' },
   { section: 'products', perm: 'products' },
   { section: 'requests', perm: 'requests' },

@@ -11,6 +11,7 @@ import { AdminStands } from './admin/AdminStands'
 import { AdminProducts } from './admin/AdminProducts'
 import { AdminRequests } from './admin/AdminRequests'
 import { AdminMessages } from './admin/AdminMessages'
+import { AdminMail } from './admin/AdminMail'
 import { AdminSchools } from './admin/AdminSchools'
 import { AdminContent } from './admin/AdminContent'
 import { AdminSettings } from './admin/AdminSettings'
@@ -47,6 +48,7 @@ function PortalRoutes() {
         <Route element={<AdminLayout />}>
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="messages" element={<AdminMessages />} />
+          <Route path="mail" element={<AdminMail />} />
           <Route path="stands" element={<AdminStands />} />
           <Route path="products" element={<AdminProducts />} />
           <Route path="requests" element={<AdminRequests />} />
@@ -71,6 +73,7 @@ function PublicRoutes() {
         <Route element={<AdminLayout />}>
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="messages" element={<AdminMessages />} />
+          <Route path="mail" element={<AdminMail />} />
           <Route path="stands" element={<AdminStands />} />
           <Route path="products" element={<AdminProducts />} />
           <Route path="requests" element={<AdminRequests />} />

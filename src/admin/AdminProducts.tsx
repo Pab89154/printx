@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { resolveImageUrl } from '../lib/imageUrl'
 import { PRODUCT_ICON_OPTIONS, WebIcon } from '../lib/webIcon'
 import type { Product } from '../types/api'
 
@@ -18,6 +19,8 @@ const gradients = [
 export function AdminProducts() {
   const [products, setProducts] = useState<Product[]>([])
   const [editing, setEditing] = useState<Partial<Product> | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
 
   async function load() {
     setProducts(await api.admin.products.list())
@@ -38,16 +41,36 @@ export function AdminProducts() {
       available: true,
       featured: false,
       displayOrder: products.length + 1,
+      image: '',
     })
+    setUploadError('')
   }
 
   async function save() {
     if (!editing) return
-    const body = { ...editing }
+    const body = {
+      ...editing,
+      image: resolveImageUrl(editing.image),
+    }
     if (editing.id) await api.admin.products.update(editing.id, body)
     else await api.admin.products.create(body)
     setEditing(null)
+    setUploadError('')
     load()
+  }
+
+  async function onPickImage(file: File | null) {
+    if (!file || !editing) return
+    setUploadError('')
+    setUploading(true)
+    try {
+      const { url } = await api.admin.products.uploadImage(file)
+      setEditing({ ...editing, image: url })
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
   }
 
   return (
@@ -79,9 +102,53 @@ export function AdminProducts() {
                 {gradients.map((g) => <option key={g} value={g}>{g}</option>)}
               </select>
             </label>
-            <label className="sm:col-span-2">Product image URL (optional)
-              <input className={inputClass} type="url" placeholder="https://example.com/photo.jpg" value={editing.image ?? ''} onChange={(e) => setEditing({ ...editing, image: e.target.value })} />
-            </label>
+            <div className="sm:col-span-2 space-y-3">
+              <label className="block">
+                Product photo (upload)
+                <input
+                  className={`${inputClass} mt-1`}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
+                  disabled={uploading}
+                  onChange={(e) => void onPickImage(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              {uploading && <p className="text-sm text-muted">Uploading…</p>}
+              {uploadError && <p className="text-sm text-red-600">{uploadError}</p>}
+              {editing.image ? (
+                <div className="flex items-start gap-3">
+                  <img
+                    src={resolveImageUrl(editing.image)}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    className="h-20 w-20 rounded-xl border object-cover"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setEditing({ ...editing, image: '' })}
+                  >
+                    Remove photo
+                  </button>
+                </div>
+              ) : null}
+              <label className="block">
+                Or image URL (optional)
+                <input
+                  className={`${inputClass} mt-1`}
+                  type="url"
+                  placeholder="https://example.com/photo.jpg"
+                  value={editing.image ?? ''}
+                  onChange={(e) => setEditing({ ...editing, image: e.target.value })}
+                  onBlur={() =>
+                    setEditing((prev) => (prev ? { ...prev, image: resolveImageUrl(prev.image) } : prev))
+                  }
+                />
+                <span className="mt-1 block text-xs text-muted">
+                  Prefer uploading a photo. Direct links also work; Brave search image links are unwrapped automatically.
+                </span>
+              </label>
+            </div>
             <label className="sm:col-span-2">Description<textarea className={inputClass} rows={2} value={editing.description ?? ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={editing.available ?? true} onChange={(e) => setEditing({ ...editing, available: e.target.checked })} /> Available</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={editing.featured ?? false} onChange={(e) => setEditing({ ...editing, featured: e.target.checked })} /> Featured</label>

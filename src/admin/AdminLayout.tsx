@@ -7,6 +7,7 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  Mail,
   MapPin,
   Menu,
   Package,
@@ -22,6 +23,7 @@ import type { PermissionKey } from '../../shared/permissions'
 const links: { section: string; label: string; icon: typeof LayoutDashboard; perm: PermissionKey }[] = [
   { section: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, perm: 'dashboard' },
   { section: 'messages', label: 'Inbox', icon: Inbox, perm: 'messages' },
+  { section: 'mail', label: 'Mail', icon: Mail, perm: 'mail' },
   { section: 'stands', label: 'Stands', icon: MapPin, perm: 'stands' },
   { section: 'products', label: 'Products', icon: Package, perm: 'products' },
   { section: 'requests', label: 'Custom Requests', icon: Sparkles, perm: 'requests' },
@@ -133,7 +135,7 @@ export function AdminLayout() {
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-colors md:py-2.5 ${
+                `press-pop flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-colors md:py-2.5 ${
                   isActive ? 'bg-electric text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                 }`
               }
@@ -148,7 +150,7 @@ export function AdminLayout() {
           {can('sandbox') && (
             <NavLink
               to={adminPath('sandbox')}
-              className="mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-amber-200 hover:bg-white/10 hover:text-white md:py-2.5"
+              className="press-pop mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-amber-200 hover:bg-white/10 hover:text-white md:py-2.5"
             >
               <FlaskConical size={18} className="shrink-0" />
               Site sandbox
