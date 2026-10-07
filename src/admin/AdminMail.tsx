@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Pencil } from 'lucide-react'
 import { api } from '../lib/api'
 import type { MailMessage, MailRecipientOption } from '../types/api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -172,33 +173,41 @@ export function AdminMail() {
         In-app messages between PrintX admins. Separate from the public contact Inbox — nothing is sent as real email.
       </p>
 
-      <div className="mt-6 flex flex-wrap gap-2">
-        {(
-          [
-            { id: 'inbox', label: unreadCount ? `Inbox (${unreadCount})` : 'Inbox' },
-            { id: 'sent', label: 'Sent' },
-            { id: 'compose', label: 'Compose' },
-          ] as const
-        ).map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => {
-              setTab(t.id)
-              setOpenId(null)
-              setError('')
-              if (t.id === 'compose' && composeMode !== 'new' && !subject && !body) {
-                resetCompose()
-              }
-              if (t.id === 'compose' && composeMode === 'new') {
-                // keep draft if any
-              }
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              { id: 'inbox' as const, label: unreadCount ? `Inbox (${unreadCount})` : 'Inbox' },
+              { id: 'sent' as const, label: 'Sent' },
+            ]
+          ).map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => {
+                setTab(t.id)
+                setOpenId(null)
+                setError('')
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className={`btn ${tab === 'compose' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => {
+            setTab('compose')
+            setOpenId(null)
+            setError('')
+            if (composeMode !== 'new' && !subject && !body) resetCompose()
+          }}
+        >
+          <Pencil size={16} />
+          Compose
+        </button>
       </div>
 
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
