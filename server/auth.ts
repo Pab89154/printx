@@ -254,6 +254,24 @@ export async function updateAdminDisplayName(
   return name
 }
 
+export async function getAdminMailSignature(userId: string): Promise<string> {
+  const db = await getDb()
+  const row = await db.get<{ mail_signature?: string | null }>(
+    'SELECT mail_signature FROM users WHERE id = ? AND role = ?',
+    userId,
+    'admin',
+  )
+  return typeof row?.mail_signature === 'string' ? row.mail_signature : ''
+}
+
+export async function updateAdminMailSignature(userId: string, signature: unknown): Promise<string> {
+  const db = await getDb()
+  const next =
+    typeof signature === 'string' ? signature.replace(/\r\n/g, '\n').slice(0, 2000) : ''
+  await db.run('UPDATE users SET mail_signature = ? WHERE id = ? AND role = ?', next, userId, 'admin')
+  return next
+}
+
 export async function createAdminUser(
   email: string,
   password: string,

@@ -91,16 +91,50 @@ export const api = {
     },
     mail: {
       recipients: () => request<import('../types/api.ts').MailRecipientOption[]>('/api/admin/mail/recipients'),
+      unreadCount: () =>
+        request<{
+          count: number
+          latestId: string | null
+          latestSubject: string | null
+          latestFrom: string | null
+        }>('/api/admin/mail/unread-count'),
       inbox: () => request<import('../types/api.ts').MailMessage[]>('/api/admin/mail/inbox'),
+      archived: () => request<import('../types/api.ts').MailMessage[]>('/api/admin/mail/archived'),
       sent: () => request<import('../types/api.ts').MailMessage[]>('/api/admin/mail/sent'),
-      send: (body: { subject: string; body: string; recipientIds: string[] }) =>
+      getSignature: () => request<{ signature: string }>('/api/admin/mail/signature'),
+      updateSignature: (signature: string) =>
+        request<{ signature: string }>('/api/admin/mail/signature', {
+          method: 'PATCH',
+          body: JSON.stringify({ signature }),
+        }),
+      send: (body: { subject: string; body: string; recipientIds: string[]; scheduledAt?: string }) =>
         request<import('../types/api.ts').MailMessage>('/api/admin/mail', {
           method: 'POST',
           body: JSON.stringify(body),
         }),
       markRead: (id: string) =>
         request<import('../types/api.ts').MailMessage>(`/api/admin/mail/${id}/read`, { method: 'PATCH' }),
-      delete: (id: string) => request(`/api/admin/mail/${id}`, { method: 'DELETE' }),
+      markUnread: (id: string) =>
+        request<import('../types/api.ts').MailMessage>(`/api/admin/mail/${id}/unread`, { method: 'PATCH' }),
+      archive: (id: string) =>
+        request<import('../types/api.ts').MailMessage>(`/api/admin/mail/${id}/archive`, { method: 'PATCH' }),
+      unarchive: (id: string) =>
+        request<import('../types/api.ts').MailMessage>(`/api/admin/mail/${id}/unarchive`, { method: 'PATCH' }),
+      trash: () => request<import('../types/api.ts').MailMessage[]>('/api/admin/mail/trash'),
+      scheduled: () => request<import('../types/api.ts').MailMessage[]>('/api/admin/mail/scheduled'),
+      restore: (id: string) =>
+        request<import('../types/api.ts').MailMessage>(`/api/admin/mail/${id}/restore`, { method: 'PATCH' }),
+      cancelSchedule: (id: string) =>
+        request<{ ok: boolean }>(`/api/admin/mail/${id}/cancel-schedule`, { method: 'PATCH' }),
+      sendNow: (id: string) =>
+        request<import('../types/api.ts').MailMessage>(`/api/admin/mail/${id}/send-now`, { method: 'PATCH' }),
+      delete: (id: string, opts?: { mailbox?: 'inbox' | 'archived' | 'sent' | 'trash'; forever?: boolean }) => {
+        const params = new URLSearchParams()
+        if (opts?.forever || opts?.mailbox === 'trash') params.set('forever', '1')
+        if (opts?.mailbox) params.set('mailbox', opts.mailbox)
+        const qs = params.toString()
+        return request(`/api/admin/mail/${id}${qs ? `?${qs}` : ''}`, { method: 'DELETE' })
+      },
     },
     schools: {
       list: () => request<import('../types/api.ts').School[]>('/api/admin/schools'),

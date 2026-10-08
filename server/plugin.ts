@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect, Plugin } from 'vite'
 import { ensureDbReady } from './db.ts'
-import { handleApi } from './router.ts'
+import { handleApi, startMailScheduleFlusher } from './router.ts'
 
 const apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
   const url = req.url?.split('?')[0] ?? ''
@@ -28,10 +28,12 @@ export function printxApiPlugin(): Plugin {
     name: 'printx-api',
     async configureServer(server) {
       await ensureDbReady()
+      startMailScheduleFlusher()
       server.middlewares.use(apiMiddleware)
     },
     async configurePreviewServer(server) {
       await ensureDbReady()
+      startMailScheduleFlusher()
       server.middlewares.use(apiMiddleware)
     },
   }

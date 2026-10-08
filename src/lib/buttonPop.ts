@@ -8,7 +8,7 @@ export const BTN_POP_NAV_EVENT = 'printx:btn-pop-nav'
 
 const TARGET = '.btn, .press-pop'
 const NAV_LOCK = 'data-btn-nav-lock'
-const POP_MS = 420
+const POP_MS = 480
 const RIPPLE_CLASS = 'press-pop-ripple'
 
 let pressedBtn: HTMLElement | null = null
@@ -40,9 +40,8 @@ function spawnRipple(
 ) {
   ensureHostStyles(btn)
   const rect = btn.getBoundingClientRect()
-  // Keep the circle edge inside the control so the bloom reads like the video
-  // (oversized ripples look like a flat wash, not an expanding oval).
-  const size = Math.max(rect.width * 0.92, rect.height * 2.4) * (kind === 'bloom' ? 1.25 : 0.85)
+  // Size so the expanding oval edge stays readable inside the control.
+  const size = Math.max(rect.width * 1.05, rect.height * 2.8) * (kind === 'bloom' ? 1.45 : 1)
   const x = clientX - rect.left
   const y = clientY - rect.top
 

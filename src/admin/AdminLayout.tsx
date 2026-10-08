@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { Logo } from '../components/Logo'
+import { useMailUnread } from '../hooks/useMailUnread'
 import { adminHomePath, adminPath, firstAllowedAdminPath, publicSiteUrl } from '../lib/portal'
 import type { PermissionKey } from '../../shared/permissions'
 
@@ -37,10 +38,14 @@ export function AdminLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
+  const { unreadCount, ensureMailNotificationPermission } = useMailUnread(can('mail'))
 
   const allowedLinks = links.filter((l) => can(l.perm))
   const navLinks = allowedLinks.map((l) => ({ ...l, to: adminPath(l.section) }))
   const currentLabel = navLinks.find((l) => location.pathname.startsWith(l.to))?.label ?? 'Admin'
+  const mailBadge =
+    unreadCount > 0 ? (unreadCount > 99 ? '99+' : String(unreadCount)) : null
+  const onMailPage = location.pathname.startsWith(adminPath('mail'))
 
   useEffect(() => {
     setMenuOpen(false)
@@ -74,25 +79,41 @@ export function AdminLayout() {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
+    <div className="flex min-h-dvh max-w-[100vw] overflow-x-hidden bg-slate-50">
       <header className="fixed inset-x-0 top-0 z-40 flex min-h-14 items-center gap-3 border-b border-slate-200 bg-navy px-4 pb-0 pt-[env(safe-area-inset-top,0px)] text-white md:hidden">
-        <div className="flex h-14 w-full items-center gap-3">
+        <div className="flex h-14 w-full min-w-0 items-center gap-3">
           <button
             type="button"
             aria-label={menuOpen ? 'Close menu' : 'Open menu'}
             aria-expanded={menuOpen}
-            className="rounded-lg p-2 hover:bg-white/10"
+            className="shrink-0 rounded-lg p-2 hover:bg-white/10"
             onClick={() => setMenuOpen((o) => !o)}
           >
             {menuOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <Logo size={28} />
             <div className="min-w-0">
               <div className="truncate text-sm font-bold">PrintX Admin</div>
               <div className="truncate text-xs text-slate-400">{currentLabel}</div>
             </div>
           </div>
+          {mailBadge && !onMailPage && can('mail') ? (
+            <button
+              type="button"
+              className="relative shrink-0 rounded-lg p-2 hover:bg-white/10"
+              aria-label={`${unreadCount} unread mail`}
+              onClick={() => {
+                ensureMailNotificationPermission()
+                navigate(adminPath('mail'))
+              }}
+            >
+              <Mail size={20} />
+              <span className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+                {mailBadge}
+              </span>
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -130,10 +151,13 @@ export function AdminLayout() {
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-          {navLinks.map(({ to, label, icon: Icon }) => (
+          {navLinks.map(({ to, label, icon: Icon, section }) => (
             <NavLink
               key={to}
               to={to}
+              onClick={() => {
+                if (section === 'mail') ensureMailNotificationPermission()
+              }}
               className={({ isActive }) =>
                 `press-pop flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-colors md:py-2.5 ${
                   isActive ? 'bg-electric text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'
@@ -141,7 +165,15 @@ export function AdminLayout() {
               }
             >
               <Icon size={18} className="shrink-0" />
-              {label}
+              <span className="min-w-0 flex-1 truncate">{label}</span>
+              {section === 'mail' && mailBadge ? (
+                <span
+                  className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-bold leading-none text-white"
+                  aria-label={`${unreadCount} unread`}
+                >
+                  {mailBadge}
+                </span>
+              ) : null}
             </NavLink>
           ))}
         </nav>
@@ -175,8 +207,10 @@ export function AdminLayout() {
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1 px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[calc(3.5rem+env(safe-area-inset-top,0px)+0.75rem)] md:ml-64 md:p-8 md:pt-8">
-        <Outlet />
+      <main className="min-w-0 max-w-full flex-1 overflow-x-hidden px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[calc(3.5rem+env(safe-area-inset-top,0px)+0.75rem)] md:ml-64 md:p-8 md:pt-8">
+        <div className="mx-auto w-full min-w-0 max-w-6xl">
+          <Outlet />
+        </div>
       </main>
     </div>
   )

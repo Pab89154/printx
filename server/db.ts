@@ -19,6 +19,7 @@ async function migrate(database: DbApi) {
       email_verified INTEGER NOT NULL DEFAULT 0,
       permissions TEXT,
       display_name TEXT,
+      mail_signature TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
 
@@ -101,7 +102,9 @@ async function migrate(database: DbApi) {
       sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       subject TEXT NOT NULL DEFAULT '',
       body TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      sender_deleted_at TEXT,
+      scheduled_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS mail_recipients (
@@ -109,6 +112,8 @@ async function migrate(database: DbApi) {
       message_id TEXT NOT NULL REFERENCES mail_messages(id) ON DELETE CASCADE,
       recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       read_at TEXT,
+      archived_at TEXT,
+      deleted_at TEXT,
       UNIQUE (message_id, recipient_id)
     );
 
@@ -209,6 +214,11 @@ async function migrateUserAuth(database: DbApi) {
   } catch {
     /* column already exists */
   }
+  try {
+    await database.exec(`ALTER TABLE users ADD COLUMN mail_signature TEXT NOT NULL DEFAULT ''`)
+  } catch {
+    /* column already exists */
+  }
   await database.run('UPDATE users SET email_verified = 1 WHERE role = ?', 'admin')
 }
 
@@ -217,6 +227,35 @@ async function migrateContactMessagesStatus(database: DbApi) {
     await database.exec(
       `ALTER TABLE contact_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'new'`,
     )
+  } catch {
+    /* column already exists */
+  }
+}
+
+async function migrateMailArchive(database: DbApi) {
+  try {
+    await database.exec('ALTER TABLE mail_recipients ADD COLUMN archived_at TEXT')
+  } catch {
+    /* column already exists */
+  }
+}
+
+async function migrateMailTrash(database: DbApi) {
+  try {
+    await database.exec('ALTER TABLE mail_recipients ADD COLUMN deleted_at TEXT')
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec('ALTER TABLE mail_messages ADD COLUMN sender_deleted_at TEXT')
+  } catch {
+    /* column already exists */
+  }
+}
+
+async function migrateMailSchedule(database: DbApi) {
+  try {
+    await database.exec('ALTER TABLE mail_messages ADD COLUMN scheduled_at TEXT')
   } catch {
     /* column already exists */
   }
@@ -475,6 +514,9 @@ async function initDb(): Promise<DbApi> {
   await migrate(database)
   await migrateUserAuth(database)
   await migrateContactMessagesStatus(database)
+  await migrateMailArchive(database)
+  await migrateMailTrash(database)
+  await migrateMailSchedule(database)
   await migrateStaleAnnouncementExpiry(database)
   await migrateEmojiToIcons(database)
   await migrateContactEmail(database)

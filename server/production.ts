@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { usingPostgres } from './dbClient.ts'
 import { ensureDbReady } from './db.ts'
-import { handleApi } from './router.ts'
+import { handleApi, startMailScheduleFlusher } from './router.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -123,6 +123,7 @@ async function main() {
   }
 
   await ensureDbReady()
+  startMailScheduleFlusher()
 
   server.listen(PORT, HOST, () => {
     console.log(`PrintX running at http://${HOST}:${PORT}`)

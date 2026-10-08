@@ -123,6 +123,8 @@ export type MailRecipientOption = {
   displayName: string | null
 }
 
+export type MailTrashSource = 'received' | 'sent' | 'both'
+
 export type MailMessage = {
   id: string
   subject: string
@@ -132,6 +134,12 @@ export type MailMessage = {
   senderEmail: string
   senderDisplayName: string | null
   readAt: string | null
+  archivedAt: string | null
+  deletedAt: string | null
+  senderDeletedAt: string | null
+  scheduledAt: string | null
+  /** Present on Trash mailbox items — controls restore destination. */
+  trashSource?: MailTrashSource
   recipients: MailRecipientOption[]
 }
 

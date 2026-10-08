@@ -17,12 +17,14 @@ create table if not exists users (
   email_verified integer not null default 1,
   permissions text,
   display_name text,
+  mail_signature text not null default '',
   created_at text not null
 );
 
 -- If users already exists without newer columns:
 -- alter table users add column if not exists permissions text;
 -- alter table users add column if not exists display_name text;
+-- alter table users add column if not exists mail_signature text not null default '';
 
 create unique index if not exists users_email_lower_idx on users (lower(email));
 
@@ -105,7 +107,9 @@ create table if not exists mail_messages (
   sender_id text not null references users(id) on delete cascade,
   subject text not null default '',
   body text not null default '',
-  created_at text not null
+  created_at text not null,
+  sender_deleted_at text,
+  scheduled_at text
 );
 
 create table if not exists mail_recipients (
@@ -113,8 +117,16 @@ create table if not exists mail_recipients (
   message_id text not null references mail_messages(id) on delete cascade,
   recipient_id text not null references users(id) on delete cascade,
   read_at text,
+  archived_at text,
+  deleted_at text,
   unique (message_id, recipient_id)
 );
+
+-- Existing projects:
+-- alter table mail_recipients add column if not exists archived_at text;
+-- alter table mail_recipients add column if not exists deleted_at text;
+-- alter table mail_messages add column if not exists sender_deleted_at text;
+-- alter table mail_messages add column if not exists scheduled_at text;
 
 create table if not exists website_settings (
   key text primary key,

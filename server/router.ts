@@ -18,6 +18,8 @@ import {
   updateAdminPassword,
   updateAdminPermissions,
   updateAdminDisplayName,
+  getAdminMailSignature,
+  updateAdminMailSignature,
   verifyAdminLogin,
   listAdminUsers,
   createAdminUser,
@@ -185,6 +187,103 @@ type MailUserRow = {
   display_name: string | null
 }
 
+const MAIL_TRASH_MS = 30 * 24 * 60 * 60 * 1000
+const MAIL_SCHEDULE_FLUSH_MS = 30_000
+
+function mailTrashCutoffIso() {
+  return new Date(Date.now() - MAIL_TRASH_MS).toISOString()
+}
+
+/** Deliver any messages whose scheduled_at has passed. */
+export async function flushDueScheduledMail(db: Awaited<ReturnType<typeof getDb>>) {
+  const now = new Date().toISOString()
+  const due = await db.all<{ id: string }>(
+    `
+    SELECT id FROM mail_messages
+    WHERE scheduled_at IS NOT NULL AND scheduled_at <= ?
+  `,
+    now,
+  )
+  for (const row of due) {
+    await db.run(
+      `
+      UPDATE mail_messages
+      SET scheduled_at = NULL, created_at = ?
+      WHERE id = ?
+    `,
+      now,
+      row.id,
+    )
+  }
+  return due.length
+}
+
+let scheduleFlushTimer: ReturnType<typeof setInterval> | null = null
+
+export function startMailScheduleFlusher() {
+  if (scheduleFlushTimer) return
+  const tick = () => {
+    void getDb()
+      .then((db) => flushDueScheduledMail(db))
+      .catch((err) => console.error('[printx] scheduled mail flush failed', err))
+  }
+  tick()
+  scheduleFlushTimer = setInterval(tick, MAIL_SCHEDULE_FLUSH_MS)
+  if (typeof scheduleFlushTimer === 'object' && 'unref' in scheduleFlushTimer) {
+    scheduleFlushTimer.unref()
+  }
+}
+
+async function purgeExpiredMailTrash(db: Awaited<ReturnType<typeof getDb>>) {
+  const cutoff = mailTrashCutoffIso()
+  const expiredRecipients = await db.all<{ id: string; message_id: string }>(
+    `
+    SELECT id, message_id FROM mail_recipients
+    WHERE deleted_at IS NOT NULL AND deleted_at < ?
+  `,
+    cutoff,
+  )
+  for (const row of expiredRecipients) {
+    await db.run('DELETE FROM mail_recipients WHERE id = ?', row.id)
+  }
+
+  const expiredSent = await db.all<{ id: string }>(
+    `
+    SELECT id FROM mail_messages
+    WHERE sender_deleted_at IS NOT NULL AND sender_deleted_at < ?
+  `,
+    cutoff,
+  )
+  for (const row of expiredSent) {
+    const remaining = await db.get<{ c: number | string }>(
+      'SELECT COUNT(*) as c FROM mail_recipients WHERE message_id = ?',
+      row.id,
+    )
+    if (Number(remaining?.c ?? 0) === 0) {
+      await db.run('DELETE FROM mail_messages WHERE id = ?', row.id)
+    } else {
+      // Keep the message for other recipients; hide it from this sender forever.
+      await db.run(
+        `UPDATE mail_messages SET sender_deleted_at = ? WHERE id = ?`,
+        '1970-01-01T00:00:00.000Z',
+        row.id,
+      )
+    }
+  }
+
+  const orphans = await db.all<{ id: string }>(
+    `
+    SELECT m.id FROM mail_messages m
+    LEFT JOIN mail_recipients r ON r.message_id = m.id
+    WHERE r.id IS NULL
+      AND (m.sender_deleted_at IS NOT NULL)
+  `,
+  )
+  for (const row of orphans) {
+    await db.run('DELETE FROM mail_messages WHERE id = ?', row.id)
+  }
+}
+
 async function loadMailMessage(
   db: Awaited<ReturnType<typeof getDb>>,
   messageId: string,
@@ -199,9 +298,11 @@ async function loadMailMessage(
     sender_id: string
     sender_email: string
     sender_display_name: string | null
+    sender_deleted_at: string | null
+    scheduled_at: string | null
   }>(
     `
-    SELECT m.id, m.subject, m.body, m.created_at, m.sender_id,
+    SELECT m.id, m.subject, m.body, m.created_at, m.sender_id, m.sender_deleted_at, m.scheduled_at,
            u.email as sender_email, u.display_name as sender_display_name
     FROM mail_messages m
     JOIN users u ON u.id = m.sender_id
@@ -212,14 +313,24 @@ async function loadMailMessage(
   if (!msg) return null
 
   let readAt: string | null = null
+  let archivedAt: string | null = null
+  let deletedAt: string | null = null
   if (asRecipient) {
-    const mine = await db.get<{ read_at: string | null }>(
-      'SELECT read_at FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
+    // Hold scheduled messages until flush delivers them.
+    if (msg.scheduled_at && msg.scheduled_at > new Date().toISOString()) return null
+    const mine = await db.get<{
+      read_at: string | null
+      archived_at: string | null
+      deleted_at: string | null
+    }>(
+      'SELECT read_at, archived_at, deleted_at FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
       messageId,
       viewerId,
     )
     if (!mine) return null
     readAt = mine.read_at
+    archivedAt = mine.archived_at
+    deletedAt = mine.deleted_at
   } else if (msg.sender_id !== viewerId) {
     return null
   }
@@ -244,6 +355,10 @@ async function loadMailMessage(
     senderEmail: msg.sender_email,
     senderDisplayName: msg.sender_display_name,
     readAt,
+    archivedAt,
+    deletedAt,
+    senderDeletedAt: msg.sender_deleted_at,
+    scheduledAt: msg.scheduled_at,
     recipients: recipients.map((r) => ({
       id: r.id,
       email: r.email,
@@ -750,16 +865,88 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
+  if (urlPath === '/api/admin/mail/unread-count' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    await flushDueScheduledMail(db)
+    const countRow = await db.get<{ c: number | string }>(
+      `
+      SELECT COUNT(*) as c
+      FROM mail_recipients r
+      JOIN mail_messages m ON m.id = r.message_id
+      WHERE r.recipient_id = ?
+        AND m.sender_id != ?
+        AND r.read_at IS NULL
+        AND r.deleted_at IS NULL
+        AND m.scheduled_at IS NULL
+    `,
+      admin.id,
+      admin.id,
+    )
+    const latest = await db.get<{
+      id: string
+      subject: string
+      sender_email: string
+      sender_display_name: string | null
+    }>(
+      `
+      SELECT m.id, m.subject, u.email as sender_email, u.display_name as sender_display_name
+      FROM mail_recipients r
+      JOIN mail_messages m ON m.id = r.message_id
+      JOIN users u ON u.id = m.sender_id
+      WHERE r.recipient_id = ?
+        AND m.sender_id != ?
+        AND r.read_at IS NULL
+        AND r.deleted_at IS NULL
+        AND m.scheduled_at IS NULL
+      ORDER BY m.created_at DESC
+      LIMIT 1
+    `,
+      admin.id,
+      admin.id,
+    )
+    send(res, 200, {
+      count: Number(countRow?.c ?? 0),
+      latestId: latest?.id ?? null,
+      latestSubject: latest?.subject ?? null,
+      latestFrom: latest
+        ? latest.sender_display_name?.trim() || latest.sender_email
+        : null,
+    })
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/signature' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    send(res, 200, { signature: await getAdminMailSignature(admin.id) })
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/signature' && method === 'PATCH') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    const body = await readJson(req)
+    const signature = await updateAdminMailSignature(admin.id, body.signature)
+    send(res, 200, { signature })
+    return true
+  }
+
   if (urlPath === '/api/admin/mail/inbox' && method === 'GET') {
     if (!requirePerm(admin, 'mail', res)) return true
+    await flushDueScheduledMail(db)
+    await purgeExpiredMailTrash(db)
+    // Inbox = mail others sent you. Your own sends live only in Sent.
     const rows = await db.all<{ id: string }>(
       `
       SELECT m.id
       FROM mail_messages m
       JOIN mail_recipients r ON r.message_id = m.id
       WHERE r.recipient_id = ?
+        AND m.sender_id != ?
+        AND r.archived_at IS NULL
+        AND r.deleted_at IS NULL
+        AND m.scheduled_at IS NULL
       ORDER BY m.created_at DESC
     `,
+      admin.id,
       admin.id,
     )
     const messages = []
@@ -771,12 +958,131 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
-  if (urlPath === '/api/admin/mail/sent' && method === 'GET') {
+  if (urlPath === '/api/admin/mail/archived' && method === 'GET') {
     if (!requirePerm(admin, 'mail', res)) return true
+    await flushDueScheduledMail(db)
+    await purgeExpiredMailTrash(db)
+    const rows = await db.all<{ id: string }>(
+      `
+      SELECT m.id
+      FROM mail_messages m
+      JOIN mail_recipients r ON r.message_id = m.id
+      WHERE r.recipient_id = ?
+        AND m.sender_id != ?
+        AND r.archived_at IS NOT NULL
+        AND r.deleted_at IS NULL
+        AND m.scheduled_at IS NULL
+      ORDER BY r.archived_at DESC
+    `,
+      admin.id,
+      admin.id,
+    )
+    const messages = []
+    for (const row of rows) {
+      const full = await loadMailMessage(db, row.id, admin.id, true)
+      if (full) messages.push(full)
+    }
+    send(res, 200, messages)
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/scheduled' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    await flushDueScheduledMail(db)
+    const now = new Date().toISOString()
     const rows = await db.all<{ id: string }>(
       `
       SELECT id FROM mail_messages
       WHERE sender_id = ?
+        AND scheduled_at IS NOT NULL
+        AND scheduled_at > ?
+        AND sender_deleted_at IS NULL
+      ORDER BY scheduled_at ASC
+    `,
+      admin.id,
+      now,
+    )
+    const messages = []
+    for (const row of rows) {
+      const full = await loadMailMessage(db, row.id, admin.id, false)
+      if (full) messages.push(full)
+    }
+    send(res, 200, messages)
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/trash' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    await flushDueScheduledMail(db)
+    await purgeExpiredMailTrash(db)
+    const cutoff = mailTrashCutoffIso()
+    const byId = new Map<
+      string,
+      Awaited<ReturnType<typeof loadMailMessage>> & { trashSource: 'received' | 'sent' | 'both' }
+    >()
+
+    const received = await db.all<{ id: string }>(
+      `
+      SELECT m.id
+      FROM mail_messages m
+      JOIN mail_recipients r ON r.message_id = m.id
+      WHERE r.recipient_id = ?
+        AND m.sender_id != ?
+        AND r.deleted_at IS NOT NULL
+        AND r.deleted_at >= ?
+      ORDER BY r.deleted_at DESC
+    `,
+      admin.id,
+      admin.id,
+      cutoff,
+    )
+    for (const row of received) {
+      const full = await loadMailMessage(db, row.id, admin.id, true)
+      if (full) byId.set(row.id, { ...full, trashSource: 'received' })
+    }
+
+    const sentTrash = await db.all<{ id: string }>(
+      `
+      SELECT id FROM mail_messages
+      WHERE sender_id = ?
+        AND sender_deleted_at IS NOT NULL
+        AND sender_deleted_at >= ?
+        AND scheduled_at IS NULL
+      ORDER BY sender_deleted_at DESC
+    `,
+      admin.id,
+      cutoff,
+    )
+    for (const row of sentTrash) {
+      const full = await loadMailMessage(db, row.id, admin.id, false)
+      if (!full) continue
+      const existing = byId.get(row.id)
+      if (existing) {
+        byId.set(row.id, { ...existing, trashSource: 'both', senderDeletedAt: full.senderDeletedAt })
+      } else {
+        byId.set(row.id, { ...full, trashSource: 'sent' })
+      }
+    }
+
+    const messages = [...byId.values()].sort((a, b) => {
+      const aAt = a.deletedAt || a.senderDeletedAt || a.createdAt
+      const bAt = b.deletedAt || b.senderDeletedAt || b.createdAt
+      return new Date(bAt).getTime() - new Date(aAt).getTime()
+    })
+    send(res, 200, messages)
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/sent' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    await flushDueScheduledMail(db)
+    await purgeExpiredMailTrash(db)
+    const rows = await db.all<{ id: string }>(
+      `
+      SELECT id FROM mail_messages
+      WHERE sender_id = ?
+        AND sender_deleted_at IS NULL
+        AND scheduled_at IS NULL
       ORDER BY created_at DESC
     `,
       admin.id,
@@ -792,6 +1098,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/admin/mail' && method === 'POST') {
     if (!requirePerm(admin, 'mail', res)) return true
+    await flushDueScheduledMail(db)
     const body = await readJson(req)
     const subject = sanitizeText(body.subject, 200)
     const messageBody = sanitizeText(body.body, 8000)
@@ -806,31 +1113,54 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 400, { error: 'Pick at least one recipient.' })
       return true
     }
+
+    let scheduledAt: string | null = null
+    if (body.scheduledAt != null && String(body.scheduledAt).trim()) {
+      const parsed = new Date(String(body.scheduledAt))
+      if (Number.isNaN(parsed.getTime())) {
+        send(res, 400, { error: 'Invalid schedule time.' })
+        return true
+      }
+      if (parsed.getTime() < Date.now() + 60_000) {
+        send(res, 400, { error: 'Schedule time must be at least 1 minute from now.' })
+        return true
+      }
+      scheduledAt = parsed.toISOString()
+    }
+
     const validRecipients = await db.all<{ id: string }>(
       `SELECT id FROM users WHERE id IN (${recipientIds.map(() => '?').join(',')})`,
       ...recipientIds,
     )
-    if (validRecipients.length === 0) {
-      send(res, 400, { error: 'No valid recipients found.' })
+    // Never deliver a copy to your own Inbox — your sends only appear under Sent.
+    const deliveryRecipients = validRecipients.filter((r) => r.id !== admin.id)
+    if (deliveryRecipients.length === 0) {
+      send(res, 400, {
+        error:
+          validRecipients.length > 0
+            ? 'Pick at least one recipient other than yourself.'
+            : 'No valid recipients found.',
+      })
       return true
     }
     const messageId = randomUUID()
     const now = new Date().toISOString()
     await db.run(
-      'INSERT INTO mail_messages (id, sender_id, subject, body, created_at) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO mail_messages (id, sender_id, subject, body, created_at, scheduled_at) VALUES (?, ?, ?, ?, ?, ?)',
       messageId,
       admin.id,
       subject || '(no subject)',
       messageBody,
       now,
+      scheduledAt,
     )
-    for (const recipient of validRecipients) {
+    for (const recipient of deliveryRecipients) {
       await db.run(
         'INSERT INTO mail_recipients (id, message_id, recipient_id, read_at) VALUES (?, ?, ?, ?)',
         randomUUID(),
         messageId,
         recipient.id,
-        recipient.id === admin.id ? now : null,
+        null,
       )
     }
     const created = await loadMailMessage(db, messageId, admin.id, false)
@@ -838,26 +1168,34 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
-  const mailMatch = urlPath.match(/^\/api\/admin\/mail\/([^/]+)(?:\/(read))?$/)
+  const mailMatch = urlPath.match(
+    /^\/api\/admin\/mail\/([^/]+)(?:\/(read|unread|archive|unarchive|restore|cancel-schedule|send-now))?$/,
+  )
   if (mailMatch) {
     if (!requirePerm(admin, 'mail', res)) return true
     const messageId = mailMatch[1]
     const action = mailMatch[2]
 
-    if (method === 'PATCH' && action === 'read') {
-      const updated = await db.run(
-        `
-        UPDATE mail_recipients
-        SET read_at = ?
-        WHERE message_id = ? AND recipient_id = ? AND read_at IS NULL
-      `,
-        new Date().toISOString(),
+    if (method === 'PATCH' && (action === 'read' || action === 'unread')) {
+      const asRecipient = await db.get<{ id: string; deleted_at: string | null }>(
+        'SELECT id, deleted_at FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
         messageId,
         admin.id,
       )
-      if (!updated) {
-        // still ok if already read or not a recipient
+      if (!asRecipient || asRecipient.deleted_at) {
+        send(res, 404, { error: 'Message not found' })
+        return true
       }
+      await db.run(
+        `
+        UPDATE mail_recipients
+        SET read_at = ?
+        WHERE message_id = ? AND recipient_id = ?
+      `,
+        action === 'read' ? new Date().toISOString() : null,
+        messageId,
+        admin.id,
+      )
       const full = await loadMailMessage(db, messageId, admin.id, true)
       if (!full) {
         send(res, 404, { error: 'Message not found' })
@@ -867,35 +1205,215 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
 
-    if (method === 'DELETE' && !action) {
-      const asSender = await db.get<{ id: string }>(
-        'SELECT id FROM mail_messages WHERE id = ? AND sender_id = ?',
+    if (method === 'PATCH' && (action === 'archive' || action === 'unarchive')) {
+      const asRecipient = await db.get<{ id: string; deleted_at: string | null }>(
+        'SELECT id, deleted_at FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
         messageId,
         admin.id,
       )
-      if (asSender) {
-        await db.run('DELETE FROM mail_messages WHERE id = ?', messageId)
-        send(res, 200, { ok: true })
-        return true
-      }
-      const asRecipient = await db.get<{ id: string }>(
-        'SELECT id FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
-        messageId,
-        admin.id,
-      )
-      if (!asRecipient) {
+      if (!asRecipient || asRecipient.deleted_at) {
         send(res, 404, { error: 'Message not found' })
         return true
       }
-      await db.run('DELETE FROM mail_recipients WHERE id = ?', asRecipient.id)
-      const remaining = await db.get<{ c: number | string }>(
-        'SELECT COUNT(*) as c FROM mail_recipients WHERE message_id = ?',
+      await db.run(
+        `
+        UPDATE mail_recipients
+        SET archived_at = ?
+        WHERE message_id = ? AND recipient_id = ?
+      `,
+        action === 'archive' ? new Date().toISOString() : null,
+        messageId,
+        admin.id,
+      )
+      const full = await loadMailMessage(db, messageId, admin.id, true)
+      if (!full) {
+        send(res, 404, { error: 'Message not found' })
+        return true
+      }
+      send(res, 200, full)
+      return true
+    }
+
+    if (method === 'PATCH' && action === 'cancel-schedule') {
+      await flushDueScheduledMail(db)
+      const row = await db.get<{ id: string; scheduled_at: string | null }>(
+        `
+        SELECT id, scheduled_at FROM mail_messages
+        WHERE id = ? AND sender_id = ?
+      `,
+        messageId,
+        admin.id,
+      )
+      const now = new Date().toISOString()
+      if (!row?.scheduled_at || row.scheduled_at <= now) {
+        send(res, 404, { error: 'Scheduled message not found' })
+        return true
+      }
+      await db.run('DELETE FROM mail_messages WHERE id = ?', messageId)
+      send(res, 200, { ok: true })
+      return true
+    }
+
+    if (method === 'PATCH' && action === 'send-now') {
+      await flushDueScheduledMail(db)
+      const row = await db.get<{ id: string; scheduled_at: string | null }>(
+        `
+        SELECT id, scheduled_at FROM mail_messages
+        WHERE id = ? AND sender_id = ?
+      `,
+        messageId,
+        admin.id,
+      )
+      const now = new Date().toISOString()
+      if (!row?.scheduled_at || row.scheduled_at <= now) {
+        send(res, 404, { error: 'Scheduled message not found' })
+        return true
+      }
+      await db.run(
+        `
+        UPDATE mail_messages
+        SET scheduled_at = NULL, created_at = ?
+        WHERE id = ?
+      `,
+        now,
         messageId,
       )
-      if (Number(remaining?.c ?? 0) === 0) {
-        await db.run('DELETE FROM mail_messages WHERE id = ?', messageId)
+      // Mark self-recipient as read now that it is delivered.
+      await db.run(
+        `
+        UPDATE mail_recipients
+        SET read_at = ?
+        WHERE message_id = ? AND recipient_id = ? AND read_at IS NULL
+      `,
+        now,
+        messageId,
+        admin.id,
+      )
+      const full = await loadMailMessage(db, messageId, admin.id, false)
+      if (!full) {
+        send(res, 404, { error: 'Message not found' })
+        return true
       }
-      send(res, 200, { ok: true })
+      send(res, 200, full)
+      return true
+    }
+
+    if (method === 'PATCH' && action === 'restore') {
+      await purgeExpiredMailTrash(db)
+      const asRecipient = await db.get<{ id: string; deleted_at: string | null; archived_at: string | null }>(
+        'SELECT id, deleted_at, archived_at FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
+        messageId,
+        admin.id,
+      )
+      const asSender = await db.get<{ id: string; sender_deleted_at: string | null }>(
+        'SELECT id, sender_deleted_at FROM mail_messages WHERE id = ? AND sender_id = ?',
+        messageId,
+        admin.id,
+      )
+      const canRestoreReceived = Boolean(asRecipient?.deleted_at)
+      const canRestoreSent = Boolean(asSender?.sender_deleted_at && asSender.sender_deleted_at >= mailTrashCutoffIso())
+      if (!canRestoreReceived && !canRestoreSent) {
+        send(res, 404, { error: 'Message not found in Trash' })
+        return true
+      }
+      if (canRestoreReceived) {
+        await db.run(
+          `UPDATE mail_recipients SET deleted_at = NULL WHERE message_id = ? AND recipient_id = ?`,
+          messageId,
+          admin.id,
+        )
+      }
+      if (canRestoreSent) {
+        await db.run(`UPDATE mail_messages SET sender_deleted_at = NULL WHERE id = ? AND sender_id = ?`, messageId, admin.id)
+      }
+      const full = canRestoreReceived
+        ? await loadMailMessage(db, messageId, admin.id, true)
+        : await loadMailMessage(db, messageId, admin.id, false)
+      if (!full) {
+        send(res, 404, { error: 'Message not found' })
+        return true
+      }
+      send(res, 200, {
+        ...full,
+        trashSource: canRestoreReceived && canRestoreSent ? 'both' : canRestoreSent ? 'sent' : 'received',
+      })
+      return true
+    }
+
+    if (method === 'DELETE' && !action) {
+      await purgeExpiredMailTrash(db)
+      const params = new URL(req.url || '', 'http://localhost').searchParams
+      const forever = params.get('forever') === '1'
+      const mailbox = params.get('mailbox') || ''
+      const now = new Date().toISOString()
+
+      if (forever || mailbox === 'trash') {
+        const asRecipient = await db.get<{ id: string; deleted_at: string | null }>(
+          'SELECT id, deleted_at FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
+          messageId,
+          admin.id,
+        )
+        if (asRecipient?.deleted_at) {
+          await db.run('DELETE FROM mail_recipients WHERE id = ?', asRecipient.id)
+        }
+        const asSender = await db.get<{ id: string; sender_deleted_at: string | null }>(
+          'SELECT id, sender_deleted_at FROM mail_messages WHERE id = ? AND sender_id = ?',
+          messageId,
+          admin.id,
+        )
+        if (asSender?.sender_deleted_at) {
+          const remaining = await db.get<{ c: number | string }>(
+            'SELECT COUNT(*) as c FROM mail_recipients WHERE message_id = ?',
+            messageId,
+          )
+          if (Number(remaining?.c ?? 0) === 0) {
+            await db.run('DELETE FROM mail_messages WHERE id = ?', messageId)
+          } else {
+            await db.run(
+              `UPDATE mail_messages SET sender_deleted_at = ? WHERE id = ?`,
+              '1970-01-01T00:00:00.000Z',
+              messageId,
+            )
+          }
+        }
+        if (!asRecipient?.deleted_at && !asSender?.sender_deleted_at) {
+          send(res, 404, { error: 'Message not found in Trash' })
+          return true
+        }
+        send(res, 200, { ok: true })
+        return true
+      }
+
+      // Soft-delete → Trash (kept 30 days, then purged).
+      if (mailbox === 'sent') {
+        const asSender = await db.get<{ id: string; sender_deleted_at: string | null }>(
+          'SELECT id, sender_deleted_at FROM mail_messages WHERE id = ? AND sender_id = ?',
+          messageId,
+          admin.id,
+        )
+        if (!asSender || asSender.sender_deleted_at) {
+          send(res, 404, { error: 'Message not found' })
+          return true
+        }
+        await db.run(`UPDATE mail_messages SET sender_deleted_at = ? WHERE id = ?`, now, messageId)
+        const full = await loadMailMessage(db, messageId, admin.id, false)
+        send(res, 200, full ? { ...full, trashSource: 'sent' as const } : { ok: true })
+        return true
+      }
+
+      const asRecipient = await db.get<{ id: string; deleted_at: string | null }>(
+        'SELECT id, deleted_at FROM mail_recipients WHERE message_id = ? AND recipient_id = ?',
+        messageId,
+        admin.id,
+      )
+      if (asRecipient && !asRecipient.deleted_at) {
+        await db.run(`UPDATE mail_recipients SET deleted_at = ? WHERE id = ?`, now, asRecipient.id)
+        const full = await loadMailMessage(db, messageId, admin.id, true)
+        send(res, 200, full ? { ...full, trashSource: 'received' as const } : { ok: true })
+        return true
+      }
+
+      send(res, 404, { error: 'Message not found' })
       return true
     }
   }
