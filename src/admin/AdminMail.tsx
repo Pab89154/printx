@@ -261,7 +261,7 @@ export function AdminMail() {
     setError('')
     setSending(true)
     try {
-      const recipientIds = meId ? selectedIds.filter((id) => id !== meId) : selectedIds
+      const recipientIds = selectedIds
       await api.admin.mail.send({
         subject,
         body,
@@ -271,7 +271,8 @@ export function AdminMail() {
       resetCompose()
       await loadLists()
       bumpMailUnread({ silent: true })
-      setTab(opts?.scheduledAt ? 'scheduled' : 'sent')
+      const onlySelf = Boolean(meId && recipientIds.length === 1 && recipientIds[0] === meId)
+      setTab(opts?.scheduledAt ? 'scheduled' : onlySelf ? 'inbox' : 'sent')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Send failed')
     } finally {
@@ -397,33 +398,36 @@ export function AdminMail() {
       </div>
 
       <div className={`mt-4 min-w-0 sm:mt-6 ${readingOnMobile ? 'hidden lg:block' : ''}`}>
-        <div className="flex items-center justify-between gap-3">
-          <div className="-mx-4 flex min-w-0 flex-1 gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:px-0">
-            {(
-              [
-                { id: 'inbox' as const, label: unreadCount ? `Inbox (${unreadCount})` : 'Inbox' },
-                { id: 'sent' as const, label: 'Sent' },
-                {
-                  id: 'scheduled' as const,
-                  label: scheduled.length ? `Scheduled (${scheduled.length})` : 'Scheduled',
-                },
-                { id: 'archived' as const, label: archived.length ? `Archive (${archived.length})` : 'Archive' },
-                { id: 'trash' as const, label: trash.length ? `Trash (${trash.length})` : 'Trash' },
-              ]
-            ).map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={`btn btn-compact shrink-0 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => {
-                  setTab(t.id)
-                  setOpenId(null)
-                  setError('')
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
+        {/* Extra y-padding so hover lift / shadows aren’t clipped by the scrollport */}
+        <div className="flex items-center gap-3 py-1.5">
+          <div className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex w-max min-w-full gap-2 px-0.5 py-1">
+              {(
+                [
+                  { id: 'inbox' as const, label: unreadCount ? `Inbox (${unreadCount})` : 'Inbox' },
+                  { id: 'sent' as const, label: 'Sent' },
+                  {
+                    id: 'scheduled' as const,
+                    label: scheduled.length ? `Scheduled (${scheduled.length})` : 'Scheduled',
+                  },
+                  { id: 'archived' as const, label: archived.length ? `Archive (${archived.length})` : 'Archive' },
+                  { id: 'trash' as const, label: trash.length ? `Trash (${trash.length})` : 'Trash' },
+                ]
+              ).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`btn btn-compact shrink-0 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => {
+                    setTab(t.id)
+                    setOpenId(null)
+                    setError('')
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
           <button
             type="button"
@@ -454,7 +458,6 @@ export function AdminMail() {
               <div className="flex flex-wrap gap-2">
                 {recipients.map((person) => {
                   const isMe = person.email.toLowerCase() === myEmailLower
-                  if (isMe) return null
                   const selected = selectedIds.includes(person.id)
                   return (
                     <button
@@ -467,16 +470,16 @@ export function AdminMail() {
                           : 'border-slate-200 bg-white text-navy hover:border-electric/40'
                       }`}
                     >
-                      {labelFor(person)}
+                      {isMe ? `${labelFor(person)} (you)` : labelFor(person)}
                     </button>
                   )
                 })}
               </div>
               <p className="mt-2 text-xs text-muted">
-                Your sends appear in Sent. Inbox only shows mail others send you.
+                You can include yourself. Self-mail shows in Inbox; other sends also appear in Sent.
               </p>
-              {recipients.filter((p) => p.email.toLowerCase() !== myEmailLower).length === 0 && (
-                <p className="text-sm text-muted">No other admin accounts found.</p>
+              {recipients.length === 0 && (
+                <p className="text-sm text-muted">No admin accounts found.</p>
               )}
             </div>
             <label className="block text-sm font-medium text-navy">

@@ -877,12 +877,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       FROM mail_recipients r
       JOIN mail_messages m ON m.id = r.message_id
       WHERE r.recipient_id = ?
-        AND m.sender_id != ?
         AND r.read_at IS NULL
         AND r.deleted_at IS NULL
         AND m.scheduled_at IS NULL
     `,
-      admin.id,
       admin.id,
     )
     const latest = await db.get<{
@@ -897,14 +895,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       JOIN mail_messages m ON m.id = r.message_id
       JOIN users u ON u.id = m.sender_id
       WHERE r.recipient_id = ?
-        AND m.sender_id != ?
         AND r.read_at IS NULL
         AND r.deleted_at IS NULL
         AND m.scheduled_at IS NULL
       ORDER BY m.created_at DESC
       LIMIT 1
     `,
-      admin.id,
       admin.id,
     )
     send(res, 200, {
@@ -936,20 +932,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     if (!requirePerm(admin, 'mail', res)) return true
     await flushDueScheduledMail(db)
     await purgeExpiredMailTrash(db)
-    // Inbox = mail others sent you. Your own sends live only in Sent.
+    // Inbox = messages where you are a recipient (including mail you send yourself).
     const rows = await db.all<{ id: string }>(
       `
       SELECT m.id
       FROM mail_messages m
       JOIN mail_recipients r ON r.message_id = m.id
       WHERE r.recipient_id = ?
-        AND m.sender_id != ?
         AND r.archived_at IS NULL
         AND r.deleted_at IS NULL
         AND m.scheduled_at IS NULL
       ORDER BY m.created_at DESC
     `,
-      admin.id,
       admin.id,
     )
     const messages = []
@@ -971,13 +965,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       FROM mail_messages m
       JOIN mail_recipients r ON r.message_id = m.id
       WHERE r.recipient_id = ?
-        AND m.sender_id != ?
         AND r.archived_at IS NOT NULL
         AND r.deleted_at IS NULL
         AND m.scheduled_at IS NULL
       ORDER BY r.archived_at DESC
     `,
-      admin.id,
       admin.id,
     )
     const messages = []
@@ -1030,12 +1022,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       FROM mail_messages m
       JOIN mail_recipients r ON r.message_id = m.id
       WHERE r.recipient_id = ?
-        AND m.sender_id != ?
         AND r.deleted_at IS NOT NULL
         AND r.deleted_at >= ?
       ORDER BY r.deleted_at DESC
     `,
-      admin.id,
       admin.id,
       cutoff,
     )
@@ -1135,15 +1125,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       `SELECT id FROM users WHERE id IN (${recipientIds.map(() => '?').join(',')})`,
       ...recipientIds,
     )
-    // Never deliver a copy to your own Inbox — your sends only appear under Sent.
-    const deliveryRecipients = validRecipients.filter((r) => r.id !== admin.id)
-    if (deliveryRecipients.length === 0) {
-      send(res, 400, {
-        error:
-          validRecipients.length > 0
-            ? 'Pick at least one recipient other than yourself.'
-            : 'No valid recipients found.',
-      })
+    if (validRecipients.length === 0) {
+      send(res, 400, { error: 'No valid recipients found.' })
       return true
     }
     const messageId = randomUUID()
@@ -1157,7 +1140,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       now,
       scheduledAt,
     )
-    for (const recipient of deliveryRecipients) {
+    for (const recipient of validRecipients) {
       await db.run(
         'INSERT INTO mail_recipients (id, message_id, recipient_id, read_at) VALUES (?, ?, ?, ?)',
         randomUUID(),

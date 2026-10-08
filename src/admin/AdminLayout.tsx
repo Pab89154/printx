@@ -131,9 +131,9 @@ export function AdminLayout() {
           menuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
-          <Logo size={36} />
-          <div className="min-w-0">
+        <div className="flex items-center gap-3 border-b border-white/10 px-4 py-5 sm:px-5">
+          <Logo size={36} className="shrink-0" />
+          <div className="min-w-0 flex-1">
             <div className="font-bold">PrintX Admin</div>
             <div className="truncate text-xs text-slate-300">{label}</div>
             <div className="truncate text-[11px] text-slate-400">
@@ -208,7 +208,7 @@ export function AdminLayout() {
       </aside>
 
       <main className="min-w-0 max-w-full flex-1 px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[calc(3.5rem+env(safe-area-inset-top,0px)+0.75rem)] md:ml-64 md:p-8 md:pt-8">
-        <div className="mx-auto w-full min-w-0 max-w-6xl overflow-x-clip">
+        <div className="mx-auto w-full min-w-0 max-w-6xl">
           <Outlet />
         </div>
       </main>

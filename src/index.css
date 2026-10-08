@@ -143,6 +143,9 @@ section[id] {
   min-height: 2.25rem;
   padding: 0.4rem 0.75rem;
   font-size: 0.8125rem;
+  /* Keep lift modest — toolbar scrollports clip large translateY/scale */
+  --btn-lift-y: -2px;
+  --btn-lift-scale: 1.015;
 }
 
 a.btn {
@@ -236,7 +239,7 @@ a.btn {
 /* Press squash — keep scale modest so iOS doesn’t get horizontal overflow */
 .btn[data-btn-pop='pressing']:not(:disabled),
 .press-pop[data-btn-pop='pressing'] {
-  transform: translateY(1px) scale(0.96) !important;
+  transform: translateY(1px) scale(0.97) !important;
   transition-duration: 60ms !important;
 }
 
@@ -247,13 +250,13 @@ a.btn {
 
 @keyframes btn-host-pop {
   0% {
-    transform: translateY(2px) scale(0.94);
+    transform: translateY(1px) scale(0.96);
   }
   38% {
-    transform: translateY(-3px) scale(1.04);
+    transform: translateY(var(--btn-lift-y, -3px)) scale(var(--btn-lift-scale, 1.03));
   }
   68% {
-    transform: translateY(0) scale(0.99);
+    transform: translateY(0) scale(0.995);
   }
   100% {
     transform: translateY(0) scale(1);
@@ -341,7 +344,7 @@ a.btn {
     background: var(--color-cyan);
     border-color: var(--color-cyan);
     box-shadow: 0 16px 28px -10px color-mix(in srgb, var(--color-cyan) 55%, transparent);
-    transform: translateY(-4px) scale(1.03);
+    transform: translateY(var(--btn-lift-y, -4px)) scale(var(--btn-lift-scale, 1.03));
   }
 
   .btn-secondary:hover:not(:disabled):not([data-btn-pop]) {
@@ -349,7 +352,7 @@ a.btn {
     background: color-mix(in srgb, var(--color-electric) 12%, #fff);
     color: var(--color-electric);
     box-shadow: 0 10px 18px -10px color-mix(in srgb, var(--color-electric) 35%, transparent);
-    transform: translateY(-3px) scale(1.02);
+    transform: translateY(var(--btn-lift-y, -3px)) scale(var(--btn-lift-scale, 1.02));
   }
 
   .btn-danger:hover:not(:disabled):not([data-btn-pop]) {
@@ -357,19 +360,19 @@ a.btn {
     background: #dc2626;
     color: #fff;
     box-shadow: 0 14px 22px -10px rgb(220 38 38 / 40%);
-    transform: translateY(-4px) scale(1.03);
+    transform: translateY(var(--btn-lift-y, -4px)) scale(var(--btn-lift-scale, 1.03));
   }
 
   .btn-danger-solid:hover:not(:disabled):not([data-btn-pop]) {
     background: #ef4444;
     border-color: #ef4444;
-    transform: translateY(-4px) scale(1.03);
+    transform: translateY(var(--btn-lift-y, -4px)) scale(var(--btn-lift-scale, 1.03));
   }
 
   .btn-ghost:hover:not(:disabled):not([data-btn-pop]) {
     border-color: #cbd5e1;
     background: #f1f5f9;
-    transform: translateY(-2px) scale(1.02);
+    transform: translateY(var(--btn-lift-y, -2px)) scale(var(--btn-lift-scale, 1.02));
   }
 
   .btn-outline:hover:not(:disabled):not([data-btn-pop]) {
