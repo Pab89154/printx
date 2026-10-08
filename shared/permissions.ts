@@ -1,4 +1,4 @@
-/** Main admin email — always has full access; controls other admins' permissions. */
+/** Default main admin email — used until primary admin user id is loaded / env overrides. */
 export const MAIN_ADMIN_EMAIL = 'pablo.molina@printx.pw'
 
 export const PERMISSION_KEYS = [
@@ -30,7 +30,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   schools: 'Schools',
   content: 'Website Content',
   sandbox: 'Site sandbox',
-  settings: 'Settings (own password)',
+  settings: 'Settings (profile)',
   website_status: 'Pause / unpause public website',
   manage_admins: 'Manage admins & permissions',
 }
@@ -58,7 +58,33 @@ export function allPermissions(): AdminPermissions {
 }
 
 export function isMainAdminEmail(email: string | null | undefined): boolean {
-  return (email ?? '').trim().toLowerCase() === MAIN_ADMIN_EMAIL
+  const normalized = (email ?? '').trim().toLowerCase()
+  if (!normalized) return false
+  const fromEnv =
+    typeof process !== 'undefined' && typeof process.env?.PRINTX_ADMIN_EMAIL === 'string'
+      ? process.env.PRINTX_ADMIN_EMAIL.trim().toLowerCase()
+      : ''
+  return normalized === (fromEnv || MAIN_ADMIN_EMAIL)
+}
+
+/** Stable primary admin id (server sets this after DB init). */
+let primaryAdminUserId: string | null = null
+
+export function setPrimaryAdminUserId(id: string | null | undefined) {
+  primaryAdminUserId = typeof id === 'string' && id.trim() ? id.trim() : null
+}
+
+export function getPrimaryAdminUserId(): string | null {
+  return primaryAdminUserId
+}
+
+/** True if this user is the main admin (by id when known, else by reserved email). */
+export function isPrimaryAdminUser(
+  userId: string | null | undefined,
+  email?: string | null,
+): boolean {
+  if (primaryAdminUserId && userId) return userId === primaryAdminUserId
+  return isMainAdminEmail(email)
 }
 
 export function normalizePermissions(input: unknown): AdminPermissions {
@@ -69,13 +95,17 @@ export function normalizePermissions(input: unknown): AdminPermissions {
     if (typeof raw[key] === 'boolean') base[key] = raw[key]
   }
   // Regular admins never get manage_admins through stored JSON alone —
-  // only main admin email grants it.
+  // only the primary admin account grants it.
   base.manage_admins = false
   return base
 }
 
-export function permissionsForUser(email: string, stored: unknown): AdminPermissions {
-  if (isMainAdminEmail(email)) return allPermissions()
+export function permissionsForUser(
+  email: string,
+  stored: unknown,
+  userId?: string | null,
+): AdminPermissions {
+  if (isPrimaryAdminUser(userId, email)) return allPermissions()
   return normalizePermissions(stored)
 }
 

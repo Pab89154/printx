@@ -16,6 +16,9 @@ import {
   sessionCookieHeader,
   SESSION_COOKIE,
   updateAdminPassword,
+  setAdminPasswordByMain,
+  updateAdminEmail,
+  setAdminEmailByMain,
   updateAdminPermissions,
   updateAdminDisplayName,
   getAdminMailSignature,
@@ -1540,6 +1543,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/settings/password' && method === 'PATCH') {
+    if (!admin.isMainAdmin) {
+      return forbid(res, 'Only the main admin can change passwords. Ask the main admin to update yours.')
+    }
     if (!requirePerm(admin, 'settings', res)) return true
     const body = await readJson(req)
     const ok = await updateAdminPassword(
@@ -1555,6 +1561,30 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     {
       const opts = cookieOptions(req)
       send(res, 200, { ok: true }, [clearSessionCookieHeader(opts.secure, opts.domain)])
+    }
+    return true
+  }
+
+  if (urlPath === '/api/admin/settings/email' && method === 'PATCH') {
+    if (!admin.isMainAdmin) {
+      return forbid(res, 'Only the main admin can change their email. Ask the main admin to update yours.')
+    }
+    if (!requirePerm(admin, 'settings', res)) return true
+    const body = await readJson(req)
+    const result = await updateAdminEmail(
+      admin.id,
+      body.email,
+      String(body.currentPassword ?? ''),
+    )
+    if (!result.ok) {
+      send(res, 400, { error: result.error })
+      return true
+    }
+    {
+      const opts = cookieOptions(req)
+      send(res, 200, { ok: true, email: result.email }, [
+        clearSessionCookieHeader(opts.secure, opts.domain),
+      ])
     }
     return true
   }
@@ -1603,6 +1633,38 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       console.error('[printx] create admin failed', err)
       send(res, 500, { error: 'Could not create admin account. Try again.' })
     }
+    return true
+  }
+
+  const userPasswordMatch = urlPath.match(/^\/api\/admin\/users\/([^/]+)\/password$/)
+  if (userPasswordMatch && method === 'PATCH') {
+    if (!admin.isMainAdmin) {
+      return forbid(res, 'Only the main admin can change passwords for other admins.')
+    }
+    const targetId = userPasswordMatch[1]
+    const body = await readJson(req)
+    const result = await setAdminPasswordByMain(admin.id, targetId, String(body.password ?? ''))
+    if (!result.ok) {
+      send(res, 400, { error: result.error })
+      return true
+    }
+    send(res, 200, { ok: true })
+    return true
+  }
+
+  const userEmailMatch = urlPath.match(/^\/api\/admin\/users\/([^/]+)\/email$/)
+  if (userEmailMatch && method === 'PATCH') {
+    if (!admin.isMainAdmin) {
+      return forbid(res, 'Only the main admin can change emails for other admins.')
+    }
+    const targetId = userEmailMatch[1]
+    const body = await readJson(req)
+    const result = await setAdminEmailByMain(admin.id, targetId, body.email)
+    if (!result.ok) {
+      send(res, 400, { error: result.error })
+      return true
+    }
+    send(res, 200, { ok: true, email: result.email })
     return true
   }
 

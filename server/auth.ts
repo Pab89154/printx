@@ -5,6 +5,7 @@ import { getDb } from './db.ts'
 import {
   defaultPermissions,
   isMainAdminEmail,
+  isPrimaryAdminUser,
   normalizePermissions,
   permissionsForUser,
   type AdminPermissions,
@@ -82,9 +83,15 @@ function toSessionAdmin(row: {
     role: row.role,
     email,
     displayName: cleanDisplayName(row.display_name),
-    isMainAdmin: isMainAdminEmail(email),
-    permissions: permissionsForUser(email, parseStoredPermissions(row.permissions)),
+    isMainAdmin: isPrimaryAdminUser(row.id, email),
+    permissions: permissionsForUser(email, parseStoredPermissions(row.permissions), row.id),
   }
+}
+
+function normalizeLoginEmail(email: unknown): string | null {
+  const normalized = sanitizeEmail(email).toLowerCase()
+  if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return null
+  return normalized
 }
 
 export async function getSessionUser(token: string | null): Promise<SessionAdmin | null> {
@@ -201,6 +208,133 @@ export async function updateAdminPassword(
   return true
 }
 
+/** Main admin sets a regular admin’s password (no current-password check). */
+export async function setAdminPasswordByMain(
+  actorId: string,
+  targetId: string,
+  newPassword: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (newPassword.length < 8) {
+    return { ok: false, error: 'Password must be at least 8 characters.' }
+  }
+
+  const db = await getDb()
+  const actor = await db.get<{ email: string }>(
+    `SELECT email FROM users WHERE id = ? AND role = 'admin'`,
+    actorId,
+  )
+  if (!actor || !isPrimaryAdminUser(actorId, actor.email)) {
+    return { ok: false, error: 'Only the main admin can change passwords for other admins.' }
+  }
+
+  const target = await db.get<{ email: string }>(
+    `SELECT email FROM users WHERE id = ? AND role = 'admin'`,
+    targetId,
+  )
+  if (!target) {
+    return { ok: false, error: 'Admin account not found.' }
+  }
+  if (isPrimaryAdminUser(targetId, target.email)) {
+    return { ok: false, error: 'Use Change your password for the main admin account.' }
+  }
+
+  const hash = bcrypt.hashSync(newPassword, 12)
+  await db.run('UPDATE users SET password_hash = ? WHERE id = ?', hash, targetId)
+  await db.run('DELETE FROM sessions WHERE user_id = ?', targetId)
+  return { ok: true }
+}
+
+/** Main admin changes their own login email (requires current password). */
+export async function updateAdminEmail(
+  userId: string,
+  newEmail: unknown,
+  currentPassword: string,
+): Promise<{ ok: true; email: string } | { ok: false; error: string }> {
+  const db = await getDb()
+  const user = await db.get<{ email: string; password_hash: string }>(
+    `SELECT email, password_hash FROM users WHERE id = ? AND role = 'admin'`,
+    userId,
+  )
+  if (!user || !isPrimaryAdminUser(userId, user.email)) {
+    return { ok: false, error: 'Only the main admin can change their own email.' }
+  }
+  if (!bcrypt.compareSync(currentPassword, user.password_hash)) {
+    return { ok: false, error: 'Current password is incorrect.' }
+  }
+
+  const normalized = normalizeLoginEmail(newEmail)
+  if (!normalized) {
+    return { ok: false, error: 'Enter a valid email address.' }
+  }
+  if (normalized === user.email.trim().toLowerCase()) {
+    return { ok: true, email: user.email }
+  }
+
+  const taken = await db.get<{ id: string }>(
+    'SELECT id FROM users WHERE LOWER(email) = ? AND id != ?',
+    normalized,
+    userId,
+  )
+  if (taken) {
+    return { ok: false, error: 'That email is already in use.' }
+  }
+
+  await db.run('UPDATE users SET email = ? WHERE id = ?', normalized, userId)
+  await db.run('DELETE FROM sessions WHERE user_id = ?', userId)
+  return { ok: true, email: normalized }
+}
+
+/** Main admin sets a regular admin’s login email. */
+export async function setAdminEmailByMain(
+  actorId: string,
+  targetId: string,
+  newEmail: unknown,
+): Promise<{ ok: true; email: string } | { ok: false; error: string }> {
+  const db = await getDb()
+  const actor = await db.get<{ email: string }>(
+    `SELECT email FROM users WHERE id = ? AND role = 'admin'`,
+    actorId,
+  )
+  if (!actor || !isPrimaryAdminUser(actorId, actor.email)) {
+    return { ok: false, error: 'Only the main admin can change emails for other admins.' }
+  }
+
+  const target = await db.get<{ email: string }>(
+    `SELECT email FROM users WHERE id = ? AND role = 'admin'`,
+    targetId,
+  )
+  if (!target) {
+    return { ok: false, error: 'Admin account not found.' }
+  }
+  if (isPrimaryAdminUser(targetId, target.email)) {
+    return { ok: false, error: 'Use Change your email for the main admin account.' }
+  }
+
+  const normalized = normalizeLoginEmail(newEmail)
+  if (!normalized) {
+    return { ok: false, error: 'Enter a valid email address.' }
+  }
+  if (isMainAdminEmail(normalized)) {
+    return { ok: false, error: 'That email is reserved for the main admin.' }
+  }
+  if (normalized === target.email.trim().toLowerCase()) {
+    return { ok: true, email: target.email }
+  }
+
+  const taken = await db.get<{ id: string }>(
+    'SELECT id FROM users WHERE LOWER(email) = ? AND id != ?',
+    normalized,
+    targetId,
+  )
+  if (taken) {
+    return { ok: false, error: 'That email is already in use.' }
+  }
+
+  await db.run('UPDATE users SET email = ? WHERE id = ?', normalized, targetId)
+  await db.run('DELETE FROM sessions WHERE user_id = ?', targetId)
+  return { ok: true, email: normalized }
+}
+
 export type AdminUserRecord = {
   id: string
   email: string
@@ -238,8 +372,8 @@ export async function listAdminUsers(): Promise<AdminUserRecord[]> {
       displayName: cleanDisplayName(r.display_name),
       emailVerified: Boolean(r.email_verified),
       createdAt: r.created_at,
-      isMainAdmin: isMainAdminEmail(email),
-      permissions: permissionsForUser(email, parseStoredPermissions(r.permissions)),
+      isMainAdmin: isPrimaryAdminUser(r.id, email),
+      permissions: permissionsForUser(email, parseStoredPermissions(r.permissions), r.id),
     }
   })
 }
@@ -327,10 +461,10 @@ export async function updateAdminPermissions(
     targetId,
   )
   if (!target) return null
-  if (isMainAdminEmail(target.email)) return null
+  if (isPrimaryAdminUser(targetId, target.email)) return null
 
   const next = normalizePermissions({
-    ...permissionsForUser(target.email, parseStoredPermissions(target.permissions)),
+    ...permissionsForUser(target.email, parseStoredPermissions(target.permissions), targetId),
     ...permissions,
   })
   await db.run('UPDATE users SET permissions = ? WHERE id = ?', JSON.stringify(next), targetId)
@@ -351,7 +485,7 @@ export async function updateAdminPermissions(
     emailVerified: Boolean(row.email_verified),
     createdAt: row.created_at,
     isMainAdmin: false,
-    permissions: permissionsForUser(row.email, parseStoredPermissions(row.permissions)),
+    permissions: permissionsForUser(row.email, parseStoredPermissions(row.permissions), row.id),
   }
 }
 
@@ -368,7 +502,7 @@ export async function deleteAdminUser(
     `SELECT email FROM users WHERE id = ? AND role = 'admin'`,
     actorId,
   )
-  if (!actor || !isMainAdminEmail(actor.email)) {
+  if (!actor || !isPrimaryAdminUser(actorId, actor.email)) {
     return { ok: false, error: 'Only the main admin can delete accounts.' }
   }
 
@@ -379,7 +513,7 @@ export async function deleteAdminUser(
   if (!target) {
     return { ok: false, error: 'Admin account not found.' }
   }
-  if (isMainAdminEmail(target.email)) {
+  if (isPrimaryAdminUser(targetId, target.email)) {
     return { ok: false, error: 'The main admin account cannot be deleted.' }
   }
 

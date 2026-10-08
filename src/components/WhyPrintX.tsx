@@ -11,7 +11,7 @@ export function WhyPrintX() {
           <SectionHeading title="Why PrintX?" />
         </ScrollReveal>
 
-        <div className="grid items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid items-stretch gap-6 py-1 sm:grid-cols-2 lg:grid-cols-4">
           {WHY_FEATURES.map((feature, i) => (
             <ScrollReveal key={feature.title} delay={i * 80} className="h-full">
               <FeatureCard

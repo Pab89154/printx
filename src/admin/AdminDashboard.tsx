@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import type { DashboardStats } from '../types/api'
 import { adminPath } from '../lib/portal'
 import { useAdminAuth } from '../context/AdminAuthContext'
+import { SandboxIcon } from '../lib/sandboxIcon'
 
 export function AdminDashboard() {
   const { can } = useAdminAuth()
@@ -75,6 +76,7 @@ export function AdminDashboard() {
         to={adminPath('sandbox')}
         className="btn btn-secondary !border-amber-300 !bg-amber-50 !text-amber-900 hover:!border-amber-500 hover:!bg-amber-100 hover:!text-amber-950"
       >
+        <SandboxIcon size={16} className="text-amber-500" />
         Open site sandbox
       </Link>
     ),

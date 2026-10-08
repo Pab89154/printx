@@ -6,7 +6,7 @@ import type { MailMessage, MailRecipientOption } from '../types/api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useAdminAuth } from '../context/AdminAuthContext'
 
-type Tab = 'inbox' | 'archived' | 'sent' | 'scheduled' | 'trash' | 'compose' | 'signature'
+type Tab = 'inbox' | 'sent' | 'scheduled' | 'archived' | 'trash' | 'compose'
 type ComposeMode = 'new' | 'reply' | 'reply-all' | 'forward'
 
 function daysLeftInTrash(msg: MailMessage) {
@@ -74,9 +74,6 @@ export function AdminMail() {
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [signature, setSignature] = useState('')
-  const [signatureDraft, setSignatureDraft] = useState('')
-  const [savingSignature, setSavingSignature] = useState(false)
-  const [signatureMessage, setSignatureMessage] = useState('')
   const [sending, setSending] = useState(false)
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [scheduleLocal, setScheduleLocal] = useState(defaultScheduleLocal)
@@ -106,7 +103,6 @@ export function AdminMail() {
     setTrash(trashRows)
     setRecipients(people)
     setSignature(sig.signature)
-    setSignatureDraft(sig.signature)
   }
 
   useEffect(() => {
@@ -261,21 +257,6 @@ export function AdminMail() {
     setTab('compose')
   }
 
-  async function saveSignature() {
-    setSignatureMessage('')
-    setSavingSignature(true)
-    try {
-      const result = await api.admin.mail.updateSignature(signatureDraft)
-      setSignature(result.signature)
-      setSignatureDraft(result.signature)
-      setSignatureMessage(result.signature.trim() ? 'Signature saved.' : 'Signature cleared.')
-    } catch (err) {
-      setSignatureMessage(err instanceof Error ? err.message : 'Could not save signature')
-    } finally {
-      setSavingSignature(false)
-    }
-  }
-
   async function sendMail(opts?: { scheduledAt?: string }) {
     setError('')
     setSending(true)
@@ -403,10 +384,10 @@ export function AdminMail() {
           ? 'Forward'
           : 'New message'
 
-  const readingOnMobile = Boolean(openMessage) && tab !== 'compose' && tab !== 'signature'
+  const readingOnMobile = Boolean(openMessage) && tab !== 'compose'
 
   return (
-    <div className="min-w-0 max-w-full overflow-x-hidden">
+    <div className="min-w-0 max-w-full">
       <div className={readingOnMobile ? 'hidden lg:block' : ''}>
         <h1 className="text-2xl font-bold text-navy">Mail</h1>
         <p className="mt-1 text-sm text-muted sm:text-base">
@@ -416,34 +397,34 @@ export function AdminMail() {
       </div>
 
       <div className={`mt-4 min-w-0 sm:mt-6 ${readingOnMobile ? 'hidden lg:block' : ''}`}>
-        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {(
-            [
-              { id: 'inbox' as const, label: unreadCount ? `Inbox (${unreadCount})` : 'Inbox' },
-              { id: 'archived' as const, label: archived.length ? `Archive (${archived.length})` : 'Archive' },
-              { id: 'sent' as const, label: 'Sent' },
-              {
-                id: 'scheduled' as const,
-                label: scheduled.length ? `Scheduled (${scheduled.length})` : 'Scheduled',
-              },
-              { id: 'trash' as const, label: trash.length ? `Trash (${trash.length})` : 'Trash' },
-              { id: 'signature' as const, label: 'Signature' },
-            ]
-          ).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={`btn btn-compact shrink-0 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => {
-                setTab(t.id)
-                setOpenId(null)
-                setError('')
-                setSignatureMessage('')
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
+        <div className="flex items-center justify-between gap-3">
+          <div className="-mx-4 flex min-w-0 flex-1 gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:px-0">
+            {(
+              [
+                { id: 'inbox' as const, label: unreadCount ? `Inbox (${unreadCount})` : 'Inbox' },
+                { id: 'sent' as const, label: 'Sent' },
+                {
+                  id: 'scheduled' as const,
+                  label: scheduled.length ? `Scheduled (${scheduled.length})` : 'Scheduled',
+                },
+                { id: 'archived' as const, label: archived.length ? `Archive (${archived.length})` : 'Archive' },
+                { id: 'trash' as const, label: trash.length ? `Trash (${trash.length})` : 'Trash' },
+              ]
+            ).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`btn btn-compact shrink-0 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => {
+                  setTab(t.id)
+                  setOpenId(null)
+                  setError('')
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className={`btn btn-compact shrink-0 ${tab === 'compose' ? 'btn-primary' : 'btn-secondary'}`}
@@ -457,41 +438,7 @@ export function AdminMail() {
 
       {error && <p className="mt-4 break-words text-sm text-red-600">{error}</p>}
 
-      {tab === 'signature' ? (
-        <div className="mt-4 min-w-0 rounded-2xl border border-slate-200 bg-white p-4 sm:mt-6 sm:p-6">
-          <h2 className="font-semibold text-navy">Email signature</h2>
-          <p className="mt-1 text-sm text-muted">
-            Added at the end of new messages, replies, and forwards (like Gmail). Leave blank for no signature.
-          </p>
-          <label className="mt-4 block text-sm font-medium text-navy">
-            Signature
-            <textarea
-              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm"
-              rows={6}
-              value={signatureDraft}
-              onChange={(e) => setSignatureDraft(e.target.value)}
-              placeholder={'Your name\nPrintX Admin'}
-            />
-          </label>
-          {signatureDraft.trim() ? (
-            <div className="mt-4 rounded-xl border border-dashed bg-surface/60 p-4 text-sm text-navy">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Preview</p>
-              <pre className="mt-2 whitespace-pre-wrap font-sans">{`--\n${signatureDraft.trim()}`}</pre>
-            </div>
-          ) : null}
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={savingSignature}
-              onClick={() => void saveSignature()}
-            >
-              {savingSignature ? 'Saving…' : 'Save signature'}
-            </button>
-            {signatureMessage && <p className="text-sm text-muted">{signatureMessage}</p>}
-          </div>
-        </div>
-      ) : tab === 'compose' ? (
+      {tab === 'compose' ? (
         <div className="mt-4 min-w-0 rounded-2xl border border-slate-200 bg-white p-4 sm:mt-6 sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-semibold text-navy">{composeTitle}</h2>
@@ -553,7 +500,7 @@ export function AdminMail() {
             </label>
             {signature.trim() ? (
               <p className="text-xs text-muted">
-                Your signature is included below (edit under Signature if needed).
+                Your signature is included below (edit under Settings if needed).
               </p>
             ) : null}
             <div className="flex flex-wrap items-center gap-3">

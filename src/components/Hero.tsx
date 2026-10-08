@@ -40,7 +40,7 @@ export function Hero() {
       <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:gap-16 lg:px-8">
         <div className="animate-fade-up">
           <div className="group mb-6 inline-flex select-none items-center gap-2 rounded-full border border-navy/10 bg-surface px-4 py-1.5 text-sm font-medium text-navy shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-cyan hover:bg-cyan hover:text-white hover:shadow-md">
-            <MapPin size={14} className="text-cyan transition-all duration-300 group-hover:-translate-y-0.5 group-hover:text-white" />
+            <MapPin size={14} className="text-cyan transition-colors duration-300 group-hover:text-white" />
             DFW Area
           </div>
 

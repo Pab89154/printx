@@ -11,6 +11,7 @@ import {
   defaultPermissions,
   type PermissionKey,
 } from '../../shared/permissions'
+import { SandboxIcon } from '../lib/sandboxIcon'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
@@ -42,10 +43,29 @@ export function AdminSettings() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editPerms, setEditPerms] = useState<AdminPermissions | null>(null)
   const [savingPerms, setSavingPerms] = useState(false)
+  const [passwordTargetId, setPasswordTargetId] = useState<string | null>(null)
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetPasswordError, setResetPasswordError] = useState('')
+  const [resetPasswordMessage, setResetPasswordMessage] = useState('')
+  const [resetPasswordSaving, setResetPasswordSaving] = useState(false)
+  const [emailTargetId, setEmailTargetId] = useState<string | null>(null)
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetEmailError, setResetEmailError] = useState('')
+  const [resetEmailMessage, setResetEmailMessage] = useState('')
+  const [resetEmailSaving, setResetEmailSaving] = useState(false)
+  const [emailDraft, setEmailDraft] = useState('')
+  const [emailPassword, setEmailPassword] = useState('')
+  const [emailMessage, setEmailMessage] = useState('')
+  const [emailError, setEmailError] = useState('')
+  const [emailSaving, setEmailSaving] = useState(false)
 
   const [websiteOnline, setWebsiteOnline] = useState(true)
   const [siteStatusMessage, setSiteStatusMessage] = useState('')
   const [siteStatusSaving, setSiteStatusSaving] = useState(false)
+
+  const [signatureDraft, setSignatureDraft] = useState('')
+  const [savingSignature, setSavingSignature] = useState(false)
+  const [signatureMessage, setSignatureMessage] = useState('')
 
   async function loadAdmins() {
     if (!can('manage_admins')) {
@@ -61,13 +81,27 @@ export function AdminSettings() {
     setWebsiteOnline(content.websiteOnline !== false)
   }
 
+  async function loadSignature() {
+    if (!can('mail')) {
+      setSignatureDraft('')
+      return
+    }
+    const sig = await api.admin.mail.getSignature()
+    setSignatureDraft(sig.signature)
+  }
+
   useEffect(() => {
     setNameDraft(displayName ?? '')
   }, [displayName])
 
   useEffect(() => {
+    setEmailDraft(email ?? '')
+  }, [email])
+
+  useEffect(() => {
     loadAdmins().catch(console.error)
     loadSiteStatus().catch(console.error)
+    loadSignature().catch(console.error)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when role/access identity changes
   }, [isMainAdmin, email])
 
@@ -106,8 +140,23 @@ export function AdminSettings() {
     }
   }
 
+  async function saveSignature() {
+    setSavingSignature(true)
+    setSignatureMessage('')
+    try {
+      const result = await api.admin.mail.updateSignature(signatureDraft)
+      setSignatureDraft(result.signature)
+      setSignatureMessage(result.signature.trim() ? 'Signature saved.' : 'Signature cleared.')
+    } catch (err) {
+      setSignatureMessage(err instanceof Error ? err.message : 'Could not save signature')
+    } finally {
+      setSavingSignature(false)
+    }
+  }
+
   async function changePassword(e: React.FormEvent) {
     e.preventDefault()
+    if (!isMainAdmin) return
     setError('')
     setMessage('')
     try {
@@ -116,6 +165,61 @@ export function AdminSettings() {
       setTimeout(() => navigate(adminHomePath()), 1500)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update password')
+    }
+  }
+
+  async function changeEmail(e: React.FormEvent) {
+    e.preventDefault()
+    if (!isMainAdmin) return
+    setEmailError('')
+    setEmailMessage('')
+    setEmailSaving(true)
+    try {
+      await api.admin.settings.changeEmail(emailDraft, emailPassword)
+      setEmailMessage('Email updated. Please sign in again with your new email.')
+      setEmailPassword('')
+      setTimeout(() => navigate(adminHomePath()), 1500)
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : 'Failed to update email')
+    } finally {
+      setEmailSaving(false)
+    }
+  }
+
+  async function saveAdminPassword(e: React.FormEvent) {
+    e.preventDefault()
+    if (!passwordTargetId || !isMainAdmin) return
+    setResetPasswordError('')
+    setResetPasswordMessage('')
+    setResetPasswordSaving(true)
+    try {
+      await api.admin.users.setPassword(passwordTargetId, resetPassword)
+      setResetPassword('')
+      setPasswordTargetId(null)
+      setResetPasswordMessage('Password updated. They will need to sign in again.')
+    } catch (err) {
+      setResetPasswordError(err instanceof Error ? err.message : 'Could not update password')
+    } finally {
+      setResetPasswordSaving(false)
+    }
+  }
+
+  async function saveAdminEmail(e: React.FormEvent) {
+    e.preventDefault()
+    if (!emailTargetId || !isMainAdmin) return
+    setResetEmailError('')
+    setResetEmailMessage('')
+    setResetEmailSaving(true)
+    try {
+      const result = await api.admin.users.setEmail(emailTargetId, resetEmail)
+      setResetEmail('')
+      setEmailTargetId(null)
+      setResetEmailMessage(`Email updated to ${result.email}. They will need to sign in again.`)
+      await loadAdmins()
+    } catch (err) {
+      setResetEmailError(err instanceof Error ? err.message : 'Could not update email')
+    } finally {
+      setResetEmailSaving(false)
     }
   }
 
@@ -239,6 +343,42 @@ export function AdminSettings() {
         )}
       </div>
 
+      {can('mail') && (
+        <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+          <h2 className="mb-1 font-semibold">Mail signature</h2>
+          <p className="text-sm text-muted">
+            Added at the end of new messages, replies, and forwards. Leave blank for no signature.
+          </p>
+          <label className="mt-4 block text-sm font-medium text-navy">
+            Signature
+            <textarea
+              className={`mt-1 ${inputClass}`}
+              rows={6}
+              value={signatureDraft}
+              onChange={(e) => setSignatureDraft(e.target.value)}
+              placeholder={'Your name\nPrintX Admin'}
+            />
+          </label>
+          {signatureDraft.trim() ? (
+            <div className="mt-4 rounded-xl border border-dashed bg-surface/60 p-4 text-sm text-navy">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Preview</p>
+              <pre className="mt-2 whitespace-pre-wrap font-sans">{`--\n${signatureDraft.trim()}`}</pre>
+            </div>
+          ) : null}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={savingSignature}
+              onClick={() => void saveSignature()}
+            >
+              {savingSignature ? 'Saving…' : 'Save signature'}
+            </button>
+            {signatureMessage && <p className="text-sm text-muted">{signatureMessage}</p>}
+          </div>
+        </div>
+      )}
+
       {can('website_status') && (
         <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
           <h2 className="mb-1 font-semibold">Public website</h2>
@@ -268,6 +408,7 @@ export function AdminSettings() {
                 to={adminPath('sandbox')}
                 className="btn btn-secondary mt-4 !border-amber-200 !bg-amber-50 !text-amber-900 hover:!border-amber-400 hover:!bg-amber-100 hover:!text-amber-950"
               >
+                <SandboxIcon size={16} className="text-amber-500" />
                 Open site sandbox
               </Link>
               <p className="mt-2 text-xs text-muted">
@@ -282,8 +423,15 @@ export function AdminSettings() {
         <div className="mt-8 max-w-2xl rounded-2xl border bg-white p-6">
           <h2 className="mb-1 font-semibold">Admin accounts & access</h2>
           <p className="mb-4 text-sm text-muted">
-            As main admin you can create regular admins, choose what they can see, and delete their accounts.
+            As main admin you can create regular admins, choose what they can see, change their emails and
+            passwords, and delete their accounts.
           </p>
+          {resetPasswordMessage && (
+            <p className="mb-4 text-sm text-green-600">{resetPasswordMessage}</p>
+          )}
+          {resetEmailMessage && (
+            <p className="mb-4 text-sm text-green-600">{resetEmailMessage}</p>
+          )}
 
           <ul className="space-y-3">
             {admins.map((admin) => (
@@ -317,6 +465,32 @@ export function AdminSettings() {
                         </button>
                         <button
                           type="button"
+                          onClick={() => {
+                            setEmailTargetId((id) => (id === admin.id ? null : admin.id))
+                            setResetEmail(admin.email)
+                            setResetEmailError('')
+                            setResetEmailMessage('')
+                            setPasswordTargetId(null)
+                          }}
+                          className="btn btn-secondary"
+                        >
+                          {emailTargetId === admin.id ? 'Close' : 'Change email'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPasswordTargetId((id) => (id === admin.id ? null : admin.id))
+                            setResetPassword('')
+                            setResetPasswordError('')
+                            setResetPasswordMessage('')
+                            setEmailTargetId(null)
+                          }}
+                          className="btn btn-secondary"
+                        >
+                          {passwordTargetId === admin.id ? 'Close' : 'Set password'}
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setPendingRemove(admin)}
                           className="btn btn-danger"
                         >
@@ -326,6 +500,69 @@ export function AdminSettings() {
                     )}
                   </div>
                 </div>
+
+                {emailTargetId === admin.id && (
+                  <form onSubmit={saveAdminEmail} className="mt-4 border-t pt-4">
+                    <p className="mb-2 text-sm font-medium text-navy">Change login email</p>
+                    <label className="block">
+                      <span className="sr-only">New email</span>
+                      <input
+                        type="email"
+                        required
+                        className={inputClass}
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        placeholder="name@printx.pw"
+                        autoComplete="email"
+                      />
+                    </label>
+                    <p className="mt-2 text-xs text-muted">
+                      They will be signed out and must sign in with this email next time.
+                    </p>
+                    {resetEmailError && (
+                      <p className="mt-2 text-sm text-red-600">{resetEmailError}</p>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={resetEmailSaving}
+                      className="btn btn-primary mt-3"
+                    >
+                      {resetEmailSaving ? 'Saving…' : 'Save email'}
+                    </button>
+                  </form>
+                )}
+
+                {passwordTargetId === admin.id && (
+                  <form onSubmit={saveAdminPassword} className="mt-4 border-t pt-4">
+                    <p className="mb-2 text-sm font-medium text-navy">Set new password</p>
+                    <label className="block">
+                      <span className="sr-only">New password</span>
+                      <input
+                        type="password"
+                        required
+                        minLength={8}
+                        className={inputClass}
+                        value={resetPassword}
+                        onChange={(e) => setResetPassword(e.target.value)}
+                        placeholder="8+ characters"
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <p className="mt-2 text-xs text-muted">
+                      They will be signed out and must use this password next time.
+                    </p>
+                    {resetPasswordError && (
+                      <p className="mt-2 text-sm text-red-600">{resetPasswordError}</p>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={resetPasswordSaving}
+                      className="btn btn-primary mt-3"
+                    >
+                      {resetPasswordSaving ? 'Saving…' : 'Save password'}
+                    </button>
+                  </form>
+                )}
 
                 {editingId === admin.id && editPerms && (
                   <div className="mt-4 border-t pt-4">
@@ -409,7 +646,7 @@ export function AdminSettings() {
               ))}
             </div>
             <p className="mt-2 text-xs text-muted">
-              Share credentials securely. They should change their password after first login.
+              Share credentials securely. Only you (main admin) can change their email or password later.
             </p>
             {adminError && <p className="mt-3 text-sm text-red-600">{adminError}</p>}
             {adminMessage && <p className="mt-3 text-sm text-green-600">{adminMessage}</p>}
@@ -420,7 +657,43 @@ export function AdminSettings() {
         </div>
       )}
 
-      {can('settings') && (
+      {isMainAdmin && can('settings') && (
+        <form onSubmit={changeEmail} className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+          <h2 className="mb-4 font-semibold">Change your email</h2>
+          <label className="block">
+            New email
+            <input
+              type="email"
+              required
+              className={`mt-1 ${inputClass}`}
+              value={emailDraft}
+              onChange={(e) => setEmailDraft(e.target.value)}
+              autoComplete="email"
+            />
+          </label>
+          <label className="mt-3 block">
+            Current password
+            <input
+              type="password"
+              required
+              className={`mt-1 ${inputClass}`}
+              value={emailPassword}
+              onChange={(e) => setEmailPassword(e.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          <p className="mt-2 text-xs text-muted">
+            You’ll be signed out and must sign in with the new email.
+          </p>
+          {emailError && <p className="mt-3 text-sm text-red-600">{emailError}</p>}
+          {emailMessage && <p className="mt-3 text-sm text-green-600">{emailMessage}</p>}
+          <button type="submit" disabled={emailSaving} className="btn btn-primary mt-4">
+            {emailSaving ? 'Saving…' : 'Update email'}
+          </button>
+        </form>
+      )}
+
+      {isMainAdmin && can('settings') && (
         <form onSubmit={changePassword} className="mt-8 max-w-md rounded-2xl border bg-white p-6">
           <h2 className="mb-4 font-semibold">Change your password</h2>
           <label className="block">
@@ -450,6 +723,16 @@ export function AdminSettings() {
             Update Password
           </button>
         </form>
+      )}
+
+      {!isMainAdmin && can('settings') && (
+        <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+          <h2 className="mb-2 font-semibold">Email & password</h2>
+          <p className="text-sm text-muted">
+            Regular admins cannot change their own email or password. Ask the main admin to update them for
+            you in Settings → Admin accounts.
+          </p>
+        </div>
       )}
 
       <ConfirmDialog

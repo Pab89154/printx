@@ -158,6 +158,11 @@ export const api = {
           method: 'PATCH',
           body: JSON.stringify({ currentPassword, newPassword }),
         }),
+      changeEmail: (email: string, currentPassword: string) =>
+        request<{ ok: boolean; email: string }>('/api/admin/settings/email', {
+          method: 'PATCH',
+          body: JSON.stringify({ email, currentPassword }),
+        }),
       updateProfile: (displayName: string) =>
         request<{ ok: boolean; displayName: string | null }>('/api/admin/settings/profile', {
           method: 'PATCH',
@@ -183,6 +188,16 @@ export const api = {
         request<import('../types/api.ts').AdminUser>(`/api/admin/users/${id}`, {
           method: 'PATCH',
           body: JSON.stringify({ permissions }),
+        }),
+      setPassword: (id: string, password: string) =>
+        request<{ ok: boolean }>(`/api/admin/users/${id}/password`, {
+          method: 'PATCH',
+          body: JSON.stringify({ password }),
+        }),
+      setEmail: (id: string, email: string) =>
+        request<{ ok: boolean; email: string }>(`/api/admin/users/${id}/email`, {
+          method: 'PATCH',
+          body: JSON.stringify({ email }),
         }),
       delete: (id: string) => request(`/api/admin/users/${id}`, { method: 'DELETE' }),
     },

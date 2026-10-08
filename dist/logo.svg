@@ -6,7 +6,7 @@
     <rect x="118" y="236" width="276" height="40" rx="20" transform="rotate(45 256 256)"/>
     <rect x="118" y="236" width="276" height="40" rx="20" transform="rotate(-45 256 256)"/>
   </g>
-  <!-- Center equals bars from brand mark -->
-  <rect x="210" y="230" width="92" height="20" rx="5" fill="#12B5D4"/>
-  <rect x="210" y="262" width="92" height="20" rx="5" fill="#2563EB"/>
+  <!-- Center equals bars — light blue on top, dark blue on bottom (swapped) -->
+  <rect x="210" y="230" width="92" height="20" rx="5" fill="#2563EB"/>
+  <rect x="210" y="262" width="92" height="20" rx="5" fill="#12B5D4"/>
 </svg>

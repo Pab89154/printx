@@ -17,7 +17,7 @@ export function WhatWePrint() {
           />
         </ScrollReveal>
 
-        <div className="grid items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid items-stretch gap-6 py-1 sm:grid-cols-2 lg:grid-cols-3">
           {products.map((product, i) => (
             <ScrollReveal key={product.id} delay={i * 80} className="h-full">
               <ProductCard product={product} />

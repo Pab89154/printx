@@ -25,22 +25,22 @@ function StandCard({ stand }: { stand: PublicStand }) {
       <div className="mb-4 flex items-start justify-between gap-3">
         <h3 className="text-xl font-bold text-navy">{stand.schoolName}</h3>
         <span
-          className={`shrink-0 select-none rounded-full px-3 py-1 text-xs font-semibold transition-all duration-300 group-hover:-translate-y-0.5 ${status.className}`}
+          className={`shrink-0 select-none rounded-full px-3 py-1 text-xs font-semibold ${status.className}`}
         >
           {status.label}
         </span>
       </div>
       <ul className="space-y-2.5 text-sm text-slate-600">
         <li className="flex items-center gap-2.5">
-          <Calendar size={16} className="shrink-0 text-electric transition-transform duration-300 group-hover:-translate-y-0.5" />
+          <Calendar size={16} className="shrink-0 text-electric" />
           {stand.displayDate}
         </li>
         <li className="flex items-center gap-2.5">
-          <Clock size={16} className="shrink-0 text-electric transition-transform duration-300 group-hover:-translate-y-0.5" />
+          <Clock size={16} className="shrink-0 text-electric" />
           {stand.time}
         </li>
         <li className="flex items-center gap-2.5">
-          <MapPin size={16} className="shrink-0 text-electric transition-transform duration-300 group-hover:-translate-y-0.5" />
+          <MapPin size={16} className="shrink-0 text-electric" />
           {stand.location}
         </li>
       </ul>

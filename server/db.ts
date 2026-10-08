@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs'
 import { randomUUID } from 'node:crypto'
 import { resolveImageUrl } from '../shared/imageUrl.ts'
+import { setPrimaryAdminUserId } from '../shared/permissions.ts'
 import type { Stand, WebsiteContent } from './types.ts'
 import { getDbApi, UPLOADS_DIR, type DbApi } from './dbClient.ts'
 
@@ -153,48 +154,88 @@ function resolveAdminPassword(): string {
   return 'coolprints.X'
 }
 
+async function readPrimaryAdminUserId(database: DbApi): Promise<string | null> {
+  const row = await database.get<{ value: string }>(
+    "SELECT value FROM website_settings WHERE key = 'primaryAdminUserId'",
+  )
+  if (!row?.value) return null
+  try {
+    const parsed = JSON.parse(row.value) as unknown
+    return typeof parsed === 'string' && parsed.trim() ? parsed.trim() : null
+  } catch {
+    return typeof row.value === 'string' && row.value.trim() ? row.value.trim() : null
+  }
+}
+
+async function persistPrimaryAdminUserId(database: DbApi, userId: string) {
+  setPrimaryAdminUserId(userId)
+  await setWebsiteSetting(database, 'primaryAdminUserId', userId)
+}
+
 async function ensurePrimaryAdmin(database: DbApi) {
   const adminEmail = resolveAdminEmail()
   const password = resolveAdminPassword()
 
-  const byEmail = await database.get<{ id: string }>(
-    `SELECT id FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1`,
+  const storedId = await readPrimaryAdminUserId(database)
+  if (storedId) {
+    const byId = await database.get<{ id: string; email: string }>(
+      `SELECT id, email FROM users WHERE id = ? AND role = 'admin'`,
+      storedId,
+    )
+    if (byId) {
+      // Keep login email as-is so in-app email changes survive deploys / cold starts.
+      await database.run('UPDATE users SET email_verified = 1 WHERE id = ?', byId.id)
+      setPrimaryAdminUserId(byId.id)
+      console.log(`[printx] Primary admin ready: ${byId.email}`)
+      return
+    }
+  }
+
+  const byEmail = await database.get<{ id: string; email: string }>(
+    `SELECT id, email FROM users WHERE role = 'admin' AND LOWER(email) = ? LIMIT 1`,
     adminEmail,
   )
 
   if (byEmail) {
     // Keep existing password + sessions. Resetting them on every boot caused
     // “Unauthorized” mid-session after Render cold starts / deploys.
-    await database.run('UPDATE users SET email = ?, email_verified = 1 WHERE id = ?', adminEmail, byEmail.id)
-  } else {
-    const hash = bcrypt.hashSync(password, 12)
-    const fallback = await database.get<{ id: string }>(
-      `SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`,
-    )
-
-    if (fallback) {
-      await database.run(
-        'UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?',
-        adminEmail,
-        hash,
-        fallback.id,
-      )
-      // Only wipe sessions when we actually change the account identity/password
-      await database.run('DELETE FROM sessions WHERE user_id = ?', fallback.id)
-    } else {
-      await database.run(
-        'INSERT INTO users (id, email, password_hash, role, email_verified, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        randomUUID(),
-        adminEmail,
-        hash,
-        'admin',
-        1,
-        null,
-        new Date().toISOString(),
-      )
-    }
+    await database.run('UPDATE users SET email_verified = 1 WHERE id = ?', byEmail.id)
+    await persistPrimaryAdminUserId(database, byEmail.id)
+    console.log(`[printx] Primary admin ready: ${byEmail.email}`)
+    return
   }
 
+  const hash = bcrypt.hashSync(password, 12)
+  const fallback = await database.get<{ id: string; email: string }>(
+    `SELECT id, email FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`,
+  )
+
+  if (fallback) {
+    // Only reclaim the oldest admin when no primary id is stored yet (first boot / migration).
+    await database.run(
+      'UPDATE users SET email = ?, password_hash = ?, email_verified = 1 WHERE id = ?',
+      adminEmail,
+      hash,
+      fallback.id,
+    )
+    await database.run('DELETE FROM sessions WHERE user_id = ?', fallback.id)
+    await persistPrimaryAdminUserId(database, fallback.id)
+    console.log(`[printx] Primary admin ready: ${adminEmail}`)
+    return
+  }
+
+  const id = randomUUID()
+  await database.run(
+    'INSERT INTO users (id, email, password_hash, role, email_verified, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    id,
+    adminEmail,
+    hash,
+    'admin',
+    1,
+    null,
+    new Date().toISOString(),
+  )
+  await persistPrimaryAdminUserId(database, id)
   console.log(`[printx] Primary admin ready: ${adminEmail}`)
 }
 

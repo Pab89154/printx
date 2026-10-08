@@ -17,7 +17,7 @@ export function HowToBuy() {
           <SectionHeading title="How to Buy" subtitle="Getting a PrintX product is easy — just show up!" />
         </ScrollReveal>
 
-        <div className="grid items-stretch gap-8 md:grid-cols-3">
+        <div className="grid items-stretch gap-8 py-1 md:grid-cols-3">
           {HOW_TO_BUY.map((step, i) => {
             const Icon = iconMap[step.icon]
             return (
@@ -25,7 +25,7 @@ export function HowToBuy() {
                 <div
                   className={`group flex h-full select-none flex-col rounded-2xl border bg-white p-8 text-center shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${step.className}`}
                 >
-                  <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-electric to-cyan text-white shadow-lg shadow-electric/25 transition-all duration-300 group-hover:-translate-y-1 group-hover:from-white/25 group-hover:to-white/10 group-hover:shadow-md">
+                  <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-electric to-cyan text-white shadow-lg shadow-electric/25 transition-all duration-300 group-hover:from-white/25 group-hover:to-white/10 group-hover:shadow-md group-hover:scale-105">
                     <Icon size={28} strokeWidth={2} />
                   </div>
                   <div className="mb-2 text-sm font-bold uppercase tracking-wider text-electric transition-colors duration-150 group-hover:text-white/90">

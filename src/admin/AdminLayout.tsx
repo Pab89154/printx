@@ -3,7 +3,6 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Building2,
   FileText,
-  FlaskConical,
   Inbox,
   LayoutDashboard,
   LogOut,
@@ -18,6 +17,7 @@ import {
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { Logo } from '../components/Logo'
 import { useMailUnread } from '../hooks/useMailUnread'
+import { SandboxIcon } from '../lib/sandboxIcon'
 import { adminHomePath, adminPath, firstAllowedAdminPath, publicSiteUrl } from '../lib/portal'
 import type { PermissionKey } from '../../shared/permissions'
 
@@ -79,7 +79,7 @@ export function AdminLayout() {
   }
 
   return (
-    <div className="flex min-h-dvh max-w-[100vw] overflow-x-hidden bg-slate-50">
+    <div className="flex min-h-dvh max-w-[100vw] bg-slate-50">
       <header className="fixed inset-x-0 top-0 z-40 flex min-h-14 items-center gap-3 border-b border-slate-200 bg-navy px-4 pb-0 pt-[env(safe-area-inset-top,0px)] text-white md:hidden">
         <div className="flex h-14 w-full min-w-0 items-center gap-3">
           <button
@@ -184,7 +184,7 @@ export function AdminLayout() {
               to={adminPath('sandbox')}
               className="press-pop mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-amber-200 hover:bg-white/10 hover:text-white md:py-2.5"
             >
-              <FlaskConical size={18} className="shrink-0" />
+              <SandboxIcon size={18} className="shrink-0 text-amber-400" />
               Site sandbox
             </NavLink>
           )}
@@ -207,8 +207,8 @@ export function AdminLayout() {
         </div>
       </aside>
 
-      <main className="min-w-0 max-w-full flex-1 overflow-x-hidden px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[calc(3.5rem+env(safe-area-inset-top,0px)+0.75rem)] md:ml-64 md:p-8 md:pt-8">
-        <div className="mx-auto w-full min-w-0 max-w-6xl">
+      <main className="min-w-0 max-w-full flex-1 px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[calc(3.5rem+env(safe-area-inset-top,0px)+0.75rem)] md:ml-64 md:p-8 md:pt-8">
+        <div className="mx-auto w-full min-w-0 max-w-6xl overflow-x-clip">
           <Outlet />
         </div>
       </main>

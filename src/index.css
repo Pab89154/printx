@@ -23,7 +23,6 @@
 
 html {
   scroll-behavior: smooth;
-  overflow-x: hidden;
 }
 
 /* Clear sticky header when jumping to in-page sections */
@@ -36,9 +35,6 @@ body {
   color: var(--color-navy);
   background: #ffffff;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
-  /* Avoid iOS rubber-band revealing horizontal overflow from transforms */
-  overscroll-behavior-x: none;
 }
 
 /* Logo-matched dark field (navy → light electric blue) */

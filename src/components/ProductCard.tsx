@@ -11,9 +11,9 @@ export function ProductCard({ product }: Props) {
   const imageUrl = resolveImageUrl(product.image)
 
   return (
-    <article className="group flex h-full flex-col overflow-hidden rounded-2xl border border-navy/8 bg-white shadow-sm transition-all duration-300 hover:-translate-y-1.5 hover:shadow-xl hover:shadow-electric/15">
+    <article className="group flex h-full flex-col rounded-2xl border border-navy/8 bg-white shadow-sm transition-all duration-300 hover:-translate-y-1.5 hover:shadow-xl hover:shadow-electric/15">
       <div
-        className={`relative flex h-44 items-center justify-center bg-gradient-to-br ${product.imageGradient} transition-transform duration-500 group-hover:scale-[1.02]`}
+        className={`relative flex h-44 items-center justify-center overflow-hidden rounded-t-2xl bg-gradient-to-br ${product.imageGradient}`}
       >
         {imageUrl ? (
           <img
@@ -27,7 +27,7 @@ export function ProductCard({ product }: Props) {
             name={product.emoji}
             alt=""
             light
-            className="h-16 w-16 drop-shadow-md transition-transform duration-500 group-hover:-translate-y-1 group-hover:scale-110"
+            className="h-16 w-16 drop-shadow-md transition-transform duration-500 group-hover:scale-110"
           />
         )}
         <div className="absolute inset-0 filament-pattern opacity-60" />
