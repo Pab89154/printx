@@ -1,31 +1,46 @@
 import { useState } from 'react'
-import { CheckCircle2, Upload } from 'lucide-react'
-import { api } from '../lib/api'
+import { CheckCircle2 } from 'lucide-react'
+import { mailtoHref, openPrintXMailto, PRINTX_CONTACT_EMAIL } from '../lib/mailto'
+import { usePublicData } from '../context/PublicDataContext'
 import { Button } from './Button'
 import { ScrollReveal } from './ScrollReveal'
 
 export function CustomPrinting() {
+  const { data } = usePublicData()
+  const contactEmail = data?.content?.contactEmail?.trim() || PRINTX_CONTACT_EMAIL
   const [submitted, setSubmitted] = useState(false)
   const [showForm, setShowForm] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    setLoading(true)
-    setError('')
     const form = e.currentTarget
     const formData = new FormData(form)
-    try {
-      await api.public.customRequest(formData)
-      setSubmitted(true)
-      setShowForm(false)
-      form.reset()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit request')
-    } finally {
-      setLoading(false)
-    }
+    const name = String(formData.get('name') || '').trim()
+    const email = String(formData.get('email') || '').trim()
+    const school = String(formData.get('school') || '').trim()
+    const description = String(formData.get('description') || '').trim()
+    const size = String(formData.get('size') || '').trim()
+
+    openPrintXMailto({
+      email: contactEmail,
+      subject: `[PrintX] Custom print request: ${name || 'Visitor'}`,
+      body: [
+        `Name: ${name}`,
+        `Reply-to: ${email}`,
+        school ? `School: ${school}` : null,
+        size ? `Approximate size: ${size}` : null,
+        '',
+        'What I would like printed:',
+        description,
+        '',
+        '(If you have a .STL or .OBJ file, please attach it in this email.)',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    })
+    setSubmitted(true)
+    setShowForm(false)
+    form.reset()
   }
 
   return (
@@ -38,18 +53,37 @@ export function CustomPrinting() {
               Want something we don&apos;t currently sell? Tell us about your idea and we&apos;ll see if we can 3D print it.
             </p>
             {!showForm && !submitted && (
-              <Button size="lg" className="mt-8" onClick={() => setShowForm(true)}>
+              <Button
+                size="lg"
+                className="mt-8"
+                href={mailtoHref(contactEmail, {
+                  subject: '[PrintX] Custom print request',
+                  body: 'Hi PrintX,\n\nI have a custom print idea:\n\n',
+                })}
+              >
                 Request a Custom Print
               </Button>
+            )}
+            {!showForm && !submitted && (
+              <button
+                type="button"
+                className="mt-3 block text-sm font-medium text-electric hover:underline"
+                onClick={() => setShowForm(true)}
+              >
+                Or fill in details first
+              </button>
             )}
             {submitted && (
               <div className="mt-8 flex items-start gap-3 rounded-2xl border border-cyan/30 bg-cyan/5 p-5">
                 <CheckCircle2 size={22} className="mt-0.5 shrink-0 text-cyan" />
                 <div>
-                  <p className="font-semibold text-navy">Request received!</p>
+                  <p className="font-semibold text-navy">Opening your email app…</p>
                   <p className="mt-1 text-sm leading-relaxed text-muted">
-                    Someone from PrintX will review your idea and get back to you by email.
+                    Send the request to {contactEmail}. Attach a .STL/.OBJ in your mail app if you have one.
                   </p>
+                  <Button type="button" size="sm" className="mt-4" onClick={() => setSubmitted(false)}>
+                    Write another
+                  </Button>
                 </div>
               </div>
             )}
@@ -76,14 +110,6 @@ export function CustomPrinting() {
                   <span className="mb-1.5 block text-sm font-medium text-navy">What would you like printed?</span>
                   <input name="description" required type="text" className="field-input" placeholder="Describe your idea" />
                 </label>
-                <div className="mt-4">
-                  <span className="mb-1.5 block text-sm font-medium text-navy">Upload a 3D model (optional)</span>
-                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 px-4 py-5 text-sm text-muted hover:border-electric hover:bg-electric/5">
-                    <Upload size={18} />
-                    <span>.STL or .OBJ file</span>
-                    <input name="file" type="file" accept=".stl,.obj" className="sr-only" />
-                  </label>
-                </div>
                 <label className="mt-4 block">
                   <span className="mb-1.5 block text-sm font-medium text-navy">Approximate size</span>
                   <select name="size" className="field-input">
@@ -93,10 +119,19 @@ export function CustomPrinting() {
                     <option>Not sure</option>
                   </select>
                 </label>
-                {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-                <Button type="submit" size="lg" className="mt-6 w-full" disabled={loading}>
-                  {loading ? 'Submitting…' : 'Submit Request'}
+                <p className="mt-3 text-xs text-muted">
+                  Your email app will open to {contactEmail}. Attach a .STL or .OBJ there if you have one.
+                </p>
+                <Button type="submit" size="lg" className="mt-4 w-full">
+                  Email request
                 </Button>
+                <button
+                  type="button"
+                  className="mt-3 w-full text-sm font-medium text-muted hover:text-navy"
+                  onClick={() => setShowForm(false)}
+                >
+                  Cancel
+                </button>
               </form>
             </ScrollReveal>
           )}

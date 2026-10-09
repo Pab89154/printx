@@ -1,13 +1,13 @@
 import { AtSign, Mail, MessageCircle } from 'lucide-react'
 import { usePublicData } from '../context/PublicDataContext'
 import { FOOTER_LINKS } from '../data/navigation'
-import { mailtoHref } from '../lib/mailto'
+import { mailtoHref, PRINTX_CONTACT_EMAIL } from '../lib/mailto'
 import { onHashLinkClick } from '../lib/scroll'
 import { Logo } from './Logo'
 
 export function Footer() {
   const { data } = usePublicData()
-  const contactEmail = data?.content?.contactEmail || 'hello@printx.pw'
+  const contactEmail = data?.content?.contactEmail?.trim() || PRINTX_CONTACT_EMAIL
   const contactInstagram = (data?.content?.contactInstagram || '').trim()
   const contactWhatsapp = (data?.content?.contactWhatsapp || '').trim()
   const emailDraftHref = mailtoHref(contactEmail, { subject: 'Hello PrintX' })

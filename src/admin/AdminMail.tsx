@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { bumpMailUnread } from '../lib/mailUnread'
 import type { MailMessage, MailRecipientOption } from '../types/api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { SpellCheckedField } from '../components/SpellCheckedField'
 import { useAdminAuth } from '../context/AdminAuthContext'
 
 type Tab = 'inbox' | 'sent' | 'scheduled' | 'archived' | 'trash' | 'compose'
@@ -484,29 +485,20 @@ export function AdminMail() {
             </div>
             <label className="block text-sm font-medium text-navy">
               Subject
-              <input
-                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm"
+              <SpellCheckedField
                 value={subject}
-                onChange={(e) => setSubject(e.target.value)}
+                onChange={setSubject}
                 placeholder="Subject"
-                lang="en"
-                spellCheck
-                autoCorrect="on"
-                autoCapitalize="sentences"
               />
             </label>
             <label className="block text-sm font-medium text-navy">
               Message
-              <textarea
-                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm"
+              <SpellCheckedField
+                multiline
                 rows={10}
                 value={body}
-                onChange={(e) => setBody(e.target.value)}
+                onChange={setBody}
                 placeholder="Write your message…"
-                lang="en"
-                spellCheck
-                autoCorrect="on"
-                autoCapitalize="sentences"
               />
             </label>
             {signature.trim() ? (

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { usePublicData } from '../context/PublicDataContext'
 import { SCHOOL_HOST_STEPS, SCHOOL_OFFERINGS } from '../data/products'
+import { mailtoHref, PRINTX_CONTACT_EMAIL } from '../lib/mailto'
 import { Button } from './Button'
 import { ScrollReveal } from './ScrollReveal'
 
@@ -22,6 +23,7 @@ const offeringIcons = {
 export function ForSchools() {
   const { data } = usePublicData()
   const content = data?.content
+  const contactEmail = content?.contactEmail?.trim() || PRINTX_CONTACT_EMAIL
 
   return (
     <section id="schools" className="bg-surface py-20 sm:py-28">
@@ -53,7 +55,26 @@ export function ForSchools() {
                 ))}
               </div>
 
-              <Button href="#contact" size="lg" className="mt-8">Contact PrintX</Button>
+              <Button
+                href={mailtoHref(contactEmail, {
+                  subject: '[PrintX] School stand request',
+                  body: [
+                    'Hi PrintX,',
+                    '',
+                    'I would like to host a PrintX stand at my school.',
+                    '',
+                    'School name:',
+                    'Preferred dates:',
+                    'Event type:',
+                    '',
+                    'Thanks!',
+                  ].join('\n'),
+                })}
+                size="lg"
+                className="mt-8"
+              >
+                Email PrintX
+              </Button>
             </ScrollReveal>
 
             <ScrollReveal delay={150} className="h-full bg-navy/5 p-8 sm:p-12">

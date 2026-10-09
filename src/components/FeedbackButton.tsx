@@ -1,14 +1,15 @@
 import { useEffect, useId, useState } from 'react'
 import { CheckCircle2, MessageSquarePlus, X } from 'lucide-react'
-import { api } from '../lib/api'
+import { mailtoHref, openPrintXMailto, PRINTX_CONTACT_EMAIL } from '../lib/mailto'
+import { usePublicData } from '../context/PublicDataContext'
 import { Button } from './Button'
 
 export function FeedbackButton() {
   const titleId = useId()
+  const { data } = usePublicData()
+  const contactEmail = data?.content?.contactEmail?.trim() || PRINTX_CONTACT_EMAIL
   const [open, setOpen] = useState(false)
   const [submitted, setSubmitted] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -24,33 +25,27 @@ export function FeedbackButton() {
     }
   }, [open])
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    setLoading(true)
-    setError('')
     const form = e.currentTarget
     const data = new FormData(form)
-    try {
-      await api.public.contact({
-        name: String(data.get('name')),
-        email: String(data.get('email')),
-        inquiryType: 'Website feedback',
-        message: String(data.get('message')),
-      })
-      setSubmitted(true)
-      form.reset()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not send feedback')
-    } finally {
-      setLoading(false)
-    }
+    const name = String(data.get('name') || '').trim()
+    const email = String(data.get('email') || '').trim()
+    const message = String(data.get('message') || '').trim()
+
+    openPrintXMailto({
+      email: contactEmail,
+      subject: `[PrintX] Website feedback: ${name || 'Visitor'}`,
+      body: [`Name: ${name}`, `Reply-to: ${email}`, '', message].join('\n'),
+    })
+    setSubmitted(true)
+    form.reset()
   }
 
   function close() {
     setOpen(false)
     setTimeout(() => {
       setSubmitted(false)
-      setError('')
     }, 200)
   }
 
@@ -91,7 +86,7 @@ export function FeedbackButton() {
                   Send feedback
                 </h2>
                 <p className="mt-1 text-sm text-muted">
-                  Tell us what you like or what we can improve.
+                  Opens your email app to {contactEmail}.
                 </p>
               </div>
               <button
@@ -108,8 +103,17 @@ export function FeedbackButton() {
               <div className="flex items-start gap-3 rounded-2xl border border-cyan/30 bg-cyan/5 p-5">
                 <CheckCircle2 size={22} className="mt-0.5 shrink-0 text-cyan" />
                 <div>
-                  <p className="font-semibold text-navy">Thanks for the feedback!</p>
-                  <p className="mt-1 text-sm text-muted">We read every message.</p>
+                  <p className="font-semibold text-navy">Opening your email app…</p>
+                  <p className="mt-1 text-sm text-muted">
+                    Send the message from your mail app. If nothing opened,{' '}
+                    <a
+                      href={mailtoHref(contactEmail, { subject: '[PrintX] Website feedback' })}
+                      className="font-medium text-electric"
+                    >
+                      tap here
+                    </a>
+                    .
+                  </p>
                   <Button type="button" size="sm" className="mt-4" onClick={close}>
                     Done
                   </Button>
@@ -141,9 +145,8 @@ export function FeedbackButton() {
                     placeholder="What should we know?"
                   />
                 </label>
-                {error && <p className="text-sm text-red-600">{error}</p>}
-                <Button type="submit" size="lg" className="w-full" disabled={loading}>
-                  {loading ? 'Sending…' : 'Send feedback'}
+                <Button type="submit" size="lg" className="w-full">
+                  Email feedback
                 </Button>
               </form>
             )}

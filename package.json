@@ -25,6 +25,7 @@
     "bcryptjs": "^3.0.3",
     "formidable": "^3.5.4",
     "lucide-react": "^1.26.0",
+    "nspell": "^2.1.5",
     "pg": "^8.23.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -39,6 +40,7 @@
     "esbuild@0.28.2": true
   },
   "devDependencies": {
+    "@types/nspell": "^2.1.6",
     "@types/pg": "^8.23.1"
   }
 }

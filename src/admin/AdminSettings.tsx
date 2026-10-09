@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import type { AdminPermissions, AdminUser } from '../types/api'
 import { adminHomePath, adminPath } from '../lib/portal'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { SpellCheckedField } from '../components/SpellCheckedField'
 import {
   PERMISSION_KEYS,
   PERMISSION_LABELS,
@@ -351,16 +352,13 @@ export function AdminSettings() {
           </p>
           <label className="mt-4 block text-sm font-medium text-navy">
             Signature
-            <textarea
+            <SpellCheckedField
+              multiline
               className={`mt-1 ${inputClass}`}
               rows={6}
               value={signatureDraft}
-              onChange={(e) => setSignatureDraft(e.target.value)}
+              onChange={setSignatureDraft}
               placeholder={'Your name\nPrintX Admin'}
-              lang="en"
-              spellCheck
-              autoCorrect="on"
-              autoCapitalize="sentences"
             />
           </label>
           {signatureDraft.trim() ? (
