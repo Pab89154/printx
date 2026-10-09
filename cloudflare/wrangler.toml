@@ -1,0 +1,9 @@
+name = "printx-wake"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Set after deploy (Dashboard → Workers → Settings → Variables), or:
+#   wrangler secret / vars
+# ORIGIN must be your Render web service URL (not the custom domain).
+[vars]
+ORIGIN = "https://printx.onrender.com"

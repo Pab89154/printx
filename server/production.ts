@@ -89,6 +89,15 @@ const server = http.createServer(async (req, res) => {
   const url = req.url?.split('?')[0] ?? '/'
   const method = req.method ?? 'GET'
 
+  // Lightweight wake probe — no DB. Used by the static-site cold-start shell.
+  if (url === '/api/health' && method === 'GET') {
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(JSON.stringify({ ok: true }))
+    return
+  }
+
   if (url.startsWith('/api/')) {
     try {
       const handled = await handleApi(req as IncomingMessage, res, url, method)

@@ -357,6 +357,10 @@ export function AdminSettings() {
               value={signatureDraft}
               onChange={(e) => setSignatureDraft(e.target.value)}
               placeholder={'Your name\nPrintX Admin'}
+              lang="en"
+              spellCheck
+              autoCorrect="on"
+              autoCapitalize="sentences"
             />
           </label>
           {signatureDraft.trim() ? (

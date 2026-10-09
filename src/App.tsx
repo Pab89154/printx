@@ -1,8 +1,9 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { AdminAuthProvider } from './context/AdminAuthContext'
 import { PublicDataProvider } from './context/PublicDataContext'
 import { PublicSite } from './pages/PublicSite'
+import { NotFound } from './pages/NotFound'
 import { AdminLogin } from './admin/AdminLogin'
 import { AdminGuard } from './admin/AdminGuard'
 import { AdminLayout } from './admin/AdminLayout'
@@ -16,9 +17,8 @@ import { AdminSchools } from './admin/AdminSchools'
 import { AdminContent } from './admin/AdminContent'
 import { AdminSettings } from './admin/AdminSettings'
 import { AdminSandbox } from './admin/AdminSandbox'
-import { useAdminAuth } from './context/AdminAuthContext'
 import { BTN_POP_NAV_EVENT } from './lib/buttonPop'
-import { firstAllowedAdminPath, isPortalHost } from './lib/portal'
+import { isPortalHost } from './lib/portal'
 
 /** Completes in-app Link navigation after the button pop animation. */
 function ButtonPopNavBridge() {
@@ -32,11 +32,6 @@ function ButtonPopNavBridge() {
     return () => window.removeEventListener(BTN_POP_NAV_EVENT, onNav)
   }, [navigate])
   return null
-}
-
-function AdminHomeRedirect() {
-  const { permissions } = useAdminAuth()
-  return <Navigate to={firstAllowedAdminPath(permissions)} replace />
 }
 
 function PortalRoutes() {
@@ -57,7 +52,7 @@ function PortalRoutes() {
           <Route path="settings" element={<AdminSettings />} />
         </Route>
       </Route>
-      <Route path="*" element={<AdminHomeRedirect />} />
+      <Route path="*" element={<NotFound />} />
     </Routes>
   )
 }
@@ -82,7 +77,7 @@ function PublicRoutes() {
           <Route path="settings" element={<AdminSettings />} />
         </Route>
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<NotFound />} />
     </Routes>
   )
 }

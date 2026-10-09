@@ -78,11 +78,22 @@ function isSecureRequest(req: IncomingMessage): boolean {
   return process.env.NODE_ENV === 'production'
 }
 
+/** Public hostname as seen by the browser (Static Site may proxy /api to this service). */
+function requestPublicHost(req: IncomingMessage): string {
+  const forwarded = req.headers['x-forwarded-host']
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0]?.trim() ?? ''
+  }
+  return typeof req.headers.host === 'string' ? req.headers.host : ''
+}
+
 function cookieOptions(req: IncomingMessage): { secure: boolean; domain?: string } {
-  const host = typeof req.headers.host === 'string' ? req.headers.host : ''
+  // Prefer explicit domain when API is reached via onrender.com behind a rewrite.
+  const forced = process.env.PRINTX_COOKIE_DOMAIN?.trim()
+  const host = requestPublicHost(req)
   return {
     secure: isSecureRequest(req),
-    domain: sessionCookieDomain(host),
+    domain: forced || sessionCookieDomain(host),
   }
 }
 
@@ -371,6 +382,13 @@ async function loadMailMessage(
 }
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPath: string, method: string): Promise<boolean> {
+  // Dev/preview middleware hits the router; production also short-circuits in production.ts.
+  if (urlPath === '/api/health' && method === 'GET') {
+    res.setHeader('Cache-Control', 'no-store')
+    send(res, 200, { ok: true })
+    return true
+  }
+
   const db = await getDb()
 
   if (urlPath === '/api/public/bootstrap' && method === 'GET') {

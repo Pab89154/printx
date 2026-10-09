@@ -489,6 +489,10 @@ export function AdminMail() {
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
                 placeholder="Subject"
+                lang="en"
+                spellCheck
+                autoCorrect="on"
+                autoCapitalize="sentences"
               />
             </label>
             <label className="block text-sm font-medium text-navy">
@@ -499,6 +503,10 @@ export function AdminMail() {
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 placeholder="Write your message…"
+                lang="en"
+                spellCheck
+                autoCorrect="on"
+                autoCapitalize="sentences"
               />
             </label>
             {signature.trim() ? (

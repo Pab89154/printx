@@ -1,3 +1,7 @@
+# PrintX — single Render Web Service (keeps API + site together).
+# Custom cold-start screen: use the Cloudflare Worker in /cloudflare (see cloudflare/HOW_TO.md).
+# The free Render spinner cannot be replaced from inside a sleeping web service alone.
+
 services:
   - type: web
     name: printx
@@ -6,9 +10,13 @@ services:
     # With DATABASE_URL set, start does not need --experimental-sqlite.
     # Keep NODE_OPTIONS only if you temporarily run without DATABASE_URL (SQLite fallback).
     startCommand: npm start
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Cookie Domain for printx.pw + portal.printx.pw (also helps behind Cloudflare)
+      - key: PRINTX_COOKIE_DOMAIN
+        value: ".printx.pw"
       - key: PRINTX_ADMIN_PASSWORD
         value: coolprints.X
       - key: PRINTX_ADMIN_EMAIL

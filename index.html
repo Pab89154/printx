@@ -14,6 +14,237 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&display=swap" rel="stylesheet" />
+    <title>PrintX — 3D Printing • DFW Area</title>
+    <style>
+      /* Cold-start shell — painted before the API / React bundle are ready */
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background: #0b1220;
+      }
+      #printx-wake {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1.25rem;
+        padding: 2rem 1.5rem;
+        box-sizing: border-box;
+        background: #0b1220;
+        color: #fff;
+        font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+        text-align: center;
+        transition: opacity 280ms ease, visibility 280ms ease;
+      }
+      #printx-wake.is-done {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      #printx-wake .wake-mark {
+        width: 88px;
+        height: 88px;
+        border-radius: 22%;
+        border: 1.5px solid rgba(255, 255, 255, 0.55);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+        overflow: hidden;
+        background: #0b1220;
+      }
+      #printx-wake .wake-mark img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      #printx-wake .wake-brand {
+        margin: 0;
+        font-size: clamp(2rem, 5vw, 2.75rem);
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        line-height: 1.1;
+      }
+      #printx-wake .wake-tagline {
+        margin: 0;
+        max-width: 22rem;
+        font-size: 1.05rem;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.88);
+        line-height: 1.4;
+      }
+      #printx-wake .wake-dots {
+        display: flex;
+        gap: 0.55rem;
+        align-items: center;
+        justify-content: center;
+        margin-top: 0.35rem;
+        min-height: 0.7rem;
+      }
+      #printx-wake .wake-dots span {
+        width: 0.55rem;
+        height: 0.55rem;
+        border-radius: 999px;
+        animation: printx-wake-dot 1.1s ease-in-out infinite;
+      }
+      #printx-wake .wake-dots span:nth-child(1) { background: #2563eb; animation-delay: 0ms; }
+      #printx-wake .wake-dots span:nth-child(2) { background: #12b5d4; animation-delay: 160ms; }
+      #printx-wake .wake-dots span:nth-child(3) { background: #2563eb; animation-delay: 320ms; }
+      #printx-wake.is-error .wake-dots { display: none; }
+      #printx-wake .wake-status {
+        margin: 0.15rem 0 0;
+        font-size: 0.95rem;
+        font-weight: 500;
+        color: rgba(148, 163, 184, 0.95);
+      }
+      #printx-wake .wake-actions {
+        display: none;
+        margin-top: 0.25rem;
+      }
+      #printx-wake.is-error .wake-actions { display: block; }
+      #printx-wake .wake-retry {
+        appearance: none;
+        border: 1px solid rgba(18, 181, 212, 0.55);
+        background: rgba(18, 181, 212, 0.12);
+        color: #e2f8fc;
+        font: inherit;
+        font-size: 0.9rem;
+        font-weight: 600;
+        padding: 0.65rem 1.15rem;
+        border-radius: 0.75rem;
+        cursor: pointer;
+      }
+      #printx-wake .wake-retry:hover {
+        background: rgba(18, 181, 212, 0.22);
+      }
+      @keyframes printx-wake-dot {
+        0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
+        40% { transform: translateY(-5px); opacity: 1; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #printx-wake .wake-dots span { animation: none; opacity: 0.85; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="printx-wake" role="status" aria-live="polite" aria-busy="true">
+      <div class="wake-mark" aria-hidden="true">
+        <img src="/logo.svg" width="88" height="88" alt="" />
+      </div>
+      <h1 class="wake-brand">PrintX</h1>
+      <p class="wake-tagline">Your next creation starts here.</p>
+      <div class="wake-dots" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </div>
+      <p class="wake-status" id="printx-wake-status">Getting everything ready…</p>
+      <div class="wake-actions">
+        <button type="button" class="wake-retry" id="printx-wake-retry">Try again</button>
+      </div>
+    </div>
+    <div id="root"></div>
+    <script>
+      ;(function () {
+        var HEALTH = '/api/health'
+        var shell = document.getElementById('printx-wake')
+        var statusEl = document.getElementById('printx-wake-status')
+        var retryBtn = document.getElementById('printx-wake-retry')
+        var ready = false
+        var attempts = 0
+        var timer = null
+        var resolveReady
+        window.__PRINTX_API_READY__ = new Promise(function (resolve) {
+          resolveReady = resolve
+        })
+
+        function setStatus(text, isError) {
+          if (statusEl) statusEl.textContent = text
+          if (shell) {
+            shell.classList.toggle('is-error', Boolean(isError))
+            shell.setAttribute('aria-busy', isError ? 'false' : 'true')
+          }
+        }
+
+        function finish() {
+          if (ready) return
+          ready = true
+          if (timer) clearTimeout(timer)
+          if (shell) {
+            shell.classList.add('is-done')
+            shell.setAttribute('aria-busy', 'false')
+            window.setTimeout(function () {
+              if (shell && shell.parentNode) shell.parentNode.removeChild(shell)
+            }, 320)
+          }
+          resolveReady()
+        }
+
+        function schedule(ms) {
+          if (timer) clearTimeout(timer)
+          timer = window.setTimeout(ping, ms)
+        }
+
+        function ping() {
+          if (ready) return
+          attempts += 1
+          var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
+          var abortTimer = ctrl
+            ? window.setTimeout(function () { ctrl.abort() }, 12000)
+            : null
+
+          fetch(HEALTH, {
+            method: 'GET',
+            cache: 'no-store',
+            credentials: 'same-origin',
+            signal: ctrl ? ctrl.signal : undefined,
+          })
+            .then(function (res) {
+              if (res.ok) {
+                finish()
+                return
+              }
+              throw new Error('not ready')
+            })
+            .catch(function () {
+              if (ready) return
+              if (attempts < 3) {
+                setStatus('Getting everything ready…', false)
+              } else if (attempts < 12) {
+                setStatus('Still waking the server… this can take about a minute.', false)
+              } else {
+                setStatus('Taking longer than usual. Check your connection, then try again.', true)
+              }
+              // Backoff: 1.5s → ~4s, cap at 4s while waiting; slower when in error UI
+              var delay = attempts >= 12 ? 5000 : Math.min(1500 + attempts * 250, 4000)
+              schedule(delay)
+            })
+            .finally(function () {
+              if (abortTimer) clearTimeout(abortTimer)
+            })
+        }
+
+        if (retryBtn) {
+          retryBtn.addEventListener('click', function () {
+            attempts = 0
+            setStatus('Getting everything ready…', false)
+            ping()
+          })
+        }
+
+        // Local dev: don't block on /api/health (Vite may still be starting the API plugin).
+        var host = (location.hostname || '').toLowerCase()
+        var isLocal =
+          host === 'localhost' ||
+          host === '127.0.0.1' ||
+          host === '[::1]' ||
+          host.endsWith('.local')
+        if (isLocal) {
+          finish()
+        } else {
+          ping()
+        }
+      })()
+    </script>
     <!-- Public site only — portal should not wait on the catalog bootstrap -->
     <script>
       ;(function () {
@@ -27,10 +258,6 @@
         document.head.appendChild(link)
       })()
     </script>
-    <title>PrintX — 3D Printing • DFW Area</title>
-  </head>
-  <body>
-    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
