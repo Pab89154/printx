@@ -108,6 +108,7 @@ export type AdminPermissions = {
   mail: boolean
   stands: boolean
   products: boolean
+  orders: boolean
   requests: boolean
   schools: boolean
   content: boolean

@@ -11,6 +11,8 @@ export function Footer() {
   const contactInstagram = (data?.content?.contactInstagram || '').trim()
   const contactWhatsapp = (data?.content?.contactWhatsapp || '').trim()
   const emailDraftHref = mailtoHref(contactEmail, { subject: 'Hello PrintX' })
+  const hasStands = (data?.stands?.length ?? 0) > 0
+  const links = FOOTER_LINKS.filter((link) => link.href !== '#stands' || hasStands)
 
   // Always show Instagram, WhatsApp, and Email — URLs come from Admin → Website Content
   const socialLinks = [
@@ -52,7 +54,7 @@ export function Footer() {
               Links
             </h3>
             <ul className="space-y-2.5">
-              {FOOTER_LINKS.map((link) => (
+              {links.map((link) => (
                 <li key={link.href}>
                   <a
                     href={link.href}

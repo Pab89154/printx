@@ -2,8 +2,6 @@ name = "printx-wake"
 main = "worker.js"
 compatibility_date = "2024-11-01"
 
-# Set after deploy (Dashboard → Workers → Settings → Variables), or:
-#   wrangler secret / vars
-# ORIGIN must be your Render web service URL (not the custom domain).
+# ORIGIN can also be set in the Cloudflare dashboard (Variables).
 [vars]
-ORIGIN = "https://printx.onrender.com"
+ORIGIN = "https://printx-28ww.onrender.com"

@@ -1,60 +1,80 @@
-# Replace Render’s ugly loading screen (keep one Web Service)
+# Fix the Render “APPLICATION LOADING” screen
 
-You still use **one Render Web Service**.  
-A free tiny helper on **Cloudflare** sits in front and shows the PrintX screen while Render wakes up.
+You already put `printx.pw` on Cloudflare (good — the orange cloud works).  
+The missing piece is connecting the **Worker** so it answers first and shows the PrintX loading screen.
 
-Ask a parent/guardian to help with accounts and DNS if you need to.
+Ask a parent/guardian to help if you need to.
 
 ---
 
-## Easy steps
+## What you should see when it’s fixed
 
-### 1) Keep PrintX on Render (Web Service)
-- Your app stays as the **printx** Web Service (not a Static Site).
-- Custom domains can stay on that service: `printx.pw` and `portal.printx.pw`.
+1. Leave the site alone for **15+ minutes** (so Render goes to sleep).
+2. Open `https://printx.pw`
+3. You see a **dark PrintX** page (“Getting everything ready…”) — **not** the green Render terminal.
+4. After ~30–60 seconds the real site appears.
 
-### 2) Put the domain on Cloudflare (free)
-1. Make a free account at [https://dash.cloudflare.com](https://dash.cloudflare.com)
-2. **Add a site** → enter `printx.pw`
-3. Cloudflare will show DNS records to copy at your domain place
-4. Turn the cloud **orange** (proxied) for the records that point to Render  
-   (the ones for `printx.pw` and `portal`)
+If you still see **WELCOME TO RENDER / APPLICATION LOADING**, the Worker is not connected yet.
 
-### 3) Create the Worker
-1. In Cloudflare: **Workers & Pages** → **Create** → **Worker**
-2. Name it something like `printx-wake`
-3. Paste the code from `worker.js` in this folder (or deploy with Wrangler from this folder)
-4. **Settings → Variables**
+---
+
+## Do these 3 things in Cloudflare
+
+### 1) Create (or open) the Worker
+1. Go to [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages)
+2. **Create** → **Worker** (plain Worker — not Pages, not a Vite template)
+3. Name it `printx-wake`
+4. Open the editor and **replace all code** with the file `worker.js` from this folder
+5. **Deploy** / **Save and deploy**
+
+### 2) Set `ORIGIN` (very important)
+1. Worker → **Settings** → **Variables and Secrets**
+2. Add variable:
    - Name: `ORIGIN`
-   - Value: your Render URL, like `https://printx.onrender.com`  
-     (Dashboard → printx service → the `*.onrender.com` link)
+   - Value: your Render link that ends in `.onrender.com`
 
-### 4) Connect the Worker to your sites
-1. Worker → **Triggers** / **Routes**
-2. Add:
+**Where to copy that link**
+1. Open the Render tab: **PrintX • Web Service**
+2. At the top, copy the URL that looks like  
+   `https://something.onrender.com`  
+   (not `https://printx.pw`)
+
+Paste that whole `https://….onrender.com` URL as `ORIGIN` (no slash at the end).
+
+> `https://printx.onrender.com` is usually **wrong**. Always copy the real one from Render.
+
+### 3) Attach the Worker to your domain
+1. Still on the Worker → **Settings** → **Domains & Routes** (or **Triggers** → **Routes**)
+2. **Add** these routes (zone = `printx.pw`):
    - `printx.pw/*`
    - `portal.printx.pw/*`
 3. Save
 
-### 5) Test
-1. Leave the site alone for **15+ minutes**
-2. Open `https://printx.pw`
-3. You should see **PrintX** loading (not the Render spinner)
-4. Then the real site appears
+Also check **DNS** for `printx.pw` and `portal`:
+- Cloud icon must be **orange** (Proxied), not gray.
+
+---
+
+## Quick test (no waiting 15 minutes)
+
+1. Open your Worker → **Send** / preview, or visit `https://printx.pw`
+2. In DevTools → Network, the HTML response should **not** say Render’s “APPLICATION LOADING”
+3. Or: after deploy, open an private/incognito window to `https://printx.pw` — if Render is asleep you should see PrintX branding first
 
 ---
 
 ## If something’s wrong
 
-| Problem | Try this |
-|--------|----------|
-| Still see Render spinner | Cloudflare proxy not orange, or Worker route missing |
-| Loading forever | `ORIGIN` wrong — must be the `*.onrender.com` URL |
-| Login broken | On Render, set env `PRINTX_COOKIE_DOMAIN` = `.printx.pw` |
+| What you see | Fix |
+|--------------|-----|
+| Still green Render loading screen | Routes missing (`printx.pw/*`) or DNS cloud is gray |
+| PrintX loading forever | `ORIGIN` wrong — must be the real `*.onrender.com` from Render |
+| Site broken / Not Found | Same — fix `ORIGIN` |
+| Login cookies weird | On Render → Environment: `PRINTX_COOKIE_DOMAIN` = `.printx.pw` |
 
 ---
 
-## Deploy from this folder (optional, for grown-ups)
+## Optional: deploy from this folder (grown-up)
 
 ```bash
 cd cloudflare
@@ -62,4 +82,4 @@ npx wrangler login
 npx wrangler deploy
 ```
 
-Then set routes in the Cloudflare dashboard as in step 4.
+Then set `ORIGIN` and the two routes in the Cloudflare dashboard (steps 2–3 above).

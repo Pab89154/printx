@@ -2,14 +2,22 @@ import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { AdminAuthProvider } from './context/AdminAuthContext'
 import { PublicDataProvider } from './context/PublicDataContext'
+import { CartProvider } from './context/CartContext'
 import { PublicSite } from './pages/PublicSite'
 import { NotFound } from './pages/NotFound'
+import { Shop } from './pages/Shop'
+import { ShopProduct } from './pages/ShopProduct'
+import { Cart } from './pages/Cart'
+import { OrderSuccess } from './pages/OrderSuccess'
 import { AdminLogin } from './admin/AdminLogin'
 import { AdminGuard } from './admin/AdminGuard'
 import { AdminLayout } from './admin/AdminLayout'
 import { AdminDashboard } from './admin/AdminDashboard'
 import { AdminStands } from './admin/AdminStands'
 import { AdminProducts } from './admin/AdminProducts'
+import { AdminDesigns } from './admin/AdminDesigns'
+import { AdminApprovals } from './admin/AdminApprovals'
+import { AdminOrders } from './admin/AdminOrders'
 import { AdminRequests } from './admin/AdminRequests'
 import { AdminMessages } from './admin/AdminMessages'
 import { AdminMail } from './admin/AdminMail'
@@ -46,6 +54,9 @@ function PortalRoutes() {
           <Route path="mail" element={<AdminMail />} />
           <Route path="stands" element={<AdminStands />} />
           <Route path="products" element={<AdminProducts />} />
+          <Route path="designs" element={<AdminDesigns />} />
+          <Route path="approvals" element={<AdminApprovals />} />
+          <Route path="orders" element={<AdminOrders />} />
           <Route path="requests" element={<AdminRequests />} />
           <Route path="schools" element={<AdminSchools />} />
           <Route path="content" element={<AdminContent />} />
@@ -57,11 +68,14 @@ function PortalRoutes() {
   )
 }
 
-/** Public site + /admin on printx.pw (and localhost). No redirect to portal. */
 function PublicRoutes() {
   return (
     <Routes>
       <Route path="/" element={<PublicSite />} />
+      <Route path="/shop" element={<Shop />} />
+      <Route path="/shop/:skuBase" element={<ShopProduct />} />
+      <Route path="/cart" element={<Cart />} />
+      <Route path="/order/success" element={<OrderSuccess />} />
       <Route path="/admin" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminGuard />}>
         <Route path="sandbox" element={<AdminSandbox />} />
@@ -71,6 +85,9 @@ function PublicRoutes() {
           <Route path="mail" element={<AdminMail />} />
           <Route path="stands" element={<AdminStands />} />
           <Route path="products" element={<AdminProducts />} />
+          <Route path="designs" element={<AdminDesigns />} />
+          <Route path="approvals" element={<AdminApprovals />} />
+          <Route path="orders" element={<AdminOrders />} />
           <Route path="requests" element={<AdminRequests />} />
           <Route path="schools" element={<AdminSchools />} />
           <Route path="content" element={<AdminContent />} />
@@ -89,9 +106,11 @@ export default function App() {
     <BrowserRouter>
       <ButtonPopNavBridge />
       <PublicDataProvider>
-        <AdminAuthProvider>
-          {portal ? <PortalRoutes /> : <PublicRoutes />}
-        </AdminAuthProvider>
+        <CartProvider>
+          <AdminAuthProvider>
+            {portal ? <PortalRoutes /> : <PublicRoutes />}
+          </AdminAuthProvider>
+        </CartProvider>
       </PublicDataProvider>
     </BrowserRouter>
   )

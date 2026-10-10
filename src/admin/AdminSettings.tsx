@@ -68,6 +68,19 @@ export function AdminSettings() {
   const [savingSignature, setSavingSignature] = useState(false)
   const [signatureMessage, setSignatureMessage] = useState('')
 
+  const [csToken, setCsToken] = useState('')
+  const [csPrinterId, setCsPrinterId] = useState('')
+  const [csFilamentId, setCsFilamentId] = useState('')
+  const [csOwnedPrinterId, setCsOwnedPrinterId] = useState('')
+  const [csTokenMasked, setCsTokenMasked] = useState<string | null>(null)
+  const [csHasToken, setCsHasToken] = useState(false)
+  const [csPrinters, setCsPrinters] = useState<
+    { id: string; ownerLabel: string; modelName: string; ownerUserId: string | null }[]
+  >([])
+  const [csSaving, setCsSaving] = useState(false)
+  const [csMessage, setCsMessage] = useState('')
+  const [csError, setCsError] = useState('')
+
   async function loadAdmins() {
     if (!can('manage_admins')) {
       setAdmins([])
@@ -91,6 +104,17 @@ export function AdminSettings() {
     setSignatureDraft(sig.signature)
   }
 
+  async function loadCloudSlicer() {
+    const data = await api.admin.settings.getCloudSlicer()
+    setCsTokenMasked(data.tokenMasked)
+    setCsHasToken(data.hasToken)
+    setCsPrinterId(data.printerId)
+    setCsFilamentId(data.filamentId)
+    setCsOwnedPrinterId(data.ownedPrinterId ?? '')
+    setCsPrinters(data.printers)
+    setCsToken('')
+  }
+
   useEffect(() => {
     setNameDraft(displayName ?? '')
   }, [displayName])
@@ -103,6 +127,7 @@ export function AdminSettings() {
     loadAdmins().catch(console.error)
     loadSiteStatus().catch(console.error)
     loadSignature().catch(console.error)
+    loadCloudSlicer().catch(console.error)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when role/access identity changes
   }, [isMainAdmin, email])
 
@@ -152,6 +177,37 @@ export function AdminSettings() {
       setSignatureMessage(err instanceof Error ? err.message : 'Could not save signature')
     } finally {
       setSavingSignature(false)
+    }
+  }
+
+  async function saveCloudSlicer(e: React.FormEvent) {
+    e.preventDefault()
+    setCsSaving(true)
+    setCsError('')
+    setCsMessage('')
+    try {
+      const result = await api.admin.settings.updateCloudSlicer({
+        ...(csToken.trim() ? { token: csToken.trim() } : {}),
+        printerId: csPrinterId,
+        filamentId: csFilamentId,
+        ownedPrinterId: csOwnedPrinterId,
+      })
+      setCsTokenMasked(result.tokenMasked)
+      setCsHasToken(result.hasToken)
+      setCsPrinterId(result.printerId)
+      setCsFilamentId(result.filamentId)
+      setCsOwnedPrinterId(result.ownedPrinterId ?? '')
+      setCsToken('')
+      setCsMessage(
+        result.hasToken && result.printerId && result.filamentId && result.ownedPrinterId
+          ? 'Cloud Slicer settings saved. Your printer will be quoted when designs are submitted.'
+          : 'Saved. Add token, Cloud Slicer printer/filament IDs, and your PrintX printer to enable quoting.',
+      )
+      await loadCloudSlicer()
+    } catch (err) {
+      setCsError(err instanceof Error ? err.message : 'Could not save Cloud Slicer settings')
+    } finally {
+      setCsSaving(false)
     }
   }
 
@@ -343,6 +399,94 @@ export function AdminSettings() {
           </form>
         )}
       </div>
+
+      <form onSubmit={saveCloudSlicer} className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+        <h2 className="mb-1 font-semibold">Cloud Slicer API</h2>
+        <p className="text-sm text-muted">
+          Each printer owner uses their own free Cloud Slicer account. Create a printer + filament there, then
+          paste the API token and IDs here. PrintX quotes your machine when a design STL is submitted.
+        </p>
+        <label className="mt-4 block text-sm font-medium text-navy">
+          Your PrintX printer
+          <select
+            className={`mt-1 ${inputClass}`}
+            value={csOwnedPrinterId}
+            onChange={(e) => setCsOwnedPrinterId(e.target.value)}
+            required
+          >
+            <option value="">Select…</option>
+            {csPrinters.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.ownerLabel} — {p.modelName}
+                {p.ownerUserId && p.ownerUserId !== '' ? ' (linked)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mt-3 block text-sm font-medium text-navy">
+          API token
+          <input
+            type="password"
+            className={`mt-1 ${inputClass}`}
+            value={csToken}
+            onChange={(e) => setCsToken(e.target.value)}
+            placeholder={csHasToken ? `Saved ${csTokenMasked ?? '••••'}` : 'Paste Cloud Slicer token'}
+            autoComplete="off"
+          />
+        </label>
+        {csHasToken ? (
+          <p className="mt-1 text-xs text-muted">Token on file: {csTokenMasked}. Leave blank to keep it.</p>
+        ) : null}
+        <label className="mt-3 block text-sm font-medium text-navy">
+          Cloud Slicer printer ID
+          <input
+            className={`mt-1 ${inputClass}`}
+            value={csPrinterId}
+            onChange={(e) => setCsPrinterId(e.target.value)}
+            placeholder="printer_…"
+            required
+          />
+        </label>
+        <label className="mt-3 block text-sm font-medium text-navy">
+          Cloud Slicer filament ID
+          <input
+            className={`mt-1 ${inputClass}`}
+            value={csFilamentId}
+            onChange={(e) => setCsFilamentId(e.target.value)}
+            placeholder="filament_…"
+            required
+          />
+        </label>
+        <p className="mt-2 text-xs text-muted">
+          Dashboard: cloudslicer3d.com → create printer/filament → copy IDs. Free plan: 100 quotes/month per
+          account.
+        </p>
+        {csError && <p className="mt-3 text-sm text-red-600">{csError}</p>}
+        {csMessage && <p className="mt-3 text-sm text-green-600">{csMessage}</p>}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="submit" disabled={csSaving} className="btn btn-primary">
+            {csSaving ? 'Saving…' : 'Save Cloud Slicer'}
+          </button>
+          {csHasToken ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={csSaving}
+              onClick={() => {
+                setCsSaving(true)
+                void api.admin.settings
+                  .updateCloudSlicer({ clearToken: true, token: '', printerId: csPrinterId, filamentId: csFilamentId, ownedPrinterId: csOwnedPrinterId })
+                  .then(() => loadCloudSlicer())
+                  .then(() => setCsMessage('API token cleared.'))
+                  .catch((err) => setCsError(err instanceof Error ? err.message : 'Clear failed'))
+                  .finally(() => setCsSaving(false))
+              }}
+            >
+              Clear token
+            </button>
+          ) : null}
+        </div>
+      </form>
 
       {can('mail') && (
         <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">

@@ -1,12 +1,16 @@
 import { useState } from 'react'
 import { Menu, X } from 'lucide-react'
 import { NAV_LINKS } from '../data/navigation'
+import { usePublicData } from '../context/PublicDataContext'
 import { onHashLinkClick } from '../lib/scroll'
 import { Button } from './Button'
 import { Logo } from './Logo'
 
 export function Header() {
   const [menuOpen, setMenuOpen] = useState(false)
+  const { data } = usePublicData()
+  const hasStands = (data?.stands?.length ?? 0) > 0
+  const links = NAV_LINKS.filter((link) => link.href !== '#stands' || hasStands)
 
   return (
     <header className="sticky top-0 z-50 border-b border-navy/8 bg-white/90 backdrop-blur-lg">
@@ -24,7 +28,7 @@ export function Header() {
         </a>
 
         <nav className="hidden items-center gap-1 lg:flex">
-          {NAV_LINKS.map((link) => (
+          {links.map((link) => (
             <a
               key={link.href}
               href={link.href}
@@ -37,9 +41,15 @@ export function Header() {
         </nav>
 
         <div className="flex items-center gap-2">
-          <Button href="#stands" size="sm" className="hidden sm:inline-flex">
-            Find a Stand
-          </Button>
+          {hasStands ? (
+            <Button href="#stands" size="sm" className="hidden sm:inline-flex">
+              Find a Stand
+            </Button>
+          ) : (
+            <Button href="/shop" size="sm" className="hidden sm:inline-flex">
+              Shop
+            </Button>
+          )}
           <button
             type="button"
             aria-label="Open menu"
@@ -54,7 +64,7 @@ export function Header() {
       {menuOpen && (
         <nav className="border-t border-navy/8 bg-white px-4 py-4 lg:hidden">
           <div className="flex flex-col gap-1">
-            {NAV_LINKS.map((link) => (
+            {links.map((link) => (
               <a
                 key={link.href}
                 href={link.href}
@@ -67,9 +77,15 @@ export function Header() {
                 {link.label}
               </a>
             ))}
-            <Button href="#stands" size="md" className="mt-2 w-full">
-              Find a Stand
-            </Button>
+            {hasStands ? (
+              <Button href="#stands" size="md" className="mt-2 w-full">
+                Find a Stand
+              </Button>
+            ) : (
+              <Button href="/shop" size="md" className="mt-2 w-full">
+                Shop
+              </Button>
+            )}
           </div>
         </nav>
       )}

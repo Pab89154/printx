@@ -25,6 +25,107 @@ export const api = {
         return data
       }),
   },
+  catalog: {
+    public: () =>
+      request<{
+        designs: import('../types/catalog.ts').PublicCatalogDesign[]
+        colors: import('../types/catalog.ts').CatalogColor[]
+      }>('/api/public/catalog'),
+    checkout: (body: {
+      customerName: string
+      customerEmail: string
+      items: { designId: string; colorId: string; qty: number }[]
+    }) =>
+      request<{ url: string; orderId: string; sessionId: string }>('/api/public/checkout', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    designs: {
+      list: () => request<import('../types/catalog.ts').Design[]>('/api/admin/designs'),
+      get: (id: string) =>
+        request<{ design: import('../types/catalog.ts').Design; preview: unknown }>(
+          `/api/admin/designs/${id}`,
+        ),
+      create: (body: Record<string, unknown>) =>
+        request<import('../types/catalog.ts').Design>('/api/admin/designs', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+      update: (id: string, body: Record<string, unknown>) =>
+        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        }),
+      uploadStl: (file: File) => {
+        const formData = new FormData()
+        formData.append('file', file)
+        return fetch('/api/admin/designs/upload-stl', {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        }).then(async (res) => {
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error ?? 'STL upload failed')
+          return data as { stlPath: string; hasStl: boolean }
+        })
+      },
+      stlUrl: (id: string) => `/api/admin/designs/${id}/stl`,
+      remove: (id: string) => request(`/api/admin/designs/${id}`, { method: 'DELETE' }),
+      submit: (id: string) =>
+        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/submit`, {
+          method: 'POST',
+          body: '{}',
+        }),
+      approve: (id: string) =>
+        request<{ design: import('../types/catalog.ts').Design; pricing: unknown }>(
+          `/api/admin/designs/${id}/approve`,
+          { method: 'POST', body: '{}' },
+        ),
+      reprice: (id: string) =>
+        request<{ design: import('../types/catalog.ts').Design; pricing: unknown }>(
+          `/api/admin/designs/${id}/reprice`,
+          { method: 'POST', body: '{}' },
+        ),
+      reject: (id: string, note?: string) =>
+        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/reject`, {
+          method: 'POST',
+          body: JSON.stringify({ note }),
+        }),
+    },
+    pricing: {
+      get: () =>
+        request<{
+          settings: import('../types/catalog.ts').PricingSettingsDto
+          printers: import('../types/catalog.ts').PrinterDto[]
+          customColors: import('../types/catalog.ts').PricingSettingsDto['customColors']
+        }>('/api/admin/pricing'),
+      update: (body: Record<string, unknown>) =>
+        request<{
+          settings: import('../types/catalog.ts').PricingSettingsDto
+          printers: import('../types/catalog.ts').PrinterDto[]
+          customColors: import('../types/catalog.ts').PricingSettingsDto['customColors']
+        }>('/api/admin/pricing', { method: 'PATCH', body: JSON.stringify(body) }),
+    },
+    orders: {
+      list: () =>
+        request<{
+          orders: import('../types/catalog.ts').OrderDto[]
+          printers: import('../types/catalog.ts').PrinterDto[]
+        }>('/api/admin/orders'),
+      claim: (itemId: string, printerId: string) =>
+        request<import('../types/catalog.ts').OrderItemDto>(
+          `/api/admin/order-items/${itemId}/claim`,
+          { method: 'POST', body: JSON.stringify({ printerId }) },
+        ),
+      complete: (itemId: string) =>
+        request<import('../types/catalog.ts').OrderItemDto>(
+          `/api/admin/order-items/${itemId}/complete`,
+          { method: 'POST', body: '{}' },
+        ),
+    },
+    stats: () =>
+      request<{ pendingApprovals: number; unclaimedItems: number }>('/api/admin/catalog-stats'),
+  },
   admin: {
     me: () =>
       request<{
@@ -167,6 +268,35 @@ export const api = {
         request<{ ok: boolean; displayName: string | null }>('/api/admin/settings/profile', {
           method: 'PATCH',
           body: JSON.stringify({ displayName }),
+        }),
+      getCloudSlicer: () =>
+        request<{
+          tokenMasked: string | null
+          hasToken: boolean
+          printerId: string
+          filamentId: string
+          configuredAt: string | null
+          ownedPrinterId: string | null
+          printers: { id: string; ownerLabel: string; modelName: string; ownerUserId: string | null }[]
+        }>('/api/admin/settings/cloud-slicer'),
+      updateCloudSlicer: (body: {
+        token?: string
+        clearToken?: boolean
+        printerId?: string
+        filamentId?: string
+        ownedPrinterId?: string
+      }) =>
+        request<{
+          ok: boolean
+          tokenMasked: string | null
+          hasToken: boolean
+          printerId: string
+          filamentId: string
+          configuredAt: string | null
+          ownedPrinterId: string | null
+        }>('/api/admin/settings/cloud-slicer', {
+          method: 'PATCH',
+          body: JSON.stringify(body),
         }),
     },
     users: {

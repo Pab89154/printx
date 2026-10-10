@@ -33,6 +33,7 @@ function HeroVisual() {
 export function Hero() {
   const { data } = usePublicData()
   const content = data?.content
+  const hasStands = (data?.stands?.length ?? 0) > 0
 
   return (
     <section id="home" className="relative overflow-hidden bg-white pb-16 pt-6 sm:pb-24 sm:pt-8">
@@ -50,12 +51,18 @@ export function Hero() {
 
           <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted">
             {content?.heroDescription?.trim() ||
-              'Student-made 3D prints, sold locally at school stands throughout the DFW area.'}
+              'Student-made 3D prints for the DFW area — order online or find us at local stands.'}
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-4">
-            <Button href="#products" size="lg">See Our Products</Button>
-            <Button href="#stands" variant="secondary" size="lg">Find Our Next Stand</Button>
+            <Button href="/shop" size="lg">
+              Shop catalog
+            </Button>
+            {hasStands ? (
+              <Button href="#stands" variant="secondary" size="lg">
+                Find Our Next Stand
+              </Button>
+            ) : null}
           </div>
         </div>
         <HeroVisual />

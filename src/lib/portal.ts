@@ -11,6 +11,9 @@ const SECTION_ORDER: { section: string; perm: PermissionKey }[] = [
   { section: 'mail', perm: 'mail' },
   { section: 'stands', perm: 'stands' },
   { section: 'products', perm: 'products' },
+  { section: 'designs', perm: 'products' },
+  { section: 'approvals', perm: 'products' },
+  { section: 'orders', perm: 'orders' },
   { section: 'requests', perm: 'requests' },
   { section: 'schools', perm: 'schools' },
   { section: 'content', perm: 'content' },
@@ -20,7 +23,7 @@ const SECTION_ORDER: { section: string; perm: PermissionKey }[] = [
 export function isPortalHost(hostname = typeof window !== 'undefined' ? window.location.hostname : ''): boolean {
   if (!hostname) return false
   if (hostname === 'portal.printx.pw') return true
-  // Local testing: http://portal.localhost:5675 or portal.127.0.0.1
+  // Local testing: http://portal.localhost:5221 or portal.127.0.0.1
   if (hostname.startsWith('portal.')) return true
   return false
 }

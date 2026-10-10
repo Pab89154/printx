@@ -1,6 +1,6 @@
 export const NAV_LINKS = [
   { label: 'Home', href: '#home' },
-  { label: 'Products', href: '#products' },
+  { label: 'Shop', href: '/shop' },
   { label: 'Where to Find Us', href: '#stands' },
   { label: 'Custom Prints', href: '#custom' },
   { label: 'For Schools', href: '#schools' },
@@ -10,7 +10,7 @@ export const NAV_LINKS = [
 
 export const FOOTER_LINKS = [
   { label: 'Home', href: '#home' },
-  { label: 'Products', href: '#products' },
+  { label: 'Shop', href: '/shop' },
   { label: 'Where to Find Us', href: '#stands' },
   { label: 'Custom Prints', href: '#custom' },
   { label: 'For Schools', href: '#schools' },

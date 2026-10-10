@@ -1,10 +1,10 @@
 /**
  * PrintX wake Worker — stays in front of the Render web service.
  * If the API is asleep, visitors see the PrintX loading screen (not Render’s spinner).
- * Once /api/health returns 200, we proxy to the real site.
+ * Once /api/health returns real JSON { ok: true }, we proxy to the real site.
  */
 
-const HEALTH_MS = 1800
+const HEALTH_MS = 2500
 
 function wantsHtml(request) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return false
@@ -20,6 +20,17 @@ function isAssetPath(pathname) {
   )
 }
 
+function looksLikeRenderLoadingPage(text) {
+  if (!text) return false
+  return (
+    text.includes('APPLICATION LOADING') ||
+    text.includes('WELCOME TO RENDER') ||
+    text.includes('SERVICE WAKING UP') ||
+    text.includes('STARTING THE INSTANCE')
+  )
+}
+
+/** True only when the real PrintX app answers JSON { ok: true }. */
 async function originHealth(origin) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), HEALTH_MS)
@@ -30,7 +41,11 @@ async function originHealth(origin) {
       signal: ctrl.signal,
       headers: { Accept: 'application/json', 'Cache-Control': 'no-store' },
     })
-    return res.ok
+    if (!res.ok) return false
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (!ct.includes('application/json')) return false
+    const data = await res.json().catch(() => null)
+    return !!(data && data.ok === true)
   } catch {
     return false
   } finally {
@@ -46,7 +61,18 @@ function originUrl(request, origin) {
   return target
 }
 
-async function proxyToOrigin(request, origin) {
+function withEdge(res, mode) {
+  const headers = new Headers(res.headers)
+  headers.set('x-printx-edge', mode)
+  headers.set('cache-control', headers.get('cache-control') || 'no-store')
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  })
+}
+
+async function proxyToOrigin(request, origin, { htmlFallbackPath } = {}) {
   const target = originUrl(request, origin)
   const headers = new Headers(request.headers)
   headers.set('Host', target.host)
@@ -55,13 +81,44 @@ async function proxyToOrigin(request, origin) {
   headers.delete('cf-connecting-ip')
 
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
-  return fetch(target.toString(), {
+  const res = await fetch(target.toString(), {
     method: request.method,
     headers,
     redirect: 'manual',
     body: hasBody ? request.body : undefined,
     duplex: hasBody ? 'half' : undefined,
   })
+
+  // If Render is still spinning up, it may return its own HTML loading page.
+  // Never show that — swap in the PrintX wake screen.
+  if (htmlFallbackPath != null) {
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (ct.includes('text/html')) {
+      const text = await res.text()
+      if (looksLikeRenderLoadingPage(text)) {
+        return withEdge(
+          new Response(wakeHtml(htmlFallbackPath), {
+            status: 200,
+            headers: {
+              'content-type': 'text/html; charset=utf-8',
+              'cache-control': 'no-store',
+            },
+          }),
+          'wake',
+        )
+      }
+      return withEdge(
+        new Response(text, {
+          status: res.status,
+          statusText: res.statusText,
+          headers: res.headers,
+        }),
+        'proxy',
+      )
+    }
+  }
+
+  return withEdge(res, 'proxy')
 }
 
 function wakeHtml(returnTo) {
@@ -169,7 +226,13 @@ function wakeHtml(returnTo) {
         var t = ctrl ? setTimeout(function () { ctrl.abort() }, 12000) : null
         fetch('/api/health', { cache: 'no-store', credentials: 'same-origin', signal: ctrl && ctrl.signal })
           .then(function (res) {
-            if (res.ok) { go(); return }
+            if (!res.ok) throw new Error('not ready')
+            var ct = (res.headers.get('content-type') || '').toLowerCase()
+            if (ct.indexOf('application/json') === -1) throw new Error('not json')
+            return res.json()
+          })
+          .then(function (data) {
+            if (data && data.ok === true) { go(); return }
             throw new Error('not ready')
           })
           .catch(function () {
@@ -194,27 +257,95 @@ function wakeHtml(returnTo) {
 </html>`
 }
 
+function misconfiguredHtml(detail) {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>PrintX setup</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:#0b1220;color:#fff;font-family:"DM Sans",system-ui,sans-serif;padding:1.5rem;text-align:center}
+  h1{font-size:1.5rem;margin:0 0 .75rem} p{color:#94a3b8;max-width:28rem;line-height:1.5}
+  code{color:#12b5d4}
+</style></head>
+<body><div>
+  <h1>PrintX Worker needs ORIGIN</h1>
+  <p>${detail}</p>
+  <p>In Cloudflare → Worker → Settings → Variables, set <code>ORIGIN</code> to
+  <code>https://printx-28ww.onrender.com</code> (not printx.pw).</p>
+</div></body></html>`
+}
+
+function normalizeOrigin(rawOrigin) {
+  const withScheme = /^https?:\/\//i.test(rawOrigin) ? rawOrigin : `https://${rawOrigin}`
+  return withScheme.replace(/\/$/, '')
+}
+
 export default {
   async fetch(request, env) {
-    const origin = (env.ORIGIN || 'https://printx.onrender.com').replace(/\/$/, '')
+    const rawOrigin = (env.ORIGIN || '').trim()
     const url = new URL(request.url)
 
-    // Always proxy API (this also wakes Render). Assets proxy too.
+    if (!rawOrigin) {
+      return withEdge(
+        new Response(misconfiguredHtml('The <code>ORIGIN</code> variable is missing.'), {
+          status: 500,
+          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+        }),
+        'error',
+      )
+    }
+
+    const origin = normalizeOrigin(rawOrigin)
+    if (origin.includes('printx.pw')) {
+      return withEdge(
+        new Response(
+          misconfiguredHtml('ORIGIN must be the Render <code>*.onrender.com</code> URL, not printx.pw.'),
+          {
+            status: 500,
+            headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+          },
+        ),
+        'error',
+      )
+    }
+
+    // Health is answered by the Worker so browsers never get Render's HTML spinner as "ok".
+    if (url.pathname === '/api/health' && (request.method === 'GET' || request.method === 'HEAD')) {
+      const awake = await originHealth(origin)
+      return withEdge(
+        new Response(JSON.stringify({ ok: awake }), {
+          status: awake ? 200 : 503,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store',
+          },
+        }),
+        awake ? 'health-ok' : 'health-wait',
+      )
+    }
+
+    // Other API + assets: proxy (also helps wake Render).
     if (url.pathname.startsWith('/api/') || isAssetPath(url.pathname)) {
       return proxyToOrigin(request, origin)
     }
 
-    // HTML page visits: if origin is awake, show the real site; else PrintX wake screen.
+    // HTML page visits
     if (wantsHtml(request)) {
+      const path = url.pathname + url.search
       const awake = await originHealth(origin)
-      if (awake) return proxyToOrigin(request, origin)
-      return new Response(wakeHtml(url.pathname + url.search), {
-        status: 200,
-        headers: {
-          'content-type': 'text/html; charset=utf-8',
-          'cache-control': 'no-store',
-        },
-      })
+      if (!awake) {
+        return withEdge(
+          new Response(wakeHtml(path), {
+            status: 200,
+            headers: {
+              'content-type': 'text/html; charset=utf-8',
+              'cache-control': 'no-store',
+            },
+          }),
+          'wake',
+        )
+      }
+      return proxyToOrigin(request, origin, { htmlFallbackPath: path })
     }
 
     return proxyToOrigin(request, origin)

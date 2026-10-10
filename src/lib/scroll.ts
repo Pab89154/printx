@@ -40,5 +40,10 @@ export function onHashLinkClick(event: MouseEvent<HTMLAnchorElement>, href: stri
   if (!href.startsWith('#')) return
   event.preventDefault()
   event.stopPropagation()
+  // From /shop (or other routes), send hash sections back to the home page.
+  if (window.location.pathname !== '/') {
+    window.location.assign(`/${href}`)
+    return
+  }
   scrollToHash(href)
 }

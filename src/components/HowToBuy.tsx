@@ -1,5 +1,6 @@
 import { Footprints, HandCoins, MapPin } from 'lucide-react'
 import { HOW_TO_BUY } from '../data/products'
+import { usePublicData } from '../context/PublicDataContext'
 import { ScrollReveal } from './ScrollReveal'
 import { SectionHeading } from './SectionHeading'
 
@@ -10,6 +11,10 @@ const iconMap = {
 } as const
 
 export function HowToBuy() {
+  const { data } = usePublicData()
+  const hasStands = (data?.stands?.length ?? 0) > 0
+  if (!hasStands) return null
+
   return (
     <section className="bg-surface py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">

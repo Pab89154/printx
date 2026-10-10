@@ -70,6 +70,7 @@ function StandCard({ stand }: { stand: PublicStand }) {
 export function WhereToFindUs() {
   const { data } = usePublicData()
   const upcoming = data?.stands ?? []
+  if (upcoming.length === 0) return null
 
   return (
     <section id="stands" className="py-20 sm:py-28">
@@ -81,21 +82,13 @@ export function WhereToFindUs() {
           />
         </ScrollReveal>
 
-        {upcoming.length > 0 ? (
-          <div className="grid items-stretch gap-6 md:grid-cols-2">
-            {upcoming.map((stand, i) => (
-              <ScrollReveal key={stand.id} delay={i * 100} className="h-full">
-                <StandCard stand={stand} />
-              </ScrollReveal>
-            ))}
-          </div>
-        ) : (
-          <ScrollReveal>
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-surface px-6 py-16 text-center">
-              <p className="text-lg font-medium text-navy">No upcoming stands right now. Check back soon!</p>
-            </div>
-          </ScrollReveal>
-        )}
+        <div className="grid items-stretch gap-6 md:grid-cols-2">
+          {upcoming.map((stand, i) => (
+            <ScrollReveal key={stand.id} delay={i * 100} className="h-full">
+              <StandCard stand={stand} />
+            </ScrollReveal>
+          ))}
+        </div>
       </div>
     </section>
   )

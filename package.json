@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "NODE_OPTIONS='--experimental-sqlite' vite --port 5675 --strictPort",
+    "dev": "NODE_OPTIONS='--experimental-sqlite' vite --port 5221 --strictPort",
     "build": "vite build",
     "render-build": "bash scripts/render-build.sh",
     "start": "node --import tsx server/production.ts",
     "start:sqlite": "node --experimental-sqlite --import tsx server/production.ts",
-    "preview": "NODE_OPTIONS='--experimental-sqlite' vite preview --port 5675 --strictPort"
+    "preview": "NODE_OPTIONS='--experimental-sqlite' vite preview --port 5221 --strictPort"
   },
   "engines": {
     "node": ">=22"
@@ -30,7 +30,9 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.0",
+    "stripe": "^23.0.0",
     "tailwindcss": "^4.1.8",
+    "three": "^0.186.1",
     "tsx": "^4.20.3",
     "typescript": "~5.7.3",
     "vite": "^6.3.5"
@@ -41,6 +43,7 @@
   },
   "devDependencies": {
     "@types/nspell": "^2.1.6",
-    "@types/pg": "^8.23.1"
+    "@types/pg": "^8.23.1",
+    "@types/three": "^0.186.0"
   }
 }

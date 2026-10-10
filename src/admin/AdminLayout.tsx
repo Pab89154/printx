@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Building2,
+  ClipboardCheck,
   FileText,
   Inbox,
   LayoutDashboard,
@@ -10,7 +11,9 @@ import {
   MapPin,
   Menu,
   Package,
+  Printer,
   Settings,
+  ShoppingBag,
   Sparkles,
   X,
 } from 'lucide-react'
@@ -21,12 +24,20 @@ import { SandboxIcon } from '../lib/sandboxIcon'
 import { adminHomePath, adminPath, firstAllowedAdminPath, publicSiteUrl } from '../lib/portal'
 import type { PermissionKey } from '../../shared/permissions'
 
-const links: { section: string; label: string; icon: typeof LayoutDashboard; perm: PermissionKey }[] = [
+const links: {
+  section: string
+  label: string
+  icon: typeof LayoutDashboard
+  perm: PermissionKey | 'main_only'
+}[] = [
   { section: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, perm: 'dashboard' },
   { section: 'messages', label: 'Inbox', icon: Inbox, perm: 'messages' },
   { section: 'mail', label: 'Mail', icon: Mail, perm: 'mail' },
   { section: 'stands', label: 'Stands', icon: MapPin, perm: 'stands' },
-  { section: 'products', label: 'Products', icon: Package, perm: 'products' },
+  { section: 'products', label: 'Stand products', icon: Package, perm: 'products' },
+  { section: 'designs', label: 'Designs', icon: Printer, perm: 'products' },
+  { section: 'approvals', label: 'Approvals & Pricing', icon: ClipboardCheck, perm: 'main_only' },
+  { section: 'orders', label: 'Orders', icon: ShoppingBag, perm: 'orders' },
   { section: 'requests', label: 'Custom Requests', icon: Sparkles, perm: 'requests' },
   { section: 'schools', label: 'Schools', icon: Building2, perm: 'schools' },
   { section: 'content', label: 'Website Content', icon: FileText, perm: 'content' },
@@ -40,7 +51,9 @@ export function AdminLayout() {
   const [menuOpen, setMenuOpen] = useState(false)
   const { unreadCount, ensureMailNotificationPermission } = useMailUnread(can('mail'))
 
-  const allowedLinks = links.filter((l) => can(l.perm))
+  const allowedLinks = links.filter((l) =>
+    l.perm === 'main_only' ? isMainAdmin : can(l.perm),
+  )
   const navLinks = allowedLinks.map((l) => ({ ...l, to: adminPath(l.section) }))
   const currentLabel = navLinks.find((l) => location.pathname.startsWith(l.to))?.label ?? 'Admin'
   const mailBadge =
@@ -70,8 +83,13 @@ export function AdminLayout() {
       return
     }
     const link = links.find((l) => l.section === section)
-    if (link && !permissions[link.perm]) navigate(fallback, { replace: true })
-  }, [location.pathname, permissions, navigate])
+    if (!link) return
+    if (link.perm === 'main_only') {
+      if (!isMainAdmin) navigate(fallback, { replace: true })
+      return
+    }
+    if (!permissions[link.perm]) navigate(fallback, { replace: true })
+  }, [location.pathname, permissions, navigate, isMainAdmin])
 
   async function handleLogout() {
     await logout()

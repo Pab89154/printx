@@ -34,7 +34,7 @@ function loadLocalEnv() {
 loadLocalEnv()
 
 const DIST = path.join(__dirname, '..', 'dist')
-const PORT = Number(process.env.PORT) || 5675
+const PORT = Number(process.env.PORT) || 5221
 const HOST = '0.0.0.0'
 
 const MIME: Record<string, string> = {

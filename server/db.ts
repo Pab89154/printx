@@ -21,6 +21,10 @@ async function migrate(database: DbApi) {
       permissions TEXT,
       display_name TEXT,
       mail_signature TEXT NOT NULL DEFAULT '',
+      cloud_slicer_token TEXT NOT NULL DEFAULT '',
+      cloud_slicer_printer_id TEXT NOT NULL DEFAULT '',
+      cloud_slicer_filament_id TEXT NOT NULL DEFAULT '',
+      cloud_slicer_configured_at TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -122,6 +126,104 @@ async function migrate(database: DbApi) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pricing_settings (
+      id TEXT PRIMARY KEY,
+      filament_usd_per_gram REAL NOT NULL DEFAULT 0.0289,
+      electricity_usd_per_kwh REAL NOT NULL DEFAULT 0.15,
+      margin_pct REAL NOT NULL DEFAULT 0.5,
+      unproductive_adder_usd REAL NOT NULL DEFAULT 0.2,
+      fixing_adder_usd REAL NOT NULL DEFAULT 0.05,
+      sales_tax_pct REAL NOT NULL DEFAULT 0,
+      custom_colors_json TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS printers (
+      id TEXT PRIMARY KEY,
+      owner_label TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      avg_power_kw REAL NOT NULL DEFAULT 0.2,
+      active INTEGER NOT NULL DEFAULT 1,
+      owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS designs (
+      id TEXT PRIMARY KEY,
+      sku_base TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT 'General',
+      image_url TEXT NOT NULL DEFAULT '',
+      stl_path TEXT NOT NULL DEFAULT '',
+      slice_status TEXT NOT NULL DEFAULT 'idle',
+      slice_error TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      submitted_at TEXT,
+      reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at TEXT,
+      review_note TEXT NOT NULL DEFAULT '',
+      grams_pablo_p1s REAL,
+      hours_pablo_p1s REAL,
+      grams_court_ender REAL,
+      hours_court_ender REAL,
+      grams_josh_kobra REAL,
+      hours_josh_kobra REAL,
+      available_color_ids TEXT NOT NULL DEFAULT '[]',
+      worst_cost_usd REAL,
+      catalog_price_usd REAL,
+      priced_at TEXT,
+      pricing_inputs_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      customer_name TEXT NOT NULL DEFAULT '',
+      customer_email TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending_payment',
+      stripe_session_id TEXT,
+      stripe_payment_intent TEXT,
+      subtotal_usd REAL NOT NULL DEFAULT 0,
+      total_usd REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'usd',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      paid_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS order_items (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      design_id TEXT NOT NULL REFERENCES designs(id) ON DELETE RESTRICT,
+      sku TEXT NOT NULL,
+      color_id TEXT NOT NULL,
+      color_name TEXT NOT NULL DEFAULT '',
+      qty INTEGER NOT NULL DEFAULT 1,
+      unit_price_usd REAL NOT NULL DEFAULT 0,
+      worst_cost_unit_usd REAL NOT NULL DEFAULT 0,
+      line_total_usd REAL NOT NULL DEFAULT 0,
+      print_status TEXT NOT NULL DEFAULT 'unclaimed',
+      assigned_printer_id TEXT,
+      assigned_admin_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      claimed_at TEXT,
+      completed_at TEXT,
+      reimburse_usd REAL,
+      profit_usd REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS profit_ledger (
+      id TEXT PRIMARY KEY,
+      order_item_id TEXT NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      entry_type TEXT NOT NULL,
+      amount_usd REAL NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
     );
   `)
 }
@@ -260,7 +362,45 @@ async function migrateUserAuth(database: DbApi) {
   } catch {
     /* column already exists */
   }
+  try {
+    await database.exec(`ALTER TABLE users ADD COLUMN cloud_slicer_token TEXT NOT NULL DEFAULT ''`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec(`ALTER TABLE users ADD COLUMN cloud_slicer_printer_id TEXT NOT NULL DEFAULT ''`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec(`ALTER TABLE users ADD COLUMN cloud_slicer_filament_id TEXT NOT NULL DEFAULT ''`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec('ALTER TABLE users ADD COLUMN cloud_slicer_configured_at TEXT')
+  } catch {
+    /* column already exists */
+  }
   await database.run('UPDATE users SET email_verified = 1 WHERE role = ?', 'admin')
+}
+
+async function migrateDesignStl(database: DbApi) {
+  try {
+    await database.exec(`ALTER TABLE designs ADD COLUMN stl_path TEXT NOT NULL DEFAULT ''`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec(`ALTER TABLE designs ADD COLUMN slice_status TEXT NOT NULL DEFAULT 'idle'`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec(`ALTER TABLE designs ADD COLUMN slice_error TEXT NOT NULL DEFAULT ''`)
+  } catch {
+    /* column already exists */
+  }
 }
 
 async function migrateContactMessagesStatus(database: DbApi) {
@@ -554,6 +694,7 @@ async function initDb(): Promise<DbApi> {
   const database = await getDbApi()
   await migrate(database)
   await migrateUserAuth(database)
+  await migrateDesignStl(database)
   await migrateContactMessagesStatus(database)
   await migrateMailArchive(database)
   await migrateMailTrash(database)
@@ -565,6 +706,8 @@ async function initDb(): Promise<DbApi> {
   await migrateDfwAreaCopy(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
+  const { seedCatalogDefaults } = await import('./catalog.ts')
+  await seedCatalogDefaults(database)
   ready = true
   return database
 }

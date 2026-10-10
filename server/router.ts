@@ -389,6 +389,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
+  // Catalog / designs / orders / Stripe (keeps this file smaller)
+  const { handleCatalogApi } = await import('./catalogApi.ts')
+  if (await handleCatalogApi(req, res, urlPath, method)) return true
+
   const db = await getDb()
 
   if (urlPath === '/api/public/bootstrap' && method === 'GET') {
@@ -1595,6 +1599,105 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const displayName = await updateAdminDisplayName(admin.id, body.displayName)
     send(res, 200, { ok: true, displayName })
+    return true
+  }
+
+  if (urlPath === '/api/admin/settings/cloud-slicer' && method === 'GET') {
+    const { maskCloudSlicerToken } = await import('./cloudSlicer.ts')
+    const { seedCatalogDefaults, listPrinters } = await import('./catalog.ts')
+    await seedCatalogDefaults(db)
+    const row = await db.get<{
+      cloud_slicer_token: string
+      cloud_slicer_printer_id: string
+      cloud_slicer_filament_id: string
+      cloud_slicer_configured_at: string | null
+    }>(
+      `SELECT cloud_slicer_token, cloud_slicer_printer_id, cloud_slicer_filament_id, cloud_slicer_configured_at
+       FROM users WHERE id = ?`,
+      admin.id,
+    )
+    const printers = await listPrinters(db)
+    const ownedPrinterId =
+      printers.find((p) => p.ownerUserId === admin.id)?.id ?? null
+    send(res, 200, {
+      tokenMasked: maskCloudSlicerToken(row?.cloud_slicer_token ?? ''),
+      hasToken: Boolean(row?.cloud_slicer_token?.trim()),
+      printerId: row?.cloud_slicer_printer_id ?? '',
+      filamentId: row?.cloud_slicer_filament_id ?? '',
+      configuredAt: row?.cloud_slicer_configured_at ?? null,
+      ownedPrinterId,
+      printers: printers.map((p) => ({
+        id: p.id,
+        ownerLabel: p.ownerLabel,
+        modelName: p.modelName,
+        ownerUserId: p.ownerUserId,
+      })),
+    })
+    return true
+  }
+
+  if (urlPath === '/api/admin/settings/cloud-slicer' && method === 'PATCH') {
+    const body = await readJson(req)
+    const existing = await db.get<{
+      cloud_slicer_token: string
+      cloud_slicer_printer_id: string
+      cloud_slicer_filament_id: string
+    }>(
+      `SELECT cloud_slicer_token, cloud_slicer_printer_id, cloud_slicer_filament_id FROM users WHERE id = ?`,
+      admin.id,
+    )
+    const tokenRaw = body.token !== undefined ? String(body.token ?? '').trim() : undefined
+    const printerIdCs = sanitizeText(String(body.printerId ?? existing?.cloud_slicer_printer_id ?? ''), 120)
+    const filamentId = sanitizeText(String(body.filamentId ?? existing?.cloud_slicer_filament_id ?? ''), 120)
+    const printxPrinterId = sanitizeText(String(body.ownedPrinterId ?? ''), 60)
+    const validPrinterIds = new Set(['pablo_p1s', 'court_ender', 'josh_kobra'])
+    if (printxPrinterId && !validPrinterIds.has(printxPrinterId)) {
+      send(res, 400, { error: 'Pick a valid PrintX printer (P1S, Ender, or Kobra).' })
+      return true
+    }
+
+    let token = existing?.cloud_slicer_token ?? ''
+    if (tokenRaw !== undefined) {
+      // Empty string clears; omit/unchanged keeps existing when client sends blank intentionally via clearToken
+      if (body.clearToken) token = ''
+      else if (tokenRaw) token = tokenRaw
+    }
+
+    const now = new Date().toISOString()
+    const configured =
+      token.trim() && printerIdCs.trim() && filamentId.trim() ? now : null
+    await db.run(
+      `UPDATE users SET
+        cloud_slicer_token = ?,
+        cloud_slicer_printer_id = ?,
+        cloud_slicer_filament_id = ?,
+        cloud_slicer_configured_at = ?
+       WHERE id = ?`,
+      token,
+      printerIdCs,
+      filamentId,
+      configured,
+      admin.id,
+    )
+
+    const { seedCatalogDefaults } = await import('./catalog.ts')
+    await seedCatalogDefaults(db)
+    // Link this admin as owner of the chosen PrintX printer (and clear their previous claim).
+    await db.run(`UPDATE printers SET owner_user_id = NULL WHERE owner_user_id = ?`, admin.id)
+    if (printxPrinterId) {
+      await db.run(`UPDATE printers SET owner_user_id = ? WHERE id = ?`, admin.id, printxPrinterId)
+    }
+
+    const { maskCloudSlicerToken } = await import('./cloudSlicer.ts')
+    send(res, 200, {
+      ok: true,
+      tokenMasked: maskCloudSlicerToken(token),
+      hasToken: Boolean(token.trim()),
+      printerId: printerIdCs,
+      filamentId,
+      configuredAt: configured,
+      ownedPrinterId: printxPrinterId || null,
+    })
     return true
   }
 
