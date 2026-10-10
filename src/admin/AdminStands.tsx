@@ -174,24 +174,28 @@ export function AdminStands() {
               />
             </label>
             <label className="sm:col-span-2">
-              Products available
+              Designs available at this stand
               <div className="mt-2 flex flex-wrap gap-2">
-                {products.map((p) => (
-                  <label key={p.id} className="flex items-center gap-1.5 rounded-lg border px-2 py-1 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={(editing.products ?? []).includes(p.name)}
-                      onChange={(e) => {
-                        const list = editing.products ?? []
-                        setEditing({
-                          ...editing,
-                          products: e.target.checked ? [...list, p.name] : list.filter((n) => n !== p.name),
-                        })
-                      }}
-                    />
-                    {p.name}
-                  </label>
-                ))}
+                {products.length === 0 ? (
+                  <p className="text-sm text-muted">No approved designs yet — add and approve them under Designs.</p>
+                ) : (
+                  products.map((p) => (
+                    <label key={p.id} className="flex items-center gap-1.5 rounded-lg border px-2 py-1 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={(editing.products ?? []).includes(p.name)}
+                        onChange={(e) => {
+                          const list = editing.products ?? []
+                          setEditing({
+                            ...editing,
+                            products: e.target.checked ? [...list, p.name] : list.filter((n) => n !== p.name),
+                          })
+                        }}
+                      />
+                      {p.name}
+                    </label>
+                  ))
+                )}
               </div>
             </label>
           </div>

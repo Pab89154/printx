@@ -37,6 +37,7 @@ import {
   rowToStand,
   setWebsiteSetting,
 } from './db.ts'
+import { rowToDesign } from './catalog.ts'
 import { notifyContactMessage, notifyCustomRequest } from './mail.ts'
 import {
   getCachedBootstrap,
@@ -432,21 +433,39 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
 
-    const [standRows, productRows, schools] = await Promise.all([
+    const [standRows, designRows, schools] = await Promise.all([
       db.all<Record<string, unknown>>(`
         SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC, start_time ASC
       `),
       db.all<Record<string, unknown>>(`
-        SELECT * FROM products ORDER BY display_order ASC, name ASC
+        SELECT * FROM designs WHERE status = 'approved' ORDER BY name ASC
       `),
       db.all('SELECT * FROM schools WHERE active = 1 ORDER BY name ASC'),
     ])
+
+    // Designs are the catalog — expose them as products for bootstrap consumers.
+    const products = designRows.map((r) => {
+      const d = rowToDesign(r)
+      return {
+        id: d.id,
+        name: d.name,
+        description: d.description,
+        price: d.catalogPriceUsd ?? 0,
+        category: d.category,
+        image: d.imageUrl,
+        emoji: 'package',
+        imageGradient: 'from-navy to-electric',
+        available: true,
+        featured: false,
+        displayOrder: 0,
+      }
+    })
 
     const body = {
       stands: standRows.map((r) => publicStand(rowToStand(r))),
       // Past stands stay in admin only — never shown on the public site.
       pastStands: [],
-      products: productRows.map(rowToProduct),
+      products,
       schools,
       content,
       announcementActive,
@@ -627,7 +646,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC LIMIT 1
     `)
     const activeProducts = Number(
-      (await db.get<{ c: number | string }>('SELECT COUNT(*) as c FROM products WHERE available = 1'))?.c ?? 0,
+      (await db.get<{ c: number | string }>("SELECT COUNT(*) as c FROM designs WHERE status = 'approved'"))
+        ?.c ?? 0,
     )
     const newRequests = Number(
       (await db.get<{ c: number | string }>("SELECT COUNT(*) as c FROM custom_requests WHERE status = 'new'"))?.c ??
@@ -766,13 +786,34 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/products' && method === 'GET') {
-    // Stands editor also needs the product list
+    // Designs are stand products — return approved catalog designs for stand pickers.
     if (!adminCan(admin, 'products') && !adminCan(admin, 'stands')) {
       return forbid(res)
     }
 
-    const rows = await db.all<Record<string, unknown>>('SELECT * FROM products ORDER BY display_order ASC')
-    send(res, 200, rows.map(rowToProduct))
+    const rows = await db.all<Record<string, unknown>>(`
+      SELECT * FROM designs WHERE status = 'approved' ORDER BY name ASC
+    `)
+    send(
+      res,
+      200,
+      rows.map((r) => {
+        const d = rowToDesign(r)
+        return {
+          id: d.id,
+          name: d.name,
+          description: d.description,
+          price: d.catalogPriceUsd ?? 0,
+          category: d.category,
+          image: d.imageUrl,
+          emoji: 'package',
+          imageGradient: 'from-navy to-electric',
+          available: true,
+          featured: false,
+          displayOrder: 0,
+        }
+      }),
+    )
     return true
   }
 

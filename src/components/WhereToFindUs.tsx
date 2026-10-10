@@ -48,7 +48,7 @@ function StandCard({ stand }: { stand: PublicStand }) {
         <div className="mt-auto pt-4">
           <div className="rounded-xl bg-surface p-3">
             <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
-              <Package size={14} /> Available products
+              <Package size={14} /> Available designs
             </div>
             <div className="flex flex-wrap gap-1.5">
               {stand.products.map((product) => (

@@ -91,8 +91,8 @@ export function AdminDashboard() {
       </Link>
     ),
     can('products') && (
-      <Link key="products" to={adminPath('products')} className="btn btn-secondary">
-        Products
+      <Link key="designs" to={adminPath('designs')} className="btn btn-secondary">
+        Designs
       </Link>
     ),
     can('content') && (

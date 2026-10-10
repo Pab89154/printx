@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { AdminAuthProvider } from './context/AdminAuthContext'
 import { PublicDataProvider } from './context/PublicDataContext'
 import { CartProvider } from './context/CartContext'
@@ -14,7 +14,6 @@ import { AdminGuard } from './admin/AdminGuard'
 import { AdminLayout } from './admin/AdminLayout'
 import { AdminDashboard } from './admin/AdminDashboard'
 import { AdminStands } from './admin/AdminStands'
-import { AdminProducts } from './admin/AdminProducts'
 import { AdminDesigns } from './admin/AdminDesigns'
 import { AdminApprovals } from './admin/AdminApprovals'
 import { AdminOrders } from './admin/AdminOrders'
@@ -52,7 +51,7 @@ function PortalRoutes() {
           <Route path="messages" element={<AdminMessages />} />
           <Route path="mail" element={<AdminMail />} />
           <Route path="stands" element={<AdminStands />} />
-          <Route path="products" element={<AdminProducts />} />
+          <Route path="products" element={<Navigate to="../designs" replace />} />
           <Route path="designs" element={<AdminDesigns />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
@@ -82,7 +81,7 @@ function PublicRoutes() {
           <Route path="messages" element={<AdminMessages />} />
           <Route path="mail" element={<AdminMail />} />
           <Route path="stands" element={<AdminStands />} />
-          <Route path="products" element={<AdminProducts />} />
+          <Route path="products" element={<Navigate to="../designs" replace />} />
           <Route path="designs" element={<AdminDesigns />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />

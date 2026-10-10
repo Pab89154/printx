@@ -101,8 +101,8 @@ export function AdminDesigns() {
       <div>
         <h1 className="text-2xl font-bold text-navy">Designs</h1>
         <p className="mt-1 text-sm text-muted">
-          Upload an STL. On submit, PrintX quotes Pablo / Court / Josh via their Cloud Slicer APIs and fills
-          grams/hours — no manual printer inputs.
+          Same catalog for the online shop and in-person stands. Upload an STL — on submit, PrintX quotes
+          Pablo / Court / Josh via Cloud Slicer and fills grams/hours.
         </p>
       </div>
 
