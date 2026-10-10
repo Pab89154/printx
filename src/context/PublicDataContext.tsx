@@ -39,16 +39,24 @@ export function PublicDataProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async (opts?: { full?: boolean }) => {
-    try {
-      setError(null)
-      setLoading(true)
-      const bootstrap = await api.public.bootstrap({ full: shouldFetchFull(opts?.full) })
-      setData(bootstrap)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load site data')
-    } finally {
-      setLoading(false)
+    setError(null)
+    setLoading(true)
+    const full = shouldFetchFull(opts?.full)
+    let lastError: unknown
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const bootstrap = await api.public.bootstrap({ full })
+        setData(bootstrap)
+        setLoading(false)
+        return
+      } catch (e) {
+        lastError = e
+        // Transient DB pool saturation after server restarts
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)))
+      }
     }
+    setError(lastError instanceof Error ? lastError.message : 'Failed to load site data')
+    setLoading(false)
   }, [])
 
   useEffect(() => {

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect, Plugin } from 'vite'
-import { ensureDbReady } from './db.ts'
+import { closeDb, ensureDbReady } from './db.ts'
 import { handleApi, startMailScheduleFlusher } from './router.ts'
 
 const apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
@@ -23,18 +23,30 @@ const apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
   }
 }
 
+async function attachApi(server: { middlewares: Connect.Server; httpServer?: { once: (e: string, fn: () => void) => void } | null }) {
+  await ensureDbReady()
+  startMailScheduleFlusher()
+  server.middlewares.use(apiMiddleware)
+  server.httpServer?.once('close', () => {
+    void closeDb()
+  })
+}
+
 export function printxApiPlugin(): Plugin {
   return {
     name: 'printx-api',
     async configureServer(server) {
-      await ensureDbReady()
-      startMailScheduleFlusher()
-      server.middlewares.use(apiMiddleware)
+      await attachApi(server)
+      // Called when Vite restarts the server (config/HMR) — close the old pool first.
+      return () => {
+        void closeDb()
+      }
     },
     async configurePreviewServer(server) {
-      await ensureDbReady()
-      startMailScheduleFlusher()
-      server.middlewares.use(apiMiddleware)
+      await attachApi(server)
+      return () => {
+        void closeDb()
+      }
     },
   }
 }

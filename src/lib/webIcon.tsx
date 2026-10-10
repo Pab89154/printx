@@ -9,42 +9,8 @@ import {
   Smartphone,
   Sparkles,
   type LucideIcon,
-  type LucideProps,
 } from 'lucide-react'
-
-/** Custom 3D-printer mark (not in Lucide). Uses currentColor so parent text color wins. */
-function Printer3dIcon({ className, ...props }: LucideProps) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden={props['aria-hidden'] ?? true}
-      {...props}
-    >
-      <path d="M7 20V8" />
-      <path d="M17 20V8" />
-      <path d="M7 8h10" />
-      <path d="M6 20h12" />
-      <path d="M12 8v2" />
-      <path d="M10.5 10h3" />
-      <path d="M12 10v2.5" />
-      <path d="M11.5 12.5 12 14 12.5 12.5" />
-      <path d="M12 15 10.5 17" />
-      <path d="M12 15 13.5 17" />
-      <path d="M10.5 17v2" />
-      <path d="M13.5 17v2" />
-      <path d="M10.5 19h3" />
-    </svg>
-  )
-}
+import { HomePrinterIcon } from './homePrinterIcon'
 
 const ICONS: Record<string, LucideIcon> = {
   loader: Loader,
@@ -56,8 +22,8 @@ const ICONS: Record<string, LucideIcon> = {
   package: Package,
   pencil: Pencil,
   ruler: Ruler,
-  'printer-3d': Printer3dIcon as LucideIcon,
-  printer: Printer3dIcon as LucideIcon,
+  'printer-3d': HomePrinterIcon as LucideIcon,
+  printer: HomePrinterIcon as LucideIcon,
 }
 
 export const PRODUCT_ICON_OPTIONS = [

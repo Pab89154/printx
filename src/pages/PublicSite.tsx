@@ -2,7 +2,6 @@ import { About } from '../components/About'
 import { AnnouncementBanner } from '../components/AnnouncementBanner'
 import { Contact } from '../components/Contact'
 import { CustomPrinting } from '../components/CustomPrinting'
-import { FeedbackButton } from '../components/FeedbackButton'
 import { Footer } from '../components/Footer'
 import { Header } from '../components/Header'
 import { Hero } from '../components/Hero'
@@ -58,7 +57,6 @@ export function PublicSite({ forceOnline = false }: Props) {
         <Contact />
       </main>
       <Footer />
-      <FeedbackButton />
     </div>
   )
 }

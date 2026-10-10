@@ -31,6 +31,12 @@ import {
   type Design,
 } from './catalog.ts'
 import { BUILTIN_COLORS, emptyCustomColorSlots, normalizeCustomSlots } from '../shared/colors.ts'
+import {
+  isModelExt,
+  MODEL_EXTS,
+  modelContentType,
+  SLICEABLE_EXTS,
+} from '../shared/modelFormats.ts'
 import { roundMoney } from './pricing.ts'
 import {
   cloudSlicerConfigured,
@@ -38,8 +44,7 @@ import {
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
 
-const STL_MAX_BYTES = 50 * 1024 * 1024
-const STL_EXT = new Set(['.stl'])
+const MODEL_MAX_BYTES = 50 * 1024 * 1024
 
 const PRINTER_FIELD: Record<
   string,
@@ -50,16 +55,17 @@ const PRINTER_FIELD: Record<
   josh_kobra: { grams: 'gramsJoshKobra', hours: 'hoursJoshKobra', label: 'Josh Kobra' },
 }
 
-function designDto(d: Design): Omit<Design, 'stlPath'> & { stlPath: '' } {
-  return { ...d, stlPath: '' }
+function designDto(d: Design): Omit<Design, 'stlPath'> & { stlPath: ''; modelExt: string } {
+  const modelExt = path.extname(d.stlPath || '').toLowerCase()
+  return { ...d, stlPath: '', modelExt }
 }
 
-async function parseStlUpload(req: IncomingMessage): Promise<string> {
+async function parseModelUpload(req: IncomingMessage): Promise<{ fileName: string; modelExt: string }> {
   const uploadsDir = await getUploadsDir()
   const form = formidable({
     uploadDir: uploadsDir,
     keepExtensions: true,
-    maxFileSize: STL_MAX_BYTES,
+    maxFileSize: MODEL_MAX_BYTES,
     multiples: false,
   })
   return new Promise((resolve, reject) => {
@@ -67,20 +73,22 @@ async function parseStlUpload(req: IncomingMessage): Promise<string> {
       if (err) return reject(err)
       const upload = files.file
       const file = Array.isArray(upload) ? upload[0] : upload
-      if (!file?.filepath) return reject(new Error('STL file is required.'))
+      if (!file?.filepath) return reject(new Error('Model file is required.'))
       const ext = path.extname(file.originalFilename ?? file.filepath).toLowerCase()
-      if (!STL_EXT.has(ext)) {
+      if (!isModelExt(ext)) {
         try {
           fs.unlinkSync(file.filepath)
         } catch {
           /* ignore */
         }
-        return reject(new Error('Invalid file type. Upload a .stl file.'))
+        return reject(
+          new Error(`Invalid file type. Upload ${MODEL_EXTS.join(', ')}.`),
+        )
       }
-      const safeName = `${randomUUID()}.stl`
+      const safeName = `${randomUUID()}${ext}`
       const dest = path.join(uploadsDir, safeName)
       fs.renameSync(file.filepath, dest)
-      resolve(safeName)
+      resolve({ fileName: safeName, modelExt: ext })
     })
   })
 }
@@ -116,7 +124,7 @@ async function sliceDesignWithCloudSlicer(
   const uploadsDir = await getUploadsDir()
   const localPath = path.join(uploadsDir, stlPath)
   if (!fs.existsSync(localPath)) {
-    return { ok: false, error: 'STL file missing on server. Re-upload the design file.' }
+    return { ok: false, error: 'Model file missing on server. Re-upload the design file.' }
   }
 
   const owners = await loadPrinterOwnerCreds(db)
@@ -660,18 +668,21 @@ export async function handleCatalogApi(
     return true
   }
 
-  if (urlPath === '/api/admin/designs/upload-stl' && method === 'POST') {
+  if (
+    (urlPath === '/api/admin/designs/upload-stl' || urlPath === '/api/admin/designs/upload-model') &&
+    method === 'POST'
+  ) {
     const admin = await requireAdmin(req)
     if (!admin || !adminCan(admin, 'products')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
     try {
-      const stlPath = await parseStlUpload(req)
-      send(res, 201, { stlPath, hasStl: true })
+      const { fileName, modelExt } = await parseModelUpload(req)
+      send(res, 201, { stlPath: fileName, hasStl: true, modelExt })
       return true
     } catch (err) {
-      send(res, 400, { error: err instanceof Error ? err.message : 'STL upload failed' })
+      send(res, 400, { error: err instanceof Error ? err.message : 'Model upload failed' })
       return true
     }
   }
@@ -743,17 +754,18 @@ export async function handleCatalogApi(
     )
     const stlPath = row?.stl_path?.trim()
     if (!stlPath || stlPath.includes('..') || stlPath.includes('/') || stlPath.includes('\\')) {
-      send(res, 404, { error: 'STL not found' })
+      send(res, 404, { error: 'Model not found' })
       return true
     }
     const uploadsDir = await getUploadsDir()
     const full = path.join(uploadsDir, stlPath)
     if (!fs.existsSync(full)) {
-      send(res, 404, { error: 'STL not found' })
+      send(res, 404, { error: 'Model not found' })
       return true
     }
+    const ext = path.extname(stlPath).toLowerCase()
     res.statusCode = 200
-    res.setHeader('Content-Type', 'model/stl')
+    res.setHeader('Content-Type', modelContentType(ext))
     res.setHeader('Cache-Control', 'private, max-age=60')
     fs.createReadStream(full).pipe(res)
     return true
@@ -857,7 +869,15 @@ export async function handleCatalogApi(
 
     if (method === 'POST' && action === 'submit') {
       if (!design.hasStl || !design.stlPath) {
-        send(res, 400, { error: 'Upload an STL file before submitting.' })
+        send(res, 400, { error: 'Upload a 3D model before submitting.' })
+        return true
+      }
+      const modelExt = path.extname(design.stlPath).toLowerCase()
+      if (!SLICEABLE_EXTS.has(modelExt)) {
+        send(res, 400, {
+          error:
+            'Cloud Slicer auto-quote needs .stl or .3mf. Convert STEP/OBJ to STL (or upload STL/3MF) before submitting.',
+        })
         return true
       }
       if (design.availableColorIds.length === 0) {

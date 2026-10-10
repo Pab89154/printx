@@ -31,6 +31,7 @@ export type Design = {
   imageUrl: string
   stlPath: string
   hasStl: boolean
+  modelExt?: string
   sliceStatus: SliceStatus
   sliceError: string
   status: DesignStatus

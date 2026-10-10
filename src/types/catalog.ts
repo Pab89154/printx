@@ -19,6 +19,8 @@ export type Design = {
   imageUrl: string
   stlPath: string
   hasStl: boolean
+  /** File extension of the stored model, e.g. `.stl` (from API; path itself is never sent). */
+  modelExt?: string
   sliceStatus: SliceStatus
   sliceError: string
   status: DesignStatus

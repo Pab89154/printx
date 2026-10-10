@@ -59,14 +59,27 @@ export const api = {
       uploadStl: (file: File) => {
         const formData = new FormData()
         formData.append('file', file)
-        return fetch('/api/admin/designs/upload-stl', {
+        return fetch('/api/admin/designs/upload-model', {
           method: 'POST',
           body: formData,
           credentials: 'include',
         }).then(async (res) => {
           const data = await res.json()
-          if (!res.ok) throw new Error(data.error ?? 'STL upload failed')
-          return data as { stlPath: string; hasStl: boolean }
+          if (!res.ok) throw new Error(data.error ?? 'Model upload failed')
+          return data as { stlPath: string; hasStl: boolean; modelExt: string }
+        })
+      },
+      uploadModel: (file: File) => {
+        const formData = new FormData()
+        formData.append('file', file)
+        return fetch('/api/admin/designs/upload-model', {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        }).then(async (res) => {
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error ?? 'Model upload failed')
+          return data as { stlPath: string; hasStl: boolean; modelExt: string }
         })
       },
       stlUrl: (id: string) => `/api/admin/designs/${id}/stl`,

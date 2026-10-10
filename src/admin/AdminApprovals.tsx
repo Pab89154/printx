@@ -232,15 +232,20 @@ export function AdminApprovals() {
                     </div>
                   </div>
                 </div>
-                {d.hasStl ? (
+                {d.hasStl && (d.modelExt === '.stl' || !d.modelExt) ? (
                   <div>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                       3D preview
                     </p>
                     <StlViewer url={api.catalog.designs.stlUrl(d.id)} height={240} />
                   </div>
+                ) : d.hasStl ? (
+                  <p className="self-center text-sm text-muted">
+                    Model on file ({(d.modelExt || '').replace('.', '').toUpperCase() || '3D'}) —
+                    interactive preview is STL-only.
+                  </p>
                 ) : (
-                  <p className="self-center text-sm text-muted">No STL on file.</p>
+                  <p className="self-center text-sm text-muted">No model on file.</p>
                 )}
               </div>
             </div>

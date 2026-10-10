@@ -433,15 +433,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
 
-    const [standRows, designRows, schools] = await Promise.all([
-      db.all<Record<string, unknown>>(`
-        SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC, start_time ASC
-      `),
-      db.all<Record<string, unknown>>(`
-        SELECT * FROM designs WHERE status = 'approved' ORDER BY name ASC
-      `),
-      db.all('SELECT * FROM schools WHERE active = 1 ORDER BY name ASC'),
-    ])
+    // Sequential queries keep session-pooler usage to 1 client (avoids EMAXCONNSESSION).
+    const standRows = await db.all<Record<string, unknown>>(`
+      SELECT * FROM stands WHERE status IN ('upcoming', 'active') ORDER BY date ASC, start_time ASC
+    `)
+    const designRows = await db.all<Record<string, unknown>>(`
+      SELECT * FROM designs WHERE status = 'approved' ORDER BY name ASC
+    `)
+    const schools = await db.all('SELECT * FROM schools WHERE active = 1 ORDER BY name ASC')
 
     // Designs are the catalog — expose them as products for bootstrap consumers.
     const products = designRows.map((r) => {

@@ -134,6 +134,12 @@ async function main() {
   await ensureDbReady()
   startMailScheduleFlusher()
 
+  const shutdown = () => {
+    void import('./db.ts').then(({ closeDb }) => closeDb()).finally(() => process.exit(0))
+  }
+  process.once('SIGTERM', shutdown)
+  process.once('SIGINT', shutdown)
+
   server.listen(PORT, HOST, () => {
     console.log(`PrintX running at http://${HOST}:${PORT}`)
   })

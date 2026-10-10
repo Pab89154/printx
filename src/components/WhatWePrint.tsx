@@ -1,4 +1,3 @@
-import { Link } from 'react-router-dom'
 import { ScrollReveal } from './ScrollReveal'
 import { SectionHeading } from './SectionHeading'
 import { Button } from './Button'
@@ -12,13 +11,10 @@ export function WhatWePrint() {
             title="What We Print"
             subtitle="Order from our online catalog — pick a design and color, pay online, we print it."
           />
-          <div className="mt-6 flex flex-wrap items-center gap-4">
-            <Button href="/shop" size="lg">
+          <div className="mt-2 flex justify-center">
+            <Button href="/shop" size="lg" className="!min-h-14 !px-10 !text-lg sm:!min-h-16 sm:!px-12 sm:!text-xl">
               Open shop catalog
             </Button>
-            <Link to="/shop" className="text-sm font-semibold text-electric hover:underline">
-              Shop approved designs →
-            </Link>
           </div>
         </ScrollReveal>
       </div>

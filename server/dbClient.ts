@@ -29,23 +29,43 @@ function splitSqlStatements(sql: string): string[] {
     .filter((s) => s.length > 0)
 }
 
+function isPoolExhaustedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes('EMAXCONNSESSION') || msg.includes('max clients reached') || msg.includes('too many clients')
+}
+
+async function poolQuery(pool: pg.Pool, sql: string, params: unknown[] = [], attempts = 4) {
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await pool.query(sql, params)
+    } catch (err) {
+      lastErr = err
+      if (!isPoolExhaustedError(err) || i === attempts - 1) throw err
+      // Session pooler saturated (often after Vite restarts) — brief backoff.
+      await new Promise((r) => setTimeout(r, 150 * (i + 1)))
+    }
+  }
+  throw lastErr
+}
+
 function createPostgresApi(pool: pg.Pool): DbApi {
   return {
     async exec(sql: string) {
       for (const statement of splitSqlStatements(sql)) {
-        await pool.query(statement)
+        await poolQuery(pool, statement)
       }
     },
     async run(sql: string, ...params: unknown[]) {
-      const result = await pool.query(toPgPlaceholders(sql), params)
+      const result = await poolQuery(pool, toPgPlaceholders(sql), params)
       return { changes: result.rowCount ?? 0 }
     },
     async get<T = Record<string, unknown>>(sql: string, ...params: unknown[]) {
-      const result = await pool.query(toPgPlaceholders(sql), params)
+      const result = await poolQuery(pool, toPgPlaceholders(sql), params)
       return result.rows[0] as T | undefined
     },
     async all<T = Record<string, unknown>>(sql: string, ...params: unknown[]) {
-      const result = await pool.query(toPgPlaceholders(sql), params)
+      const result = await poolQuery(pool, toPgPlaceholders(sql), params)
       return result.rows as T[]
     },
   }
@@ -83,6 +103,20 @@ export function usingPostgres(): boolean {
   return Boolean(process.env.DATABASE_URL?.trim())
 }
 
+/** End Postgres pool (or drop SQLite handle) so Vite restarts don't leak session clients. */
+export async function closeDbApi(): Promise<void> {
+  const ending = pool
+  pool = null
+  api = null
+  if (ending) {
+    try {
+      await ending.end()
+    } catch (err) {
+      console.warn('[printx] pool end failed', err)
+    }
+  }
+}
+
 export async function getDbApi(): Promise<DbApi> {
   if (api) return api
 
@@ -90,10 +124,19 @@ export async function getDbApi(): Promise<DbApi> {
 
   const databaseUrl = process.env.DATABASE_URL?.trim()
   if (databaseUrl) {
+    // Supabase session pooler caps ~15 clients project-wide. Keep this small —
+    // each Vite restart used to leak another pool of 5 and trip EMAXCONNSESSION.
+    const isDev = process.env.NODE_ENV !== 'production'
     pool = new pg.Pool({
       connectionString: databaseUrl,
       ssl: databaseUrl.includes('localhost') ? undefined : { rejectUnauthorized: false },
-      max: 5,
+      max: isDev ? 2 : 4,
+      idleTimeoutMillis: 8_000,
+      connectionTimeoutMillis: 15_000,
+      allowExitOnIdle: true,
+    })
+    pool.on('error', (err) => {
+      console.error('[printx] idle Postgres client error', err)
     })
     api = createPostgresApi(pool)
     console.log('[printx] Using Supabase/Postgres DATABASE_URL')

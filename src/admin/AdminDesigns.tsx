@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { BUILTIN_COLORS } from '../../shared/colors'
+import { MODEL_ACCEPT, modelLabel, SLICEABLE_EXTS } from '../../shared/modelFormats'
 import type { Design } from '../types/catalog'
 import { resolveImageUrl } from '../lib/imageUrl'
 import { StlViewer } from './StlViewer'
@@ -13,6 +15,7 @@ const emptyForm = {
   imageUrl: '',
   stlPath: '',
   hasStl: false,
+  modelExt: '',
   availableColorIds: ['black', 'white'] as string[],
 }
 
@@ -25,6 +28,7 @@ export function AdminDesigns() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [uploadingStl, setUploadingStl] = useState(false)
+  const modelInputRef = useRef<HTMLInputElement>(null)
 
   async function load() {
     const [list, pricing] = await Promise.all([
@@ -70,6 +74,7 @@ export function AdminDesigns() {
       imageUrl: d.imageUrl,
       stlPath: '',
       hasStl: d.hasStl,
+      modelExt: d.modelExt || '',
       availableColorIds: d.availableColorIds,
     })
   }
@@ -79,30 +84,34 @@ export function AdminDesigns() {
     setForm((f) => ({ ...f, imageUrl: resolveImageUrl(url) }))
   }
 
-  async function uploadStl(file: File) {
+  async function uploadModel(file: File) {
     setUploadingStl(true)
     setError('')
     try {
-      const { stlPath, hasStl } = await api.catalog.designs.uploadStl(file)
-      setForm((f) => ({ ...f, stlPath, hasStl }))
-      setMessage('STL uploaded. Grams/hours fill automatically when you submit for approval.')
+      const { stlPath, hasStl, modelExt } = await api.catalog.designs.uploadModel(file)
+      setForm((f) => ({ ...f, stlPath, hasStl, modelExt }))
+      const sliceNote = SLICEABLE_EXTS.has(modelExt)
+        ? 'Grams/hours fill automatically when you submit for approval.'
+        : 'Saved for the design. Convert to .stl or .3mf before submit so Cloud Slicer can quote.'
+      setMessage(`${modelLabel(modelExt)} uploaded. ${sliceNote}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'STL upload failed')
+      setError(err instanceof Error ? err.message : 'Model upload failed')
     } finally {
       setUploadingStl(false)
     }
   }
 
+  const canPreview3d = form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
   const previewStlUrl =
-    editingId && form.hasStl && !form.stlPath ? api.catalog.designs.stlUrl(editingId) : ''
+    editingId && canPreview3d && form.hasStl && !form.stlPath ? api.catalog.designs.stlUrl(editingId) : ''
 
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold text-navy">Designs</h1>
         <p className="mt-1 text-sm text-muted">
-          Same catalog for the online shop and in-person stands. Upload an STL — on submit, PrintX quotes
-          Pablo / Court / Josh via Cloud Slicer and fills grams/hours.
+          Same catalog for the online shop and in-person stands. Upload .stl, .obj, .3mf, .step, or .stp —
+          submit with .stl/.3mf to auto-quote via Cloud Slicer.
         </p>
       </div>
 
@@ -114,7 +123,7 @@ export function AdminDesigns() {
         onSubmit={(e) => {
           e.preventDefault()
           if (!form.hasStl && !form.stlPath) {
-            setError('Upload an STL before saving.')
+            setError('Upload a 3D model before saving.')
             return
           }
           setBusy(true)
@@ -167,24 +176,44 @@ export function AdminDesigns() {
 
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <div>
-            <label className="text-sm font-medium">
-              STL file (required)
+            <p className="text-sm font-medium">3D model (required)</p>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
               <input
+                ref={modelInputRef}
                 type="file"
-                accept=".stl,model/stl"
-                className="mt-1 block text-sm"
+                accept={MODEL_ACCEPT}
+                className="sr-only"
                 onChange={(e) => {
                   const f = e.target.files?.[0]
-                  if (f) void uploadStl(f)
+                  if (f) void uploadModel(f)
+                  e.target.value = ''
                 }}
               />
-            </label>
-            <p className="mt-1 text-xs text-muted">
+              <button
+                type="button"
+                className="btn btn-secondary inline-flex items-center gap-2"
+                disabled={uploadingStl}
+                onClick={() => modelInputRef.current?.click()}
+              >
+                <Upload size={16} aria-hidden />
+                {uploadingStl ? 'Uploading…' : 'Upload model'}
+              </button>
+              {(form.hasStl || form.stlPath) && form.modelExt ? (
+                <span className="rounded-full bg-electric/10 px-2.5 py-1 text-xs font-semibold text-electric">
+                  {modelLabel(form.modelExt)} on file
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-2 text-xs text-muted">
               {uploadingStl
                 ? 'Uploading…'
                 : form.hasStl || form.stlPath
-                  ? 'STL on file.'
-                  : 'Max 50MB binary/ASCII STL.'}
+                  ? form.modelExt === '.stl'
+                    ? '3D preview available. Submit to auto-quote via Cloud Slicer.'
+                    : SLICEABLE_EXTS.has(form.modelExt)
+                      ? 'Ready for Cloud Slicer quote on submit (preview is STL-only).'
+                      : 'Stored on this design. Use .stl or .3mf to auto-quote on submit.'
+                  : 'Accepts .stl, .obj, .3mf, .step, .stp — max 50MB.'}
             </p>
             {previewStlUrl ? <StlViewer url={previewStlUrl} className="mt-3" /> : null}
           </div>
@@ -291,14 +320,14 @@ export function AdminDesigns() {
                   <img src={d.imageUrl} alt="" className="h-12 w-12 rounded-lg object-cover" />
                 ) : (
                   <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-surface text-[10px] font-bold text-muted">
-                    {d.hasStl ? 'STL' : '—'}
+                    {d.hasStl ? modelLabel(d.modelExt || '.stl') : '—'}
                   </div>
                 )}
                 <div>
                   <p className="font-medium text-navy">{d.name}</p>
                   <p className="text-xs text-muted">
                     {d.skuBase} · <span className="uppercase">{d.status.replace('_', ' ')}</span>
-                    {d.hasStl ? ' · STL' : ' · no STL'}
+                    {d.hasStl ? ` · ${modelLabel(d.modelExt || '')}` : ' · no model'}
                     {d.sliceStatus !== 'idle' ? ` · slice ${d.sliceStatus}` : ''}
                     {d.catalogPriceUsd != null ? ` · $${d.catalogPriceUsd.toFixed(2)}` : ''}
                   </p>

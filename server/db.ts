@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { resolveImageUrl } from '../shared/imageUrl.ts'
 import { setPrimaryAdminUserId } from '../shared/permissions.ts'
 import type { Stand, WebsiteContent } from './types.ts'
-import { getDbApi, UPLOADS_DIR, type DbApi } from './dbClient.ts'
+import { closeDbApi, getDbApi, UPLOADS_DIR, type DbApi } from './dbClient.ts'
 
 export type Db = DbApi
 
@@ -722,6 +722,13 @@ export async function ensureDbReady(): Promise<DbApi> {
     })
   }
   return readyPromise
+}
+
+/** Release DB resources so Vite config/server restarts do not leak Supabase sessions. */
+export async function closeDb(): Promise<void> {
+  ready = false
+  readyPromise = null
+  await closeDbApi()
 }
 
 export async function getDb(): Promise<DbApi> {

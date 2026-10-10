@@ -48,7 +48,8 @@ export function CustomPrinting() {
           <ScrollReveal>
             <h2 className="text-3xl font-bold tracking-tight text-navy sm:text-4xl">Have an Idea?</h2>
             <p className="mt-4 text-lg leading-relaxed text-muted">
-              Want something we don&apos;t currently sell? Tell us about your idea and we&apos;ll see if we can 3D print it.
+              Want something we don&apos;t currently sell? Tell us about your idea and we&apos;ll see if we can 3D
+              print it. We may not print your requested print.
             </p>
             {!showForm && !submitted && (
               <Button

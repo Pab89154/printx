@@ -4,7 +4,10 @@ type Printer3dProps = SVGProps<SVGSVGElement> & {
   size?: number | string
 }
 
-/** Lucide-style 3D printer icon (not in the Lucide CDN set). */
+/**
+ * 3D printer extruding a cube — Designs nav mark.
+ * currentColor only (inherits slate / white / electric like other sidebar icons).
+ */
 export const Printer3d = forwardRef<SVGSVGElement, Printer3dProps>(
   ({ className, size = 24, strokeWidth = 2, ...props }, ref) => (
     <svg
@@ -19,21 +22,21 @@ export const Printer3d = forwardRef<SVGSVGElement, Printer3dProps>(
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className}
+      aria-hidden
       {...props}
     >
-      <path d="M7 20V8" />
-      <path d="M17 20V8" />
-      <path d="M7 8h10" />
-      <path d="M6 20h12" />
-      <path d="M12 8v2" />
-      <path d="M10.5 10h3" />
-      <path d="M12 10v2.5" />
-      <path d="M11.5 12.5 12 14 12.5 12.5" />
-      <path d="M12 15 10.5 17" />
-      <path d="M12 15 13.5 17" />
-      <path d="M10.5 17v2" />
-      <path d="M13.5 17v2" />
-      <path d="M10.5 19h3" />
+      {/* Solid extruder head */}
+      <path
+        fill="currentColor"
+        stroke="none"
+        d="M4.25 2.1h15.5a1.65 1.65 0 0 1 0 3.3h-4.55l-1.35 1.85a.9.9 0 0 1-1.45 0L11.05 5.4H4.25a1.65 1.65 0 0 1 0-3.3Z"
+      />
+      {/* Filament loop into the print */}
+      <path d="M12 7.35v1.35c0 1.2 3.75 1.05 3.75 2.7 0 1.55-3.75 1.45-3.75 2.75" />
+      {/* Isometric cube */}
+      <path d="M8.15 16.2 12 14.25l3.85 1.95L12 18.15Z" />
+      <path d="M8.15 16.2v3.15L12 21.3v-3.15" />
+      <path d="M15.85 16.2v3.15L12 21.3" />
     </svg>
   ),
 )
