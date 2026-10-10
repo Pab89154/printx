@@ -8,7 +8,6 @@ import { SectionHeading } from './SectionHeading'
 
 const INQUIRY_TYPES = [
   'General question',
-  'School stand request',
   'Custom print request',
   'Website feedback',
 ] as const
@@ -46,7 +45,7 @@ export function Contact() {
     <section id="contact" className="bg-surface py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
         <ScrollReveal>
-          <SectionHeading title="Contact PrintX" subtitle="Questions, school stand requests, or custom print ideas." />
+          <SectionHeading title="Contact PrintX" subtitle="Questions, custom print ideas, or website feedback." />
         </ScrollReveal>
 
         <div className="grid gap-12 lg:grid-cols-5">
@@ -62,7 +61,6 @@ export function Contact() {
                 </a>
               </p>
               <p><strong>General questions</strong> — ask us anything about PrintX.</p>
-              <p><strong>School stand requests</strong> — bring PrintX to your school.</p>
               <p><strong>Custom print requests</strong> — tell us about your idea.</p>
             </div>
           </ScrollReveal>

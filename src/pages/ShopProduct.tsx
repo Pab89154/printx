@@ -5,6 +5,7 @@ import { useCart } from '../context/CartContext'
 import type { PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
+import { CartLink } from '../components/CartLink'
 
 export function ShopProduct() {
   const { skuBase = '' } = useParams()
@@ -13,7 +14,7 @@ export function ShopProduct() {
   const [qty, setQty] = useState(1)
   const [error, setError] = useState('')
   const [added, setAdded] = useState(false)
-  const { add, count } = useCart()
+  const { add } = useCart()
 
   useEffect(() => {
     void api.catalog
@@ -34,13 +35,11 @@ export function ShopProduct() {
     <div className="min-h-screen bg-surface">
       <Header />
       <main className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-        <div className="mb-6 flex flex-wrap gap-3 text-sm">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 text-sm">
           <Link to="/shop" className="text-electric hover:underline">
             ← Shop
           </Link>
-          <Link to="/cart" className="text-muted hover:text-navy">
-            Cart ({count})
-          </Link>
+          <CartLink />
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

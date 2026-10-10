@@ -3,7 +3,6 @@ export const NAV_LINKS = [
   { label: 'Shop', href: '/shop' },
   { label: 'Where to Find Us', href: '#stands' },
   { label: 'Custom Prints', href: '#custom' },
-  { label: 'For Schools', href: '#schools' },
   { label: 'About', href: '#about' },
   { label: 'Contact', href: '#contact' },
 ] as const
@@ -13,7 +12,6 @@ export const FOOTER_LINKS = [
   { label: 'Shop', href: '/shop' },
   { label: 'Where to Find Us', href: '#stands' },
   { label: 'Custom Prints', href: '#custom' },
-  { label: 'For Schools', href: '#schools' },
   { label: 'About', href: '#about' },
   { label: 'Contact', href: '#contact' },
 ] as const

@@ -110,7 +110,6 @@ export type AdminPermissions = {
   products: boolean
   orders: boolean
   requests: boolean
-  schools: boolean
   content: boolean
   sandbox: boolean
   settings: boolean

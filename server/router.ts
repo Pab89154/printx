@@ -1457,68 +1457,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
-  if (urlPath === '/api/admin/schools' && method === 'GET') {
-    // Stands editor also needs the school list
-    if (!adminCan(admin, 'schools') && !adminCan(admin, 'stands')) {
-      return forbid(res)
-    }
-    send(res, 200, await db.all('SELECT * FROM schools ORDER BY name ASC'))
-    return true
-  }
-
-  if (urlPath === '/api/admin/schools' && method === 'POST') {
-    if (!requirePerm(admin, 'schools', res)) return true
-    const body = await readJson(req)
-    const now = new Date().toISOString()
-    const id = randomUUID()
-    await db.run(
-      `
-      INSERT INTO schools (id, name, address, description, image, active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-      id,
-      sanitizeText(body.name, 200),
-      sanitizeText(body.address, 300),
-      sanitizeText(body.description, 2000),
-      sanitizeText(body.image, 500),
-      body.active === false ? 0 : 1,
-      now,
-      now,
-    )
-    bumpPublicCache()
-    send(res, 201, await db.get('SELECT * FROM schools WHERE id = ?', id))
+  if (urlPath === '/api/admin/schools' && (method === 'GET' || method === 'POST')) {
+    send(res, 410, { error: 'Schools management has been removed.' })
     return true
   }
 
   const schoolMatch = urlPath.match(/^\/api\/admin\/schools\/([^/]+)$/)
-  if (schoolMatch) {
-    if (!requirePerm(admin, 'schools', res)) return true
-    const id = schoolMatch[1]
-    if (method === 'PATCH') {
-      const body = await readJson(req)
-      await db.run(
-        `
-        UPDATE schools SET name = ?, address = ?, description = ?, image = ?, active = ?, updated_at = ?
-        WHERE id = ?
-      `,
-        sanitizeText(body.name, 200),
-        sanitizeText(body.address, 300),
-        sanitizeText(body.description, 2000),
-        sanitizeText(body.image, 500),
-        body.active === false ? 0 : 1,
-        new Date().toISOString(),
-        id,
-      )
-      bumpPublicCache()
-      send(res, 200, await db.get('SELECT * FROM schools WHERE id = ?', id))
-      return true
-    }
-    if (method === 'DELETE') {
-      await db.run('DELETE FROM schools WHERE id = ?', id)
-      bumpPublicCache()
-      send(res, 200, { ok: true })
-      return true
-    }
+  if (schoolMatch && (method === 'PATCH' || method === 'DELETE')) {
+    send(res, 410, { error: 'Schools management has been removed.' })
+    return true
   }
 
   if (urlPath === '/api/admin/content' && method === 'GET') {

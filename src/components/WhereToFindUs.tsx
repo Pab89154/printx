@@ -78,7 +78,7 @@ export function WhereToFindUs() {
         <ScrollReveal>
           <SectionHeading
             title="Find a PrintX Stand Near You"
-            subtitle="We sell our prints in person at stands around the DFW area — schools, clubs, and local spots."
+            subtitle="We sell our prints in person at stands around the DFW area — clubs, events, and local spots."
           />
         </ScrollReveal>
 

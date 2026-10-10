@@ -30,6 +30,10 @@ export default defineConfig(async ({ mode, command }) => {
 
   return {
     plugins,
+    build: {
+      // Shop STL viewer pulls in three.js; keep warning threshold above that chunk.
+      chunkSizeWarningLimit: 1200,
+    },
     server: {
       port: 5221,
       strictPort: true,

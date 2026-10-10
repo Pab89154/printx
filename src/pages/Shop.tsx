@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { useCart } from '../context/CartContext'
 import type { PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
+import { CartLink } from '../components/CartLink'
 
 export function Shop() {
   const [designs, setDesigns] = useState<PublicCatalogDesign[]>([])
   const [error, setError] = useState('')
-  const { count } = useCart()
 
   useEffect(() => {
     void api.catalog
@@ -27,9 +26,7 @@ export function Shop() {
             <h1 className="text-3xl font-extrabold tracking-tight text-navy">Shop PrintX</h1>
             <p className="mt-2 text-muted">Pick a design and color — pay online, we print it.</p>
           </div>
-          <Link to="/cart" className="btn btn-primary">
-            Cart ({count})
-          </Link>
+          <CartLink primary />
         </div>
 
         {error && <p className="mt-6 text-sm text-red-600">{error}</p>}

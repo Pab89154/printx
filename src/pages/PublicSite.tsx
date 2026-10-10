@@ -4,7 +4,6 @@ import { Contact } from '../components/Contact'
 import { CustomPrinting } from '../components/CustomPrinting'
 import { FeedbackButton } from '../components/FeedbackButton'
 import { Footer } from '../components/Footer'
-import { ForSchools } from '../components/ForSchools'
 import { Header } from '../components/Header'
 import { Hero } from '../components/Hero'
 import { HowToBuy } from '../components/HowToBuy'
@@ -54,7 +53,6 @@ export function PublicSite({ forceOnline = false }: Props) {
         <WhereToFindUs />
         <HowToBuy />
         <CustomPrinting />
-        <ForSchools />
         <WhyPrintX />
         <About />
         <Contact />

@@ -21,7 +21,6 @@ import { AdminOrders } from './admin/AdminOrders'
 import { AdminRequests } from './admin/AdminRequests'
 import { AdminMessages } from './admin/AdminMessages'
 import { AdminMail } from './admin/AdminMail'
-import { AdminSchools } from './admin/AdminSchools'
 import { AdminContent } from './admin/AdminContent'
 import { AdminSettings } from './admin/AdminSettings'
 import { AdminSandbox } from './admin/AdminSandbox'
@@ -58,7 +57,6 @@ function PortalRoutes() {
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
           <Route path="requests" element={<AdminRequests />} />
-          <Route path="schools" element={<AdminSchools />} />
           <Route path="content" element={<AdminContent />} />
           <Route path="settings" element={<AdminSettings />} />
         </Route>
@@ -89,7 +87,6 @@ function PublicRoutes() {
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
           <Route path="requests" element={<AdminRequests />} />
-          <Route path="schools" element={<AdminSchools />} />
           <Route path="content" element={<AdminContent />} />
           <Route path="settings" element={<AdminSettings />} />
         </Route>

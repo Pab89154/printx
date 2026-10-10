@@ -17,7 +17,6 @@ export function CustomPrinting() {
     const formData = new FormData(form)
     const name = String(formData.get('name') || '').trim()
     const email = String(formData.get('email') || '').trim()
-    const school = String(formData.get('school') || '').trim()
     const description = String(formData.get('description') || '').trim()
     const size = String(formData.get('size') || '').trim()
 
@@ -27,7 +26,6 @@ export function CustomPrinting() {
       body: [
         `Name: ${name}`,
         `Reply-to: ${email}`,
-        school ? `School: ${school}` : null,
         size ? `Approximate size: ${size}` : null,
         '',
         'What I would like printed:',
@@ -102,10 +100,6 @@ export function CustomPrinting() {
                     <input name="email" required type="email" className="field-input" placeholder="you@email.com" />
                   </label>
                 </div>
-                <label className="mt-4 block">
-                  <span className="mb-1.5 block text-sm font-medium text-navy">School</span>
-                  <input name="school" type="text" className="field-input" placeholder="Your school name" />
-                </label>
                 <label className="mt-4 block">
                   <span className="mb-1.5 block text-sm font-medium text-navy">What would you like printed?</span>
                   <input name="description" required type="text" className="field-input" placeholder="Describe your idea" />

@@ -145,11 +145,6 @@ export function AdminContent() {
           <label className="mt-3 block">Instagram URL<input className={inputClass} value={content.contactInstagram} onChange={(e) => setContent({ ...content, contactInstagram: e.target.value })} /></label>
           <label className="mt-3 block">WhatsApp channel URL<input className={inputClass} placeholder="https://whatsapp.com/channel/..." value={content.contactWhatsapp ?? ''} onChange={(e) => setContent({ ...content, contactWhatsapp: e.target.value })} /></label>
         </Section>
-
-        <Section title="For Schools">
-          <label>Description<textarea className={inputClass} rows={3} value={content.forSchoolsDescription} onChange={(e) => setContent({ ...content, forSchoolsDescription: e.target.value })} /></label>
-          <label className="mt-3 block">Contact instructions<textarea className={inputClass} rows={2} value={content.forSchoolsInstructions} onChange={(e) => setContent({ ...content, forSchoolsInstructions: e.target.value })} /></label>
-        </Section>
       </div>
 
       <button type="button" onClick={() => void save()} disabled={saving} className="btn btn-primary mt-8">
