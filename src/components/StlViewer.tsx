@@ -13,6 +13,8 @@ type Props = {
   interactive?: boolean
   /** Hex color for the mesh (e.g. selected shop color). */
   colorHex?: string
+  /** When false, wait until the host is near the viewport before loading. */
+  eager?: boolean
 }
 
 function parseHex(hex: string | undefined, fallback: number): number {
@@ -20,6 +22,19 @@ function parseHex(hex: string | undefined, fallback: number): number {
   const h = hex.trim().replace('#', '')
   if (!/^[0-9a-fA-F]{6}$/.test(h)) return fallback
   return Number.parseInt(h, 16)
+}
+
+function parseStlOffMain(loader: STLLoader, buffer: ArrayBuffer): Promise<THREE.BufferGeometry> {
+  return new Promise((resolve, reject) => {
+    // Yield so React can finish unmounts before a multi‑MB sync parse blocks the thread.
+    setTimeout(() => {
+      try {
+        resolve(loader.parse(buffer))
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error('Could not parse STL.'))
+      }
+    }, 0)
+  })
 }
 
 /** STL preview for admin + public shop. */
@@ -30,28 +45,61 @@ export function StlViewer({
   credentials = 'include',
   interactive = true,
   colorHex,
+  eager = true,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [activeUrl, setActiveUrl] = useState(eager ? url : '')
+
+  // Lazy-load when the tile scrolls into view (shop grid).
+  useEffect(() => {
+    if (eager) {
+      setActiveUrl(url)
+      return
+    }
+    const host = hostRef.current
+    if (!host) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setActiveUrl(url)
+          io.disconnect()
+        }
+      },
+      { rootMargin: '120px', threshold: 0.01 },
+    )
+    io.observe(host)
+    return () => io.disconnect()
+  }, [url, eager])
 
   useEffect(() => {
     const host = hostRef.current
-    if (!host || !url) return
+    if (!host || !activeUrl) return
 
     let cancelled = false
-    setError('')
+    let frame = 0
+    let mesh: THREE.Mesh | null = null
+    let controls: OrbitControls | null = null
+    let renderer: THREE.WebGLRenderer | null = null
+    const loader = new STLLoader()
+    const meshColor = parseHex(colorHex, 0x12b5d4)
 
-    const width = Math.max(host.clientWidth || 320, 120)
+    setError('')
+    setLoading(true)
+
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0xf1f5f9)
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 5000)
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000)
     camera.position.set(80, 60, 100)
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    renderer.setSize(width, height)
     host.replaceChildren(renderer.domElement)
+    renderer.domElement.style.display = 'block'
+    renderer.domElement.style.width = '100%'
+    renderer.domElement.style.height = '100%'
     if (!interactive) {
       renderer.domElement.style.pointerEvents = 'none'
     }
@@ -62,20 +110,39 @@ export function StlViewer({
     dir.position.set(40, 80, 30)
     scene.add(dir)
 
-    let controls: OrbitControls | null = null
     if (interactive) {
       controls = new OrbitControls(camera, renderer.domElement)
       controls.enableDamping = true
     }
 
-    let mesh: THREE.Mesh | null = null
-    let frame = 0
-    const loader = new STLLoader()
-    const meshColor = parseHex(colorHex, 0x12b5d4)
+    const syncSize = () => {
+      if (!renderer || !hostRef.current) return
+      const w = Math.max(hostRef.current.clientWidth || 0, 120)
+      const h = Math.max(hostRef.current.clientHeight || height, 120)
+      camera.aspect = w / h
+      camera.updateProjectionMatrix()
+      renderer.setSize(w, h, false)
+    }
+    syncSize()
+
+    const ro = new ResizeObserver(() => {
+      syncSize()
+      if (renderer) renderer.render(scene, camera)
+    })
+    ro.observe(host)
+
+    const tick = () => {
+      if (cancelled || !renderer) return
+      frame = requestAnimationFrame(tick)
+      controls?.update()
+      renderer.render(scene, camera)
+    }
+    if (interactive) tick()
 
     void (async () => {
       try {
-        const res = await fetch(url, { credentials })
+        const res = await fetch(activeUrl, { credentials })
+        if (cancelled) return
         if (!res.ok) {
           throw new Error(
             res.status === 404
@@ -85,9 +152,17 @@ export function StlViewer({
         }
         const buffer = await res.arrayBuffer()
         if (cancelled) return
-        const geometry = loader.parse(buffer)
+
+        const geometry = await parseStlOffMain(loader, buffer)
+        if (cancelled) {
+          geometry.dispose()
+          return
+        }
+
         geometry.computeVertexNormals()
         geometry.center()
+        geometry.computeBoundingSphere()
+
         const material = new THREE.MeshStandardMaterial({
           color: meshColor,
           metalness: 0.12,
@@ -96,60 +171,59 @@ export function StlViewer({
         mesh = new THREE.Mesh(geometry, material)
         scene.add(mesh)
 
-        geometry.computeBoundingSphere()
         const radius = geometry.boundingSphere?.radius || 40
-        const dist = radius * 2.6
+        const dist = Math.max(radius * 2.6, 10)
+        camera.near = Math.max(dist / 200, 0.01)
+        camera.far = dist * 50
         camera.position.set(dist * 0.75, dist * 0.55, dist)
+        camera.lookAt(0, 0, 0)
         if (controls) {
           controls.target.set(0, 0, 0)
           controls.update()
         }
-        renderer.render(scene, camera)
+        syncSize()
+        renderer?.render(scene, camera)
+        if (!cancelled) setLoading(false)
       } catch (err) {
         if (!cancelled) {
+          setLoading(false)
           setError(err instanceof Error ? err.message : 'Could not load 3D preview.')
         }
       }
     })()
 
-    const tick = () => {
-      frame = requestAnimationFrame(tick)
-      controls?.update()
-      renderer.render(scene, camera)
-    }
-    tick()
-
-    const onResize = () => {
-      if (!hostRef.current) return
-      const w = Math.max(hostRef.current.clientWidth || width, 120)
-      camera.aspect = w / height
-      camera.updateProjectionMatrix()
-      renderer.setSize(w, height)
-    }
-    window.addEventListener('resize', onResize)
-
     return () => {
       cancelled = true
       cancelAnimationFrame(frame)
-      window.removeEventListener('resize', onResize)
+      ro.disconnect()
       controls?.dispose()
       if (mesh) {
         mesh.geometry.dispose()
         ;(mesh.material as THREE.Material).dispose()
       }
-      renderer.dispose()
+      renderer?.dispose()
+      renderer = null
       host.replaceChildren()
     }
-  }, [url, height, credentials, interactive, colorHex])
+  }, [activeUrl, height, credentials, interactive, colorHex])
 
   return (
-    <div className={className}>
+    <div className={`relative ${className}`.trim()}>
       <div
         ref={hostRef}
-        className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+        className="h-full min-h-[12rem] w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
         style={{ height }}
       />
-      {error ? <p className="mt-2 text-xs text-amber-700">{error}</p> : null}
+      {loading && !error ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-100/70 text-xs font-medium text-muted">
+          Loading 3D…
+        </div>
+      ) : null}
+      {error ? (
+        <p className="absolute inset-x-2 bottom-2 rounded-lg bg-white/90 px-2 py-1.5 text-center text-xs text-amber-800">
+          {error}
+        </p>
+      ) : null}
     </div>
   )
 }

@@ -53,6 +53,7 @@ export function ShopProduct() {
                   url={design.modelUrl}
                   credentials="same-origin"
                   interactive
+                  eager
                   colorHex={color?.hex}
                   height={420}
                   className="overflow-hidden rounded-2xl border bg-white [&_>div]:rounded-2xl [&_>div]:border-0"

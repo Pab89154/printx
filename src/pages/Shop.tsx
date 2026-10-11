@@ -39,18 +39,19 @@ export function Shop() {
               to={`/shop/${encodeURIComponent(d.skuBase)}`}
               className="group overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition hover:shadow-md"
             >
-              <div className="aspect-square overflow-hidden bg-slate-50">
+              <div className="aspect-square bg-slate-50">
                 {d.modelUrl ? (
                   <StlViewer
                     url={d.modelUrl}
                     credentials="same-origin"
                     interactive={false}
+                    eager={false}
                     height={320}
-                    className="[&_>div]:rounded-none [&_>div]:border-0"
+                    className="h-full [&_>div]:rounded-none [&_>div]:border-0"
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-muted">
-                    3D model
+                  <div className="flex h-full min-h-[12rem] items-center justify-center text-sm text-muted">
+                    {d.hasModel ? 'Preview needs .stl' : 'No 3D model'}
                   </div>
                 )}
               </div>

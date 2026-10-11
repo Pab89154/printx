@@ -44,6 +44,7 @@ import {
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
 import {
+  objectStorageConfigured,
   objectStorageRequired,
   resolveStoredFile,
   sendStoredFile,
@@ -64,6 +65,51 @@ const PRINTER_FIELD: Record<
 function designDto(d: Design): Omit<Design, 'stlPath'> & { stlPath: ''; modelExt: string } {
   const modelExt = path.extname(d.stlPath || '').toLowerCase()
   return { ...d, stlPath: '', modelExt }
+}
+
+/**
+ * Local dev often has DATABASE_URL (same designs) but no SERVICE_ROLE_KEY,
+ * so Storage downloads fail. Proxy the public STL from production instead.
+ */
+function stlFallbackOrigin(): string {
+  const explicit = (process.env.PRINTX_STL_FALLBACK_ORIGIN || '').trim().replace(/\/$/, '')
+  if (explicit) return explicit
+  if (objectStorageConfigured()) return ''
+  if (process.env.NODE_ENV === 'production') return ''
+  return 'https://printx.pw'
+}
+
+async function sendStlWithDevFallback(
+  res: ServerResponse,
+  designId: string,
+  stlPath: string,
+  contentType: string,
+  cacheControl: string,
+): Promise<boolean> {
+  const ok = await sendStoredFile(res, stlPath, contentType, cacheControl)
+  if (ok) return true
+
+  const origin = stlFallbackOrigin()
+  if (!origin) return false
+
+  try {
+    const upstream = await fetch(`${origin}/api/public/catalog/${encodeURIComponent(designId)}/stl`)
+    if (!upstream.ok) return false
+    const buf = Buffer.from(await upstream.arrayBuffer())
+    if (!buf.length) return false
+    res.statusCode = 200
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Cache-Control', cacheControl)
+    res.setHeader('X-PrintX-Stl-Fallback', origin)
+    res.end(buf)
+    return true
+  } catch (err) {
+    console.warn(
+      '[catalog] STL fallback failed:',
+      err instanceof Error ? err.message : err,
+    )
+    return false
+  }
 }
 
 async function parseModelUpload(req: IncomingMessage): Promise<{ fileName: string; modelExt: string }> {
@@ -556,14 +602,19 @@ export async function handleCatalogApi(
       send(res, 404, { error: 'Interactive preview is STL-only.' })
       return true
     }
-    const ok = await sendStoredFile(
+    const ok = await sendStlWithDevFallback(
       res,
+      designId,
       stlPath,
       'model/stl',
       'public, max-age=120, stale-while-revalidate=300',
     )
     if (!ok) {
-      send(res, 404, { error: 'Model not found' })
+      send(res, 404, {
+        error: objectStorageConfigured()
+          ? 'Model not found'
+          : 'Model file missing locally. Add SUPABASE_SERVICE_ROLE_KEY to .env, or re-upload the STL.',
+      })
       return true
     }
     return true
@@ -966,12 +1017,16 @@ export async function handleCatalogApi(
       return true
     }
     const ext = path.extname(stlPath).toLowerCase()
-    const ok = await sendStoredFile(
-      res,
-      stlPath,
-      modelContentType(ext),
-      'private, max-age=60',
-    )
+    const ok =
+      ext === '.stl'
+        ? await sendStlWithDevFallback(
+            res,
+            designId,
+            stlPath,
+            modelContentType(ext),
+            'private, max-age=60',
+          )
+        : await sendStoredFile(res, stlPath, modelContentType(ext), 'private, max-age=60')
     if (!ok) {
       send(res, 404, { error: 'Model not found' })
       return true

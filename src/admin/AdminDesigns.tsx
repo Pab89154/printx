@@ -356,8 +356,13 @@ export function AdminDesigns() {
 
       <section className="rounded-2xl border bg-white p-6">
         <h2 className="font-semibold text-navy">All designs</h2>
+        {editingId ? (
+          <p className="mt-2 text-xs text-muted">
+            The design you are editing is hidden from this list until you save, submit, or cancel.
+          </p>
+        ) : null}
         <div className="mt-4 space-y-3">
-          {designs.map((d) => (
+          {designs.filter((d) => d.id !== editingId).map((d) => (
             <div
               key={d.id}
               className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 px-4 py-3"
@@ -428,6 +433,9 @@ export function AdminDesigns() {
             </div>
           ))}
           {designs.length === 0 && <p className="text-sm text-muted">No designs yet.</p>}
+          {designs.length > 0 && designs.every((d) => d.id === editingId) && (
+            <p className="text-sm text-muted">No other designs — finish or cancel the edit above.</p>
+          )}
         </div>
       </section>
     </div>
