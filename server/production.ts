@@ -102,7 +102,7 @@ const server = http.createServer(async (req, res) => {
         objectStorage,
         // Hint when Storage is required but the service role key is missing on Render.
         warning: !objectStorage.configured && objectStorage.required
-          ? 'Render process does not see a service role key. On the printx web service → Environment, add SUPABASE_SERVICE_ROLE_KEY (Runtime, not Build-only), paste service_role / sb_secret, Save, then Manual Deploy. Check objectStorage.envPresent in this health JSON.'
+          ? 'Storage needs SUPABASE_SERVICE_ROLE_KEY plus SUPABASE_URL (or a Supabase DATABASE_URL to derive the project URL). Check objectStorage.envPresent.'
           : undefined,
       }),
     )

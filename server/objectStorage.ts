@@ -16,8 +16,26 @@ function bucketName(): string {
   return (process.env.SUPABASE_STORAGE_BUCKET || DEFAULT_BUCKET).trim() || DEFAULT_BUCKET
 }
 
+/**
+ * Prefer SUPABASE_URL. If missing (common on Render when only DATABASE_URL is set),
+ * derive https://<projectRef>.supabase.co from the pooler/direct DB URI.
+ */
 function supabaseUrl(): string {
-  return cleanEnv(process.env.SUPABASE_URL).replace(/\/$/, '')
+  const explicit = cleanEnv(process.env.SUPABASE_URL).replace(/\/$/, '')
+  if (explicit) return explicit
+
+  const db = cleanEnv(process.env.DATABASE_URL)
+  if (!db) return ''
+
+  // postgresql://postgres.PROJECTREF:…@aws-0-….pooler.supabase.com:5432/postgres
+  const poolerUser = /[/:@]postgres\.([a-z0-9]+)[:@]/i.exec(db)
+  if (poolerUser?.[1]) return `https://${poolerUser[1]}.supabase.co`
+
+  // postgresql://…@db.PROJECTREF.supabase.co:5432/postgres
+  const directHost = /@db\.([a-z0-9]+)\.supabase\.co\b/i.exec(db)
+  if (directHost?.[1]) return `https://${directHost[1]}.supabase.co`
+
+  return ''
 }
 
 /** Strip quotes/BOM/whitespace that often sneak in when pasting Render secrets. */
@@ -330,8 +348,11 @@ export function objectStorageHealth(): {
 } {
   // Resolve key first so keySource is populated.
   const configured = objectStorageConfigured()
+  const url = supabaseUrl()
   const envPresent: Record<string, boolean> = {
-    SUPABASE_URL: Boolean(supabaseUrl()),
+    SUPABASE_URL: Boolean(cleanEnv(process.env.SUPABASE_URL)),
+    SUPABASE_URL_DERIVED: Boolean(url) && !cleanEnv(process.env.SUPABASE_URL),
+    DATABASE_URL: Boolean(cleanEnv(process.env.DATABASE_URL)),
     SUPABASE_ANON_KEY: Boolean(cleanEnv(process.env.SUPABASE_ANON_KEY)),
   }
   for (const name of SERVICE_ROLE_ENV_NAMES) {
