@@ -52,11 +52,15 @@ export function Cart() {
                   key={`${l.designId}-${l.colorId}`}
                   className="flex flex-wrap items-center gap-4 rounded-2xl border bg-white p-4"
                 >
-                  {l.imageUrl ? (
-                    <img src={l.imageUrl} alt="" className="h-16 w-16 rounded-lg object-cover" />
-                  ) : (
-                    <div className="h-16 w-16 rounded-lg bg-slate-100" />
-                  )}
+                  <div
+                    className="flex h-16 w-16 items-center justify-center rounded-lg border border-slate-100 bg-slate-50"
+                    title={l.colorName}
+                  >
+                    <span
+                      className="h-8 w-8 rounded-full border border-slate-200 shadow-sm"
+                      style={{ background: l.colorHex }}
+                    />
+                  </div>
                   <div className="min-w-0 flex-1">
                     <p className="font-semibold text-navy">{l.name}</p>
                     <p className="text-sm text-muted">

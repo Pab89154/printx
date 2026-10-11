@@ -5,6 +5,7 @@ import type { PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 import { CartLink } from '../components/CartLink'
+import { StlViewer } from '../components/StlViewer'
 
 export function Shop() {
   const [designs, setDesigns] = useState<PublicCatalogDesign[]>([])
@@ -38,14 +39,20 @@ export function Shop() {
               to={`/shop/${encodeURIComponent(d.skuBase)}`}
               className="group overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition hover:shadow-md"
             >
-              <div className="aspect-square bg-slate-50">
-                {d.imageUrl ? (
-                  <img
-                    src={d.imageUrl}
-                    alt={d.name}
-                    className="h-full w-full object-cover transition group-hover:scale-[1.02]"
+              <div className="aspect-square overflow-hidden bg-slate-50">
+                {d.modelUrl ? (
+                  <StlViewer
+                    url={d.modelUrl}
+                    credentials="same-origin"
+                    interactive={false}
+                    height={320}
+                    className="[&_>div]:rounded-none [&_>div]:border-0"
                   />
-                ) : null}
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-muted">
+                    3D model
+                  </div>
+                )}
               </div>
               <div className="p-4">
                 <p className="font-semibold text-navy">{d.name}</p>
@@ -59,7 +66,7 @@ export function Shop() {
         </div>
 
         {designs.length === 0 && !error && (
-          <p className="mt-10 text-sm text-muted">No approved designs in the catalog yet.</p>
+          <p className="mt-10 text-sm text-muted">No designs yet.</p>
         )}
       </main>
       <Footer />

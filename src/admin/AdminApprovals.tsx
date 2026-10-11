@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { adminHomePath } from '../lib/portal'
 import { BUILTIN_COLORS } from '../../shared/colors'
 import type { Design, PricingSettingsDto, PrinterDto } from '../types/catalog'
-import { StlViewer } from './StlViewer'
+import { StlViewer } from '../components/StlViewer'
 
 /** Approve when at least one printer has grams/hours (others can fill in later). */
 function hasQuoteInputs(d: Design): boolean {

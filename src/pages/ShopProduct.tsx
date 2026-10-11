@@ -6,6 +6,7 @@ import type { PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 import { CartLink } from '../components/CartLink'
+import { StlViewer } from '../components/StlViewer'
 
 export function ShopProduct() {
   const { skuBase = '' } = useParams()
@@ -46,10 +47,22 @@ export function ShopProduct() {
         {!design && !error && <p className="text-sm text-muted">Loading…</p>}
         {design && (
           <div className="grid gap-10 lg:grid-cols-2">
-            <div className="aspect-square overflow-hidden rounded-2xl border bg-white">
-              {design.imageUrl ? (
-                <img src={design.imageUrl} alt={design.name} className="h-full w-full object-cover" />
-              ) : null}
+            <div>
+              {design.modelUrl ? (
+                <StlViewer
+                  url={design.modelUrl}
+                  credentials="same-origin"
+                  interactive
+                  colorHex={color?.hex}
+                  height={420}
+                  className="overflow-hidden rounded-2xl border bg-white [&_>div]:rounded-2xl [&_>div]:border-0"
+                />
+              ) : (
+                <div className="flex aspect-square items-center justify-center rounded-2xl border bg-white text-muted">
+                  No interactive model available
+                </div>
+              )}
+              <p className="mt-2 text-xs text-muted">Drag to rotate · scroll to zoom</p>
             </div>
             <div>
               <h1 className="text-3xl font-extrabold text-navy">{design.name}</h1>
@@ -78,13 +91,13 @@ export function ShopProduct() {
                 ))}
               </div>
 
-              <label className="mt-6 block text-sm font-semibold text-navy">
-                Quantity
+              <label className="mt-6 flex items-center gap-4 text-sm font-semibold text-navy">
+                <span>Quantity</span>
                 <input
                   type="number"
                   min={1}
-                  max={20}
-                  className="mt-1 w-28 rounded-xl border px-3 py-2"
+                  max={99}
+                  className="w-14 rounded-xl border px-2 py-2 text-center tabular-nums"
                   value={qty}
                   onChange={(e) => setQty(Number(e.target.value) || 1)}
                 />
@@ -101,7 +114,7 @@ export function ShopProduct() {
                       designId: design.id,
                       skuBase: design.skuBase,
                       name: design.name,
-                      imageUrl: design.imageUrl,
+                      imageUrl: '',
                       colorId: color.id,
                       colorName: color.name,
                       colorHex: color.hex,

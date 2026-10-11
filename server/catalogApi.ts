@@ -467,18 +467,25 @@ export async function handleCatalogApi(
     const rows = await db.all<Record<string, unknown>>(
       `SELECT * FROM designs WHERE status = 'approved' ORDER BY name ASC`,
     )
-    const designs = rows.map(rowToDesign).map((d) => ({
-      id: d.id,
-      skuBase: d.skuBase,
-      name: d.name,
-      description: d.description,
-      category: d.category,
-      imageUrl: d.imageUrl,
-      catalogPriceUsd: d.catalogPriceUsd,
-      availableColors: d.availableColorIds
-        .map((id) => colorById(id, settings.customColors))
-        .filter(Boolean),
-    }))
+    const designs = rows.map(rowToDesign).map((d) => {
+      const modelExt = path.extname(d.stlPath || '').toLowerCase()
+      return {
+        id: d.id,
+        skuBase: d.skuBase,
+        name: d.name,
+        description: d.description,
+        category: d.category,
+        imageUrl: '',
+        hasModel: d.hasStl,
+        modelExt,
+        /** Public STL preview for approved catalog items. */
+        modelUrl: d.hasStl && modelExt === '.stl' ? `/api/public/catalog/${d.id}/stl` : '',
+        catalogPriceUsd: d.catalogPriceUsd,
+        availableColors: d.availableColorIds
+          .map((id) => colorById(id, settings.customColors))
+          .filter(Boolean),
+      }
+    })
     send(res, 200, {
       designs,
       colors: [
@@ -494,6 +501,39 @@ export async function handleCatalogApi(
           .map((c) => ({ id: c.id, code: c.code, name: c.name, hex: c.hex, builtin: false })),
       ],
     })
+    return true
+  }
+
+  const publicStlMatch = /^\/api\/public\/catalog\/([^/]+)\/stl$/.exec(urlPath)
+  if (publicStlMatch && method === 'GET') {
+    const designId = publicStlMatch[1]!
+    const row = await db.get<{ stl_path: string; status: string }>(
+      `SELECT stl_path, status FROM designs WHERE id = ?`,
+      designId,
+    )
+    if (!row || row.status !== 'approved') {
+      send(res, 404, { error: 'Model not found' })
+      return true
+    }
+    const stlPath = row.stl_path?.trim()
+    if (!stlPath || stlPath.includes('..') || stlPath.includes('/') || stlPath.includes('\\')) {
+      send(res, 404, { error: 'Model not found' })
+      return true
+    }
+    if (path.extname(stlPath).toLowerCase() !== '.stl') {
+      send(res, 404, { error: 'Interactive preview is STL-only.' })
+      return true
+    }
+    const uploadsDir = await getUploadsDir()
+    const full = path.join(uploadsDir, stlPath)
+    if (!fs.existsSync(full)) {
+      send(res, 404, { error: 'Model not found' })
+      return true
+    }
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'model/stl')
+    res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=300')
+    fs.createReadStream(full).pipe(res)
     return true
   }
 

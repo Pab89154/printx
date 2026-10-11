@@ -4,8 +4,7 @@ import { api } from '../lib/api'
 import { BUILTIN_COLORS } from '../../shared/colors'
 import { MODEL_ACCEPT, modelLabel, SLICEABLE_EXTS } from '../../shared/modelFormats'
 import type { Design } from '../types/catalog'
-import { resolveImageUrl } from '../lib/imageUrl'
-import { StlViewer } from './StlViewer'
+import { StlViewer } from '../components/StlViewer'
 
 const emptyForm = {
   name: '',
@@ -58,7 +57,7 @@ export function AdminDesigns() {
       skuBase: form.skuBase || undefined,
       description: form.description,
       category: form.category,
-      imageUrl: form.imageUrl,
+      imageUrl: '',
       stlPath: form.stlPath || undefined,
       availableColorIds: form.availableColorIds,
     }
@@ -71,17 +70,12 @@ export function AdminDesigns() {
       skuBase: d.skuBase,
       description: d.description,
       category: d.category,
-      imageUrl: d.imageUrl,
+      imageUrl: '',
       stlPath: '',
       hasStl: d.hasStl,
       modelExt: d.modelExt || '',
       availableColorIds: d.availableColorIds,
     })
-  }
-
-  async function uploadImage(file: File) {
-    const { url } = await api.admin.products.uploadImage(file)
-    setForm((f) => ({ ...f, imageUrl: resolveImageUrl(url) }))
   }
 
   async function uploadModel(file: File) {
@@ -186,66 +180,50 @@ export function AdminDesigns() {
           />
         </label>
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-2">
-          <div>
-            <p className="text-sm font-medium">3D model (required)</p>
-            <div className="mt-2 flex flex-wrap items-center gap-3">
-              <input
-                ref={modelInputRef}
-                type="file"
-                accept={MODEL_ACCEPT}
-                className="sr-only"
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) void uploadModel(f)
-                  e.target.value = ''
-                }}
-              />
-              <button
-                type="button"
-                className="btn btn-secondary inline-flex items-center gap-2"
-                disabled={uploadingStl}
-                onClick={() => modelInputRef.current?.click()}
-              >
-                <Upload size={16} aria-hidden />
-                {uploadingStl ? 'Uploading…' : 'Upload model'}
-              </button>
-              {(form.hasStl || form.stlPath) && form.modelExt ? (
-                <span className="rounded-full bg-electric/10 px-2.5 py-1 text-xs font-semibold text-electric">
-                  {modelLabel(form.modelExt)} on file
-                </span>
-              ) : null}
-            </div>
-            <p className="mt-2 text-xs text-muted">
-              {uploadingStl
-                ? 'Uploading…'
-                : form.hasStl || form.stlPath
-                  ? form.modelExt === '.stl'
-                    ? '3D preview available. Submit to auto-quote via Cloud Slicer.'
-                    : SLICEABLE_EXTS.has(form.modelExt)
-                      ? 'Ready for Cloud Slicer quote on submit (preview is STL-only).'
-                      : 'Stored on this design. Use .stl or .3mf to auto-quote on submit.'
-                  : 'Accepts .stl, .obj, .3mf, .step, .stp — max 50MB.'}
-            </p>
-            {previewStlUrl ? <StlViewer url={previewStlUrl} className="mt-3" /> : null}
-          </div>
-          <div>
-            <label className="text-sm font-medium">
-              Shop image (optional)
-              <input
-                type="file"
-                accept="image/*"
-                className="mt-1 block text-sm"
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) void uploadImage(f).catch((err) => setError(err instanceof Error ? err.message : 'Upload failed'))
-                }}
-              />
-            </label>
-            {form.imageUrl ? (
-              <img src={form.imageUrl} alt="" className="mt-3 h-24 w-24 rounded-lg object-cover" />
+        <div className="mt-4">
+          <p className="text-sm font-medium">3D model (required)</p>
+          <p className="mt-1 text-xs text-muted">
+            Shop catalog shows this model (no photo upload). Customers open the product page to rotate it.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <input
+              ref={modelInputRef}
+              type="file"
+              accept={MODEL_ACCEPT}
+              className="sr-only"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void uploadModel(f)
+                e.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-secondary inline-flex items-center gap-2"
+              disabled={uploadingStl}
+              onClick={() => modelInputRef.current?.click()}
+            >
+              <Upload size={16} aria-hidden />
+              {uploadingStl ? 'Uploading…' : 'Upload model'}
+            </button>
+            {(form.hasStl || form.stlPath) && form.modelExt ? (
+              <span className="rounded-full bg-electric/10 px-2.5 py-1 text-xs font-semibold text-electric">
+                {modelLabel(form.modelExt)} on file
+              </span>
             ) : null}
           </div>
+          <p className="mt-2 text-xs text-muted">
+            {uploadingStl
+              ? 'Uploading…'
+              : form.hasStl || form.stlPath
+                ? form.modelExt === '.stl'
+                  ? '3D preview below. Submit to auto-quote via Cloud Slicer.'
+                  : SLICEABLE_EXTS.has(form.modelExt)
+                    ? 'Ready for Cloud Slicer quote on submit (shop preview is STL-only).'
+                    : 'Stored on this design. Use .stl for shop preview and .stl/.3mf to auto-quote.'
+                : 'Accepts .stl, .obj, .3mf, .step, .stp — max 50MB. Prefer .stl for the shop.'}
+          </p>
+          {previewStlUrl ? <StlViewer url={previewStlUrl} className="mt-3 max-w-xl" /> : null}
         </div>
 
         <h3 className="mt-6 text-sm font-semibold text-navy">Available colors</h3>
@@ -332,13 +310,9 @@ export function AdminDesigns() {
               className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 px-4 py-3"
             >
               <div className="flex items-center gap-3">
-                {d.imageUrl ? (
-                  <img src={d.imageUrl} alt="" className="h-12 w-12 rounded-lg object-cover" />
-                ) : (
-                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-surface text-[10px] font-bold text-muted">
-                    {d.hasStl ? modelLabel(d.modelExt || '.stl') : '—'}
-                  </div>
-                )}
+                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-surface text-[10px] font-bold text-muted">
+                  {d.hasStl ? modelLabel(d.modelExt || '.stl') : '—'}
+                </div>
                 <div>
                   <p className="font-medium text-navy">{d.name}</p>
                   <p className="text-xs text-muted">

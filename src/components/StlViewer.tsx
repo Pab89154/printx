@@ -7,10 +7,30 @@ type Props = {
   url: string
   className?: string
   height?: number
+  /** Admin STL routes need cookies; public catalog does not. */
+  credentials?: RequestCredentials
+  /** Orbit controls — off for catalog “screenshot” tiles. */
+  interactive?: boolean
+  /** Hex color for the mesh (e.g. selected shop color). */
+  colorHex?: string
 }
 
-/** Interactive STL preview for admin Approvals / Designs. */
-export function StlViewer({ url, className = '', height = 280 }: Props) {
+function parseHex(hex: string | undefined, fallback: number): number {
+  if (!hex) return fallback
+  const h = hex.trim().replace('#', '')
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return fallback
+  return Number.parseInt(h, 16)
+}
+
+/** STL preview for admin + public shop. */
+export function StlViewer({
+  url,
+  className = '',
+  height = 280,
+  credentials = 'include',
+  interactive = true,
+  colorHex,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
 
@@ -21,17 +41,20 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
     let cancelled = false
     setError('')
 
-    const width = host.clientWidth || 320
+    const width = Math.max(host.clientWidth || 320, 120)
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0xf1f5f9)
 
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 5000)
     camera.position.set(80, 60, 100)
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.setSize(width, height)
     host.replaceChildren(renderer.domElement)
+    if (!interactive) {
+      renderer.domElement.style.pointerEvents = 'none'
+    }
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0xcbd5e1, 1.1)
     scene.add(hemi)
@@ -39,22 +62,24 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
     dir.position.set(40, 80, 30)
     scene.add(dir)
 
-    const controls = new OrbitControls(camera, renderer.domElement)
-    controls.enableDamping = true
+    let controls: OrbitControls | null = null
+    if (interactive) {
+      controls = new OrbitControls(camera, renderer.domElement)
+      controls.enableDamping = true
+    }
 
     let mesh: THREE.Mesh | null = null
     let frame = 0
-
     const loader = new STLLoader()
+    const meshColor = parseHex(colorHex, 0x12b5d4)
 
     void (async () => {
       try {
-        // Must include cookies — /api/admin/designs/:id/stl is session-auth.
-        const res = await fetch(url, { credentials: 'include' })
+        const res = await fetch(url, { credentials })
         if (!res.ok) {
           throw new Error(
             res.status === 404
-              ? 'Model file missing on server — re-upload the STL on Designs.'
+              ? 'Model file missing — re-upload the STL.'
               : `Could not load model (${res.status}).`,
           )
         }
@@ -64,9 +89,9 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
         geometry.computeVertexNormals()
         geometry.center()
         const material = new THREE.MeshStandardMaterial({
-          color: 0x12b5d4,
-          metalness: 0.15,
-          roughness: 0.45,
+          color: meshColor,
+          metalness: 0.12,
+          roughness: 0.48,
         })
         mesh = new THREE.Mesh(geometry, material)
         scene.add(mesh)
@@ -74,9 +99,12 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
         geometry.computeBoundingSphere()
         const radius = geometry.boundingSphere?.radius || 40
         const dist = radius * 2.6
-        camera.position.set(dist * 0.7, dist * 0.55, dist)
-        controls.target.set(0, 0, 0)
-        controls.update()
+        camera.position.set(dist * 0.75, dist * 0.55, dist)
+        if (controls) {
+          controls.target.set(0, 0, 0)
+          controls.update()
+        }
+        renderer.render(scene, camera)
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Could not load 3D preview.')
@@ -86,14 +114,14 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
 
     const tick = () => {
       frame = requestAnimationFrame(tick)
-      controls.update()
+      controls?.update()
       renderer.render(scene, camera)
     }
     tick()
 
     const onResize = () => {
       if (!hostRef.current) return
-      const w = hostRef.current.clientWidth || width
+      const w = Math.max(hostRef.current.clientWidth || width, 120)
       camera.aspect = w / height
       camera.updateProjectionMatrix()
       renderer.setSize(w, height)
@@ -104,7 +132,7 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
       cancelled = true
       cancelAnimationFrame(frame)
       window.removeEventListener('resize', onResize)
-      controls.dispose()
+      controls?.dispose()
       if (mesh) {
         mesh.geometry.dispose()
         ;(mesh.material as THREE.Material).dispose()
@@ -112,7 +140,7 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
       renderer.dispose()
       host.replaceChildren()
     }
-  }, [url, height])
+  }, [url, height, credentials, interactive, colorHex])
 
   return (
     <div className={className}>

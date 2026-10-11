@@ -51,6 +51,10 @@ export type PublicCatalogDesign = {
   description: string
   category: string
   imageUrl: string
+  hasModel?: boolean
+  modelExt?: string
+  /** Public URL for STL preview (approved designs only). */
+  modelUrl?: string
   catalogPriceUsd: number | null
   availableColors: CatalogColor[]
 }
