@@ -51,7 +51,12 @@ async function loadPrinterOwnerCreds(db: DbApi): Promise<OwnerCredsRow[]> {
   return db.all<OwnerCredsRow>(
     `SELECT p.id as printer_id, p.owner_label, p.owner_user_id as user_id,
             u.email, u.display_name,
-            u.cloud_slicer_token, u.cloud_slicer_printer_id, u.cloud_slicer_filament_id
+            CASE WHEN TRIM(COALESCE(p.cloud_slicer_token, '')) != ''
+              THEN p.cloud_slicer_token ELSE u.cloud_slicer_token END as cloud_slicer_token,
+            CASE WHEN TRIM(COALESCE(p.cloud_slicer_printer_id, '')) != ''
+              THEN p.cloud_slicer_printer_id ELSE u.cloud_slicer_printer_id END as cloud_slicer_printer_id,
+            CASE WHEN TRIM(COALESCE(p.cloud_slicer_filament_id, '')) != ''
+              THEN p.cloud_slicer_filament_id ELSE u.cloud_slicer_filament_id END as cloud_slicer_filament_id
      FROM printers p
      LEFT JOIN users u ON u.id = p.owner_user_id
      WHERE p.active = 1
@@ -135,7 +140,7 @@ async function credsForPrinter(
 ): Promise<CloudSlicerCreds | null> {
   const owners = await loadPrinterOwnerCreds(db)
   const row = owners.find((o) => o.printer_id === printerId)
-  if (!row?.user_id) return null
+  if (!row) return null
   const creds: CloudSlicerCreds = {
     token: String(row.cloud_slicer_token || ''),
     printerId: String(row.cloud_slicer_printer_id || ''),
@@ -209,18 +214,18 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
     for (const id of PRINTER_IDS) {
       const label = PRINTER_LABEL[id] ?? id
       const owner = owners.find((o) => o.printer_id === id)
-      if (!owner?.user_id) {
-        setupGaps.push(`${label}: no admin linked`)
-        continue
-      }
       const creds: CloudSlicerCreds = {
-        token: String(owner.cloud_slicer_token || ''),
-        printerId: String(owner.cloud_slicer_printer_id || ''),
-        filamentId: String(owner.cloud_slicer_filament_id || ''),
+        token: String(owner?.cloud_slicer_token || ''),
+        printerId: String(owner?.cloud_slicer_printer_id || ''),
+        filamentId: String(owner?.cloud_slicer_filament_id || ''),
       }
       if (!cloudSlicerConfigured(creds)) {
-        const who = owner.display_name || owner.email || 'admin'
-        setupGaps.push(`${label}: ${who} has not finished Cloud Slicer setup`)
+        const who = owner?.display_name || owner?.email
+        setupGaps.push(
+          who
+            ? `${label}: ${who} has not finished Cloud Slicer setup`
+            : `${label}: no Cloud Slicer API key saved (Settings → Cloud Slicer)`,
+        )
         continue
       }
       try {

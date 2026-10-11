@@ -27,7 +27,18 @@ export function AdminDesigns() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [uploadingStl, setUploadingStl] = useState(false)
+  /** Local blob preview for a just-uploaded STL (server preview only works after save). */
+  const [localPreviewUrl, setLocalPreviewUrl] = useState('')
   const modelInputRef = useRef<HTMLInputElement>(null)
+  const localPreviewUrlRef = useRef('')
+
+  function clearLocalPreview() {
+    if (localPreviewUrlRef.current) {
+      URL.revokeObjectURL(localPreviewUrlRef.current)
+      localPreviewUrlRef.current = ''
+    }
+    setLocalPreviewUrl('')
+  }
 
   async function load() {
     const [list, pricing] = await Promise.all([
@@ -44,6 +55,7 @@ export function AdminDesigns() {
 
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
+    return () => clearLocalPreview()
   }, [])
 
   const colorOptions = [
@@ -58,12 +70,14 @@ export function AdminDesigns() {
       description: form.description,
       category: form.category,
       imageUrl: '',
-      stlPath: form.stlPath || undefined,
+      // Only send when a new upload is pending — never send '' (that used to wipe stl_path).
+      ...(form.stlPath ? { stlPath: form.stlPath } : {}),
       availableColorIds: form.availableColorIds,
     }
   }
 
   function startEdit(d: Design) {
+    clearLocalPreview()
     setEditingId(d.id)
     setForm({
       name: d.name,
@@ -81,13 +95,23 @@ export function AdminDesigns() {
   async function uploadModel(file: File) {
     setUploadingStl(true)
     setError('')
+    setMessage('')
     try {
       const { stlPath, hasStl, modelExt } = await api.catalog.designs.uploadModel(file)
-      setForm((f) => ({ ...f, stlPath, hasStl, modelExt }))
+      if (!stlPath || !hasStl) {
+        throw new Error('Upload finished but the server did not confirm the file. Try again.')
+      }
+      clearLocalPreview()
+      if (modelExt === '.stl' || file.name.toLowerCase().endsWith('.stl')) {
+        const blobUrl = URL.createObjectURL(file)
+        localPreviewUrlRef.current = blobUrl
+        setLocalPreviewUrl(blobUrl)
+      }
+      setForm((f) => ({ ...f, stlPath, hasStl: true, modelExt }))
       const sliceNote = SLICEABLE_EXTS.has(modelExt)
         ? 'Grams/hours fill automatically when you submit for approval.'
         : 'Saved for the design. Convert to .stl or .3mf before submit so Cloud Slicer can quote.'
-      setMessage(`${modelLabel(modelExt)} uploaded. ${sliceNote}`)
+      setMessage(`${modelLabel(modelExt)} uploaded — click Save draft to attach it to this design. ${sliceNote}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Model upload failed')
     } finally {
@@ -95,9 +119,13 @@ export function AdminDesigns() {
     }
   }
 
+  const modelOnFile = Boolean(form.hasStl || form.stlPath)
   const canPreview3d = form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
-  const previewStlUrl =
-    editingId && canPreview3d && form.hasStl && !form.stlPath ? api.catalog.designs.stlUrl(editingId) : ''
+  // Prefer local blob right after upload; otherwise load from server once the design is saved.
+  const previewStlUrl = canPreview3d
+    ? localPreviewUrl ||
+      (editingId && form.hasStl && !form.stlPath ? api.catalog.designs.stlUrl(editingId) : '')
+    : ''
 
   return (
     <div className="space-y-8">
@@ -116,7 +144,7 @@ export function AdminDesigns() {
         className="rounded-2xl border bg-white p-6"
         onSubmit={(e) => {
           e.preventDefault()
-          if (!form.hasStl && !form.stlPath) {
+          if (!modelOnFile) {
             setError('Upload a 3D model before saving.')
             return
           }
@@ -124,24 +152,33 @@ export function AdminDesigns() {
           setError('')
           setMessage('')
           const wasEditing = editingId
+          const pendingUpload = form.stlPath
           const run = wasEditing
             ? api.catalog.designs.update(wasEditing, toPayload())
             : api.catalog.designs.create(toPayload())
           void run
             .then((saved) => {
+              if (!saved.hasStl) {
+                throw new Error(
+                  pendingUpload
+                    ? 'Save completed but the model was not attached. Re-upload and save again.'
+                    : 'This design has no model on file. Re-upload the model, then save.',
+                )
+              }
               // Keep editing so Submit for approval is available after first save.
               setEditingId(saved.id)
+              clearLocalPreview()
               setForm((f) => ({
                 ...f,
                 stlPath: '',
-                hasStl: saved.hasStl,
+                hasStl: true,
                 modelExt: saved.modelExt || f.modelExt,
                 skuBase: saved.skuBase,
               }))
               setMessage(
                 wasEditing
-                  ? 'Design updated. Click Submit for approval to send it to the main admin.'
-                  : 'Draft saved. Click Submit for approval to send it to the main admin.',
+                  ? 'Design updated (model on file). Click Submit for approval to send it to the main admin.'
+                  : 'Draft saved (model on file). Click Submit for approval to send it to the main admin.',
               )
               return load()
             })
@@ -206,24 +243,38 @@ export function AdminDesigns() {
               <Upload size={16} aria-hidden />
               {uploadingStl ? 'Uploading…' : 'Upload model'}
             </button>
-            {(form.hasStl || form.stlPath) && form.modelExt ? (
+            {modelOnFile ? (
               <span className="rounded-full bg-electric/10 px-2.5 py-1 text-xs font-semibold text-electric">
-                {modelLabel(form.modelExt)} on file
+                {form.stlPath
+                  ? `${modelLabel(form.modelExt || '.stl')} uploaded — save to attach`
+                  : `${modelLabel(form.modelExt || '.stl')} on file`}
               </span>
-            ) : null}
+            ) : (
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-muted">
+                No model yet
+              </span>
+            )}
           </div>
           <p className="mt-2 text-xs text-muted">
             {uploadingStl
               ? 'Uploading…'
-              : form.hasStl || form.stlPath
-                ? form.modelExt === '.stl'
-                  ? '3D preview below. Submit to auto-quote via Cloud Slicer.'
+              : modelOnFile
+                ? form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
+                  ? previewStlUrl
+                    ? '3D preview below. Save draft if you just uploaded, then submit for approval.'
+                    : 'Model attached. Save draft, then open Edit again if the preview does not appear.'
                   : SLICEABLE_EXTS.has(form.modelExt)
                     ? 'Ready for Cloud Slicer quote on submit (shop preview is STL-only).'
                     : 'Stored on this design. Use .stl for shop preview and .stl/.3mf to auto-quote.'
                 : 'Accepts .stl, .obj, .3mf, .step, .stp — max 50MB. Prefer .stl for the shop.'}
           </p>
-          {previewStlUrl ? <StlViewer url={previewStlUrl} className="mt-3 max-w-xl" /> : null}
+          {previewStlUrl ? (
+            <StlViewer
+              url={previewStlUrl}
+              className="mt-3 max-w-xl"
+              credentials={localPreviewUrl ? 'omit' : 'include'}
+            />
+          ) : null}
         </div>
 
         <h3 className="mt-6 text-sm font-semibold text-navy">Available colors</h3>
@@ -275,6 +326,7 @@ export function AdminDesigns() {
                         ? `Submitted for approval. ${res.sliceWarning}`
                         : 'Submitted for approval — main admin can review it now.',
                     )
+                    clearLocalPreview()
                     setEditingId(null)
                     setForm(emptyForm)
                     return load()
@@ -291,6 +343,7 @@ export function AdminDesigns() {
               type="button"
               className="btn btn-ghost"
               onClick={() => {
+                clearLocalPreview()
                 setEditingId(null)
                 setForm(emptyForm)
               }}

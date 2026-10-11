@@ -1878,7 +1878,23 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const { maskCloudSlicerToken } = await import('./cloudSlicer.ts')
     const { seedCatalogDefaults, listPrinters } = await import('./catalog.ts')
     await seedCatalogDefaults(db)
-    const row = await db.get<{
+    const printers = await listPrinters(db)
+    const ownedPrinterId =
+      printers.find((p) => p.ownerUserId === admin.id)?.id ?? null
+    // Credentials live on the printer row (stable). Fall back to legacy user columns once.
+    const printerCreds = ownedPrinterId
+      ? await db.get<{
+          cloud_slicer_token: string
+          cloud_slicer_printer_id: string
+          cloud_slicer_filament_id: string
+          cloud_slicer_configured_at: string | null
+        }>(
+          `SELECT cloud_slicer_token, cloud_slicer_printer_id, cloud_slicer_filament_id, cloud_slicer_configured_at
+           FROM printers WHERE id = ?`,
+          ownedPrinterId,
+        )
+      : null
+    const userCreds = await db.get<{
       cloud_slicer_token: string
       cloud_slicer_printer_id: string
       cloud_slicer_filament_id: string
@@ -1888,15 +1904,22 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
        FROM users WHERE id = ?`,
       admin.id,
     )
-    const printers = await listPrinters(db)
-    const ownedPrinterId =
-      printers.find((p) => p.ownerUserId === admin.id)?.id ?? null
+    const token =
+      (printerCreds?.cloud_slicer_token || '').trim() || (userCreds?.cloud_slicer_token || '').trim()
+    const printerIdCs =
+      (printerCreds?.cloud_slicer_printer_id || '').trim() ||
+      (userCreds?.cloud_slicer_printer_id || '').trim()
+    const filamentId =
+      (printerCreds?.cloud_slicer_filament_id || '').trim() ||
+      (userCreds?.cloud_slicer_filament_id || '').trim()
+    const configuredAt =
+      printerCreds?.cloud_slicer_configured_at || userCreds?.cloud_slicer_configured_at || null
     send(res, 200, {
-      tokenMasked: maskCloudSlicerToken(row?.cloud_slicer_token ?? ''),
-      hasToken: Boolean(row?.cloud_slicer_token?.trim()),
-      printerId: row?.cloud_slicer_printer_id ?? '',
-      filamentId: row?.cloud_slicer_filament_id ?? '',
-      configuredAt: row?.cloud_slicer_configured_at ?? null,
+      tokenMasked: maskCloudSlicerToken(token),
+      hasToken: Boolean(token),
+      printerId: printerIdCs,
+      filamentId,
+      configuredAt,
       ownedPrinterId,
       printers: printers.map((p) => ({
         id: p.id,
@@ -1910,7 +1933,34 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/admin/settings/cloud-slicer' && method === 'PATCH') {
     const body = await readJson(req)
-    const existing = await db.get<{
+    const { seedCatalogDefaults, listPrinters } = await import('./catalog.ts')
+    await seedCatalogDefaults(db)
+    const printers = await listPrinters(db)
+    const currentlyOwned = printers.find((p) => p.ownerUserId === admin.id)?.id ?? ''
+    const validPrinterIds = new Set(['pablo_p1s', 'court_ender', 'josh_kobra'])
+
+    // Never wipe the printer link when the client omits / sends empty ownedPrinterId.
+    const requestedPrinter = body.ownedPrinterId !== undefined
+      ? sanitizeText(String(body.ownedPrinterId ?? ''), 60)
+      : currentlyOwned
+    const printxPrinterId = requestedPrinter || currentlyOwned
+    if (!printxPrinterId || !validPrinterIds.has(printxPrinterId)) {
+      send(res, 400, {
+        error: 'Pick your PrintX printer (P1S, Ender 3v2, or Anycubic Kobra X) before saving.',
+      })
+      return true
+    }
+
+    const existingPrinter = await db.get<{
+      cloud_slicer_token: string
+      cloud_slicer_printer_id: string
+      cloud_slicer_filament_id: string
+    }>(
+      `SELECT cloud_slicer_token, cloud_slicer_printer_id, cloud_slicer_filament_id
+       FROM printers WHERE id = ?`,
+      printxPrinterId,
+    )
+    const existingUser = await db.get<{
       cloud_slicer_token: string
       cloud_slicer_printer_id: string
       cloud_slicer_filament_id: string
@@ -1918,26 +1968,63 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       `SELECT cloud_slicer_token, cloud_slicer_printer_id, cloud_slicer_filament_id FROM users WHERE id = ?`,
       admin.id,
     )
-    const tokenRaw = body.token !== undefined ? String(body.token ?? '').trim() : undefined
-    const printerIdCs = sanitizeText(String(body.printerId ?? existing?.cloud_slicer_printer_id ?? ''), 120)
-    const filamentId = sanitizeText(String(body.filamentId ?? existing?.cloud_slicer_filament_id ?? ''), 120)
-    const printxPrinterId = sanitizeText(String(body.ownedPrinterId ?? ''), 60)
-    const validPrinterIds = new Set(['pablo_p1s', 'court_ender', 'josh_kobra'])
-    if (printxPrinterId && !validPrinterIds.has(printxPrinterId)) {
-      send(res, 400, { error: 'Pick a valid PrintX printer (P1S, Ender 3v2, or Anycubic Kobra X).' })
-      return true
-    }
 
-    let token = existing?.cloud_slicer_token ?? ''
+    const tokenRaw = body.token !== undefined ? String(body.token ?? '').trim() : undefined
+    const printerIdCs = sanitizeText(
+      String(
+        body.printerId ??
+          existingPrinter?.cloud_slicer_printer_id ??
+          existingUser?.cloud_slicer_printer_id ??
+          '',
+      ),
+      120,
+    )
+    const filamentId = sanitizeText(
+      String(
+        body.filamentId ??
+          existingPrinter?.cloud_slicer_filament_id ??
+          existingUser?.cloud_slicer_filament_id ??
+          '',
+      ),
+      120,
+    )
+
+    let token =
+      (existingPrinter?.cloud_slicer_token || '').trim() ||
+      (existingUser?.cloud_slicer_token || '').trim()
     if (tokenRaw !== undefined) {
-      // Empty string clears; omit/unchanged keeps existing when client sends blank intentionally via clearToken
       if (body.clearToken) token = ''
       else if (tokenRaw) token = tokenRaw
+      // Blank token without clearToken → keep existing (password-manager empty fields).
     }
 
     const now = new Date().toISOString()
     const configured =
       token.trim() && printerIdCs.trim() && filamentId.trim() ? now : null
+
+    // Store on the printer — this is what quoting / approve / G-code download use.
+    await db.run(
+      `UPDATE printers SET
+        cloud_slicer_token = ?,
+        cloud_slicer_printer_id = ?,
+        cloud_slicer_filament_id = ?,
+        cloud_slicer_configured_at = ?,
+        owner_user_id = ?
+       WHERE id = ?`,
+      token,
+      printerIdCs,
+      filamentId,
+      configured,
+      admin.id,
+      printxPrinterId,
+    )
+    // Drop this admin's claim on any other printer only (never wipe all links to NULL).
+    await db.run(
+      `UPDATE printers SET owner_user_id = NULL WHERE owner_user_id = ? AND id != ?`,
+      admin.id,
+      printxPrinterId,
+    )
+    // Keep legacy user columns in sync for older UI reads.
     await db.run(
       `UPDATE users SET
         cloud_slicer_token = ?,
@@ -1952,17 +2039,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       admin.id,
     )
 
-    const { seedCatalogDefaults } = await import('./catalog.ts')
-    await seedCatalogDefaults(db)
-    // Link this admin as owner of the chosen PrintX printer (and clear their previous claim).
-    await db.run(`UPDATE printers SET owner_user_id = NULL WHERE owner_user_id = ?`, admin.id)
-    if (printxPrinterId) {
-      await db.run(`UPDATE printers SET owner_user_id = ? WHERE id = ?`, admin.id, printxPrinterId)
-    }
-
     let fillIn: { updated: number; warnings: string[] } | null = null
-    // When this admin finishes setup for a printer, quote only designs still missing that machine.
-    if (configured && printxPrinterId && token.trim() && printerIdCs.trim() && filamentId.trim()) {
+    if (configured && token.trim() && printerIdCs.trim() && filamentId.trim()) {
       const { fillMissingQuotesForPrinter } = await import('./catalogApi.ts')
       fillIn = await fillMissingQuotesForPrinter(db, printxPrinterId)
     }
@@ -1975,7 +2053,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       printerId: printerIdCs,
       filamentId,
       configuredAt: configured,
-      ownedPrinterId: printxPrinterId || null,
+      ownedPrinterId: printxPrinterId,
       filledMissingQuotes: fillIn?.updated ?? 0,
       fillWarnings: fillIn?.warnings ?? [],
     })

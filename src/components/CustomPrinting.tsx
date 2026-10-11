@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { Button } from './Button'
@@ -21,6 +21,8 @@ export function CustomPrinting() {
   const [busy, setBusy] = useState(false)
   const [payBusy, setPayBusy] = useState(false)
   const [error, setError] = useState('')
+  /** Ignore late estimate responses after the user cancels. */
+  const abandonRef = useRef(false)
 
   // Warn if they try to close the tab while estimating.
   useEffect(() => {
@@ -42,7 +44,7 @@ export function CustomPrinting() {
       void api.public
         .customRequestStatus(requestId)
         .then((data) => {
-          if (cancelled) return
+          if (cancelled || abandonRef.current) return
           setQuote(data)
           if (data.sliceStatus === 'ready' && data.catalogPriceUsd != null) {
             setStep('priced')
@@ -55,7 +57,7 @@ export function CustomPrinting() {
           timer = setTimeout(poll, 2000)
         })
         .catch((err) => {
-          if (cancelled) return
+          if (cancelled || abandonRef.current) return
           setError(err instanceof Error ? err.message : 'Could not load estimate')
           setStep('failed')
         })
@@ -88,6 +90,7 @@ export function CustomPrinting() {
       return
     }
 
+    abandonRef.current = false
     setBusy(true)
     setError('')
     setQuote(null)
@@ -95,6 +98,10 @@ export function CustomPrinting() {
     void api.public
       .customRequest(formData)
       .then((res) => {
+        if (abandonRef.current) {
+          void api.public.customRequestCancel(res.id).catch(() => undefined)
+          return
+        }
         setRequestId(res.id)
         setQuote({
           id: res.id,
@@ -104,6 +111,7 @@ export function CustomPrinting() {
         })
       })
       .catch((err) => {
+        if (abandonRef.current) return
         setError(err instanceof Error ? err.message : 'Could not start estimate')
         setStep('form')
       })
@@ -125,14 +133,16 @@ export function CustomPrinting() {
   }
 
   async function handleCancel() {
-    if (!requestId) {
+    abandonRef.current = true
+    const id = requestId
+    if (!id) {
       resetAll()
       return
     }
     setPayBusy(true)
     setError('')
     try {
-      await api.public.customRequestCancel(requestId)
+      await api.public.customRequestCancel(id)
       resetAll()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Cancel failed')
@@ -153,9 +163,18 @@ export function CustomPrinting() {
             <Loader2 className="mx-auto h-10 w-10 animate-spin text-electric" aria-hidden />
             <p className="mt-4 text-lg font-semibold text-navy">Estimating your print…</p>
             <p className="mt-2 text-sm text-muted">
-              We&apos;re slicing your model and calculating the price. Please stay on this page — this can take a
-              minute.
+              We&apos;re slicing your model and calculating the price. This can take a minute.
             </p>
+            <Button
+              type="button"
+              size="lg"
+              variant="secondary"
+              className="mt-6 w-full"
+              disabled={payBusy}
+              onClick={() => void handleCancel()}
+            >
+              {payBusy ? 'Cancelling…' : 'Cancel'}
+            </Button>
           </div>
         </div>
       )}
@@ -225,12 +244,12 @@ export function CustomPrinting() {
                   <Button
                     type="button"
                     size="lg"
-                    variant="outline"
+                    variant="secondary"
                     className="w-full"
                     disabled={payBusy}
                     onClick={() => void handleCancel()}
                   >
-                    Cancel
+                    {payBusy ? 'Cancelling…' : 'Cancel'}
                   </Button>
                 </div>
               </div>
@@ -243,7 +262,7 @@ export function CustomPrinting() {
                   {quote?.error || error || 'We could not quote this model. Try a .stl/.3mf or adjust the file.'}
                 </p>
                 <div className="mt-6 flex flex-wrap gap-3">
-                  <Button type="button" onClick={() => void handleCancel().then(() => undefined)}>
+                  <Button type="button" onClick={() => void handleCancel()}>
                     Try again
                   </Button>
                 </div>

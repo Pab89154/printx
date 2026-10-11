@@ -126,10 +126,16 @@ type OwnerCredsRow = {
 }
 
 async function loadPrinterOwnerCreds(db: Awaited<ReturnType<typeof getDb>>): Promise<OwnerCredsRow[]> {
+  // Prefer credentials stored on the printer row (stable across approve / ownership changes).
   return db.all<OwnerCredsRow>(
     `SELECT p.id as printer_id, p.owner_label, p.owner_user_id as user_id,
             u.email, u.display_name,
-            u.cloud_slicer_token, u.cloud_slicer_printer_id, u.cloud_slicer_filament_id
+            CASE WHEN TRIM(COALESCE(p.cloud_slicer_token, '')) != ''
+              THEN p.cloud_slicer_token ELSE u.cloud_slicer_token END as cloud_slicer_token,
+            CASE WHEN TRIM(COALESCE(p.cloud_slicer_printer_id, '')) != ''
+              THEN p.cloud_slicer_printer_id ELSE u.cloud_slicer_printer_id END as cloud_slicer_printer_id,
+            CASE WHEN TRIM(COALESCE(p.cloud_slicer_filament_id, '')) != ''
+              THEN p.cloud_slicer_filament_id ELSE u.cloud_slicer_filament_id END as cloud_slicer_filament_id
      FROM printers p
      LEFT JOIN users u ON u.id = p.owner_user_id
      WHERE p.active = 1
@@ -181,20 +187,21 @@ async function sliceDesignWithCloudSlicer(
       if (fillMissingOnly && printerHasQuote(existing, id)) continue
 
       const row = owners.find((o) => o.printer_id === id)
-      if (!row?.user_id) {
-        setupGaps.push(
-          missingPrinterWarning(label, 'no admin linked (Settings → Cloud Slicer → Your PrintX printer)'),
-        )
-        continue
-      }
       const creds: CloudSlicerCreds = {
-        token: String(row.cloud_slicer_token || ''),
-        printerId: String(row.cloud_slicer_printer_id || ''),
-        filamentId: String(row.cloud_slicer_filament_id || ''),
+        token: String(row?.cloud_slicer_token || ''),
+        printerId: String(row?.cloud_slicer_printer_id || ''),
+        filamentId: String(row?.cloud_slicer_filament_id || ''),
       }
       if (!cloudSlicerConfigured(creds)) {
-        const who = row.display_name || row.email || 'admin'
-        setupGaps.push(missingPrinterWarning(label, `${who} has not finished Cloud Slicer API setup`))
+        const who = row?.display_name || row?.email
+        setupGaps.push(
+          missingPrinterWarning(
+            label,
+            who
+              ? `${who} has not finished Cloud Slicer API setup`
+              : 'no Cloud Slicer API key on this printer (Settings → Cloud Slicer)',
+          ),
+        )
         continue
       }
       ready.push({ printerId: id, label, creds })
@@ -897,6 +904,10 @@ export async function handleCatalogApi(
       return true
     }
     const stlPath = sanitizeText(String(body.stlPath ?? ''), 200)
+    if (!stlPath || stlPath.includes('..') || stlPath.includes('/') || stlPath.includes('\\')) {
+      send(res, 400, { error: 'Upload a 3D model before saving the design.' })
+      return true
+    }
     const now = new Date().toISOString()
     const id = randomUUID()
     try {
@@ -999,9 +1010,12 @@ export async function handleCatalogApi(
     if (method === 'PATCH' && !action) {
       const body = await readJson(req)
       const parsed = parseDesignBody(body, design)
+      // Ignore empty stlPath so a stale client field cannot wipe an existing model.
+      const incomingStl =
+        body.stlPath !== undefined ? sanitizeText(String(body.stlPath ?? ''), 200) : ''
       const stlPath =
-        body.stlPath !== undefined
-          ? sanitizeText(String(body.stlPath ?? ''), 200)
+        incomingStl && !incomingStl.includes('..') && !incomingStl.includes('/') && !incomingStl.includes('\\')
+          ? incomingStl
           : design.stlPath
       const stlChanged = stlPath !== design.stlPath
       const now = new Date().toISOString()

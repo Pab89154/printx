@@ -407,11 +407,11 @@ export function AdminSettings() {
         )}
       </div>
 
-      <form onSubmit={saveCloudSlicer} className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+      <form onSubmit={saveCloudSlicer} className="mt-8 max-w-md rounded-2xl border bg-white p-6" autoComplete="off">
         <h2 className="mb-1 font-semibold">Cloud Slicer API</h2>
         <p className="text-sm text-muted">
           Each printer owner uses their own free Cloud Slicer account. Create a printer + filament there, then
-          paste the API token and IDs here. PrintX quotes your machine when a design STL is submitted.
+          paste the API token and IDs here. Keys are saved on the printer and stay put when designs are approved.
         </p>
         <label className="mt-4 block text-sm font-medium text-navy">
           Your PrintX printer
@@ -433,12 +433,16 @@ export function AdminSettings() {
         <label className="mt-3 block text-sm font-medium text-navy">
           API token
           <input
-            type="password"
+            type="text"
+            name="printx-cloud-slicer-token"
             className={`mt-1 ${inputClass}`}
             value={csToken}
             onChange={(e) => setCsToken(e.target.value)}
             placeholder={csHasToken ? `Saved ${csTokenMasked ?? '••••'}` : 'Paste Cloud Slicer token'}
             autoComplete="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
           />
         </label>
         {csHasToken ? (

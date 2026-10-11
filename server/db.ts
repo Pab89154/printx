@@ -163,7 +163,11 @@ async function migrate(database: DbApi) {
       model_name TEXT NOT NULL,
       avg_power_kw REAL NOT NULL DEFAULT 0.2,
       active INTEGER NOT NULL DEFAULT 1,
-      owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+      owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      cloud_slicer_token TEXT NOT NULL DEFAULT '',
+      cloud_slicer_printer_id TEXT NOT NULL DEFAULT '',
+      cloud_slicer_filament_id TEXT NOT NULL DEFAULT '',
+      cloud_slicer_configured_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS designs (
@@ -399,6 +403,67 @@ async function migrateUserAuth(database: DbApi) {
     /* column already exists */
   }
   await database.run('UPDATE users SET email_verified = 1 WHERE role = ?', 'admin')
+}
+
+/** Persist Cloud Slicer keys on each printer so they survive ownership / approve flows. */
+async function migratePrinterCloudSlicer(database: DbApi) {
+  const cols: [string, string][] = [
+    ['cloud_slicer_token', `TEXT NOT NULL DEFAULT ''`],
+    ['cloud_slicer_printer_id', `TEXT NOT NULL DEFAULT ''`],
+    ['cloud_slicer_filament_id', `TEXT NOT NULL DEFAULT ''`],
+    ['cloud_slicer_configured_at', 'TEXT'],
+  ]
+  for (const [name, decl] of cols) {
+    try {
+      await database.exec(`ALTER TABLE printers ADD COLUMN ${name} ${decl}`)
+    } catch {
+      /* column already exists */
+    }
+  }
+  // One-time backfill from the linked admin user (old storage location).
+  try {
+    await database.run(
+      `UPDATE printers AS p SET
+         cloud_slicer_token = u.cloud_slicer_token,
+         cloud_slicer_printer_id = u.cloud_slicer_printer_id,
+         cloud_slicer_filament_id = u.cloud_slicer_filament_id,
+         cloud_slicer_configured_at = u.cloud_slicer_configured_at
+       FROM users AS u
+       WHERE p.owner_user_id = u.id
+         AND TRIM(COALESCE(p.cloud_slicer_token, '')) = ''
+         AND TRIM(COALESCE(u.cloud_slicer_token, '')) != ''`,
+    )
+  } catch {
+    // SQLite lacks UPDATE…FROM — fall back to per-row copy.
+    const rows = await database.all<{
+      id: string
+      cloud_slicer_token: string
+      cloud_slicer_printer_id: string
+      cloud_slicer_filament_id: string
+      cloud_slicer_configured_at: string | null
+    }>(
+      `SELECT p.id,
+              u.cloud_slicer_token, u.cloud_slicer_printer_id, u.cloud_slicer_filament_id,
+              u.cloud_slicer_configured_at
+       FROM printers p
+       JOIN users u ON u.id = p.owner_user_id
+       WHERE TRIM(COALESCE(p.cloud_slicer_token, '')) = ''
+         AND TRIM(COALESCE(u.cloud_slicer_token, '')) != ''`,
+    )
+    for (const r of rows) {
+      await database.run(
+        `UPDATE printers SET
+          cloud_slicer_token = ?, cloud_slicer_printer_id = ?,
+          cloud_slicer_filament_id = ?, cloud_slicer_configured_at = ?
+         WHERE id = ?`,
+        r.cloud_slicer_token,
+        r.cloud_slicer_printer_id,
+        r.cloud_slicer_filament_id,
+        r.cloud_slicer_configured_at,
+        r.id,
+      )
+    }
+  }
 }
 
 async function migrateDesignStl(database: DbApi) {
@@ -738,6 +803,7 @@ async function initDb(): Promise<DbApi> {
   const database = await getDbApi()
   await migrate(database)
   await migrateUserAuth(database)
+  await migratePrinterCloudSlicer(database)
   await migrateDesignStl(database)
   await migrateCustomRequestQuotes(database)
   await migrateContactMessagesStatus(database)
