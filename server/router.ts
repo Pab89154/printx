@@ -49,7 +49,7 @@ import type { PermissionKey } from '../shared/permissions.ts'
 import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
 import {
-  objectStorageConfigured,
+  objectStorageRequired,
   sendStoredFile,
   uploadStoredFile,
 } from './objectStorage.ts'
@@ -209,7 +209,7 @@ async function parseMultipart(
           const safeName = `${randomUUID()}${ext}`
           const dest = path.join(uploadsDir, safeName)
           fs.renameSync(file.filepath, dest)
-          if (objectStorageConfigured()) {
+          if (objectStorageRequired()) {
             try {
               await uploadStoredFile(dest, safeName)
             } catch (uploadErr) {
@@ -420,7 +420,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   if (urlPath === '/api/health' && method === 'GET') {
     res.setHeader('Cache-Control', 'no-store')
     const { objectStorageHealth } = await import('./objectStorage.ts')
-    send(res, 200, { ok: true, objectStorage: objectStorageHealth() })
+    const objectStorage = objectStorageHealth()
+    send(res, 200, {
+      ok: true,
+      objectStorage,
+      warning:
+        !objectStorage.configured && objectStorage.required
+          ? 'Set SUPABASE_SERVICE_ROLE_KEY (service_role / sb_secret) on Render Environment'
+          : undefined,
+    })
     return true
   }
 

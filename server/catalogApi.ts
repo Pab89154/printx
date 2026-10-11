@@ -44,7 +44,7 @@ import {
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
 import {
-  objectStorageConfigured,
+  objectStorageRequired,
   resolveStoredFile,
   sendStoredFile,
   uploadStoredFile,
@@ -95,7 +95,8 @@ async function parseModelUpload(req: IncomingMessage): Promise<{ fileName: strin
         const safeName = `${randomUUID()}${ext}`
         const dest = path.join(uploadsDir, safeName)
         fs.renameSync(file.filepath, dest)
-        if (objectStorageConfigured()) {
+        // Always persist to Supabase when the project uses it (required on Render).
+        if (objectStorageRequired()) {
           try {
             await uploadStoredFile(dest, safeName)
           } catch (uploadErr) {

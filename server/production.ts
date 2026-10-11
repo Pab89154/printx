@@ -92,10 +92,20 @@ const server = http.createServer(async (req, res) => {
   // Lightweight wake probe — no DB. Used by the static-site cold-start shell.
   if (url === '/api/health' && method === 'GET') {
     const { objectStorageHealth } = await import('./objectStorage.ts')
+    const objectStorage = objectStorageHealth()
     res.statusCode = 200
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Cache-Control', 'no-store')
-    res.end(JSON.stringify({ ok: true, objectStorage: objectStorageHealth() }))
+    res.end(
+      JSON.stringify({
+        ok: true,
+        objectStorage,
+        // Hint when Storage is required but the service role key is missing on Render.
+        warning: !objectStorage.configured && objectStorage.required
+          ? 'Render process does not see a service role key. On the printx web service → Environment, add SUPABASE_SERVICE_ROLE_KEY (Runtime, not Build-only), paste service_role / sb_secret, Save, then Manual Deploy. Check objectStorage.envPresent in this health JSON.'
+          : undefined,
+      }),
+    )
     return
   }
 

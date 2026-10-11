@@ -17,16 +17,58 @@ function bucketName(): string {
 }
 
 function supabaseUrl(): string {
-  return (process.env.SUPABASE_URL || '').trim().replace(/\/$/, '')
+  return cleanEnv(process.env.SUPABASE_URL).replace(/\/$/, '')
 }
 
-/** service_role (legacy JWT) or sb_secret_… (new secret key). */
+/** Strip quotes/BOM/whitespace that often sneak in when pasting Render secrets. */
+function cleanEnv(raw: string | undefined): string {
+  if (typeof raw !== 'string') return ''
+  let s = raw.replace(/^\uFEFF/, '').trim()
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim()
+  }
+  return s
+}
+
+const SERVICE_ROLE_ENV_NAMES = [
+  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_SECRET_KEY',
+  'SUPABASE_SERVICE_ROLE',
+  'SUPABASE_SERVICE_KEY',
+  'SERVICE_ROLE_KEY',
+] as const
+
+let resolvedKeySource: string | null = null
+
+/**
+ * service_role (legacy JWT eyJ…) or sb_secret_… (new secret key).
+ * Accepts common Render env name variants — the live process was not seeing the key.
+ */
 function serviceRoleKey(): string {
-  return (
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SECRET_KEY ||
-    ''
-  ).trim()
+  resolvedKeySource = null
+  for (const name of SERVICE_ROLE_ENV_NAMES) {
+    const cleaned = cleanEnv(process.env[name]).replace(/\s+/g, '')
+    if (!cleaned) continue
+    resolvedKeySource = name
+    return cleaned
+  }
+  // Last resort: any SUPABASE_* value that looks like a secret/service key.
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!k.toUpperCase().startsWith('SUPABASE')) continue
+    const cleaned = cleanEnv(v).replace(/\s+/g, '')
+    if (!cleaned) continue
+    if (cleaned.startsWith('sb_secret_') || cleaned.startsWith('eyJ')) {
+      // Prefer not to treat the anon/publishable JWT as service role.
+      if (k.toUpperCase().includes('ANON') || k.toUpperCase().includes('PUBLISH')) continue
+      if (cleaned.startsWith('sb_publishable')) continue
+      resolvedKeySource = k
+      return cleaned
+    }
+  }
+  return ''
 }
 
 export function objectStorageConfigured(): boolean {
@@ -264,19 +306,42 @@ export function logObjectStorageStatus(): void {
       : key.startsWith('eyJ')
         ? 'jwt service_role'
         : 'custom'
-    console.log(`[object-storage] enabled → bucket "${bucketName()}" (${kind})`)
+    console.log(
+      `[object-storage] enabled → bucket "${bucketName()}" (${kind} via ${resolvedKeySource || 'env'})`,
+    )
   } else if (objectStorageRequired()) {
+    const present = SERVICE_ROLE_ENV_NAMES.filter((n) => Boolean(cleanEnv(process.env[n])))
     console.warn(
-      '[object-storage] REQUIRED but SUPABASE_SERVICE_ROLE_KEY is missing — ' +
-        'model uploads will fail until you set the service_role / sb_secret key.',
+      '[object-storage] REQUIRED but no usable service role key in process.env. ' +
+        `Checked: ${SERVICE_ROLE_ENV_NAMES.join(', ')}. ` +
+        (present.length
+          ? `Present but empty/invalid after clean: ${present.join(', ')}.`
+          : 'None of those names are set on this process — add SUPABASE_SERVICE_ROLE_KEY on the Render *printx* service → Environment → Runtime (not Build-only), then Manual Deploy.'),
     )
   }
 }
 
-export function objectStorageHealth(): { configured: boolean; required: boolean; bucket: string } {
+export function objectStorageHealth(): {
+  configured: boolean
+  required: boolean
+  bucket: string
+  keySource: string | null
+  envPresent: Record<string, boolean>
+} {
+  // Resolve key first so keySource is populated.
+  const configured = objectStorageConfigured()
+  const envPresent: Record<string, boolean> = {
+    SUPABASE_URL: Boolean(supabaseUrl()),
+    SUPABASE_ANON_KEY: Boolean(cleanEnv(process.env.SUPABASE_ANON_KEY)),
+  }
+  for (const name of SERVICE_ROLE_ENV_NAMES) {
+    envPresent[name] = Boolean(cleanEnv(process.env[name]))
+  }
   return {
-    configured: objectStorageConfigured(),
+    configured,
     required: objectStorageRequired(),
     bucket: bucketName(),
+    keySource: configured ? resolvedKeySource : null,
+    envPresent,
   }
 }
