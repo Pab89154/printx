@@ -1675,6 +1675,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       await db.run(`UPDATE printers SET owner_user_id = ? WHERE id = ?`, admin.id, printxPrinterId)
     }
 
+    let fillIn: { updated: number; warnings: string[] } | null = null
+    // When this admin finishes setup for a printer, quote only designs still missing that machine.
+    if (configured && printxPrinterId && token.trim() && printerIdCs.trim() && filamentId.trim()) {
+      const { fillMissingQuotesForPrinter } = await import('./catalogApi.ts')
+      fillIn = await fillMissingQuotesForPrinter(db, printxPrinterId)
+    }
+
     const { maskCloudSlicerToken } = await import('./cloudSlicer.ts')
     send(res, 200, {
       ok: true,
@@ -1684,6 +1691,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       filamentId,
       configuredAt: configured,
       ownedPrinterId: printxPrinterId || null,
+      filledMissingQuotes: fillIn?.updated ?? 0,
+      fillWarnings: fillIn?.warnings ?? [],
     })
     return true
   }

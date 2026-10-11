@@ -198,11 +198,18 @@ export function AdminSettings() {
       setCsFilamentId(result.filamentId)
       setCsOwnedPrinterId(result.ownedPrinterId ?? '')
       setCsToken('')
-      setCsMessage(
-        result.hasToken && result.printerId && result.filamentId && result.ownedPrinterId
-          ? 'Cloud Slicer settings saved. Your printer will be quoted when designs are submitted.'
-          : 'Saved. Add token, Cloud Slicer printer/filament IDs, and your PrintX printer to enable quoting.',
-      )
+      if (result.hasToken && result.printerId && result.filamentId && result.ownedPrinterId) {
+        const filled = result.filledMissingQuotes ?? 0
+        setCsMessage(
+          filled > 0
+            ? `Cloud Slicer saved. Quoted ${filled} design(s) that were missing this printer (others kept).`
+            : 'Cloud Slicer settings saved. Your printer will be quoted for new submits and any designs still missing this machine.',
+        )
+      } else {
+        setCsMessage(
+          'Saved. Add token, Cloud Slicer printer/filament IDs, and your PrintX printer to enable quoting.',
+        )
+      }
       await loadCloudSlicer()
     } catch (err) {
       setCsError(err instanceof Error ? err.message : 'Could not save Cloud Slicer settings')

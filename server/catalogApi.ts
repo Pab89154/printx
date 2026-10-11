@@ -116,27 +116,53 @@ async function loadPrinterOwnerCreds(db: Awaited<ReturnType<typeof getDb>>): Pro
   )
 }
 
+const PRINTER_IDS = ['pablo_p1s', 'court_ender', 'josh_kobra'] as const
+
+function printerHasQuote(d: Design, printerId: string): boolean {
+  const fields = PRINTER_FIELD[printerId]
+  if (!fields) return false
+  return d[fields.grams] != null && d[fields.hours] != null
+}
+
+function missingPrinterWarning(label: string, detail: string): string {
+  return `${label}: ${detail}`
+}
+
+/**
+ * Quote available Cloud Slicer printers. Missing admin/setup → warning only.
+ * By default skips printers that already have grams/hours (fill-in later).
+ */
 async function sliceDesignWithCloudSlicer(
   db: Awaited<ReturnType<typeof getDb>>,
   designId: string,
   stlPath: string,
-): Promise<{ ok: true; design: Design } | { ok: false; error: string }> {
+  opts?: { fillMissingOnly?: boolean },
+): Promise<{ ok: true; design: Design; warning?: string } | { ok: false; error: string }> {
+  const fillMissingOnly = opts?.fillMissingOnly !== false
   const uploadsDir = await getUploadsDir()
   const localPath = path.join(uploadsDir, stlPath)
   if (!fs.existsSync(localPath)) {
     return { ok: false, error: 'Model file missing on server. Re-upload the design file.' }
   }
 
+  const existingRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+  if (!existingRow) return { ok: false, error: 'Design not found.' }
+  const existing = rowToDesign(existingRow)
+
   const owners = await loadPrinterOwnerCreds(db)
-  const needed = ['pablo_p1s', 'court_ender', 'josh_kobra']
-  const missing: string[] = []
+  const setupGaps: string[] = []
+  const quoteErrors: string[] = []
   const ready: { printerId: string; label: string; creds: CloudSlicerCreds }[] = []
 
-  for (const id of needed) {
-    const row = owners.find((o) => o.printer_id === id)
+  for (const id of PRINTER_IDS) {
     const label = PRINTER_FIELD[id]?.label ?? id
+    if (fillMissingOnly && printerHasQuote(existing, id)) continue
+
+    const row = owners.find((o) => o.printer_id === id)
     if (!row?.user_id) {
-      missing.push(`${label}: no admin linked (Settings → Cloud Slicer → Your PrintX printer)`)
+      setupGaps.push(
+        missingPrinterWarning(label, 'no admin linked (Settings → Cloud Slicer → Your PrintX printer)'),
+      )
       continue
     }
     const creds: CloudSlicerCreds = {
@@ -146,47 +172,69 @@ async function sliceDesignWithCloudSlicer(
     }
     if (!cloudSlicerConfigured(creds)) {
       const who = row.display_name || row.email || 'admin'
-      missing.push(`${label}: ${who} has not finished Cloud Slicer API setup`)
+      setupGaps.push(missingPrinterWarning(label, `${who} has not finished Cloud Slicer API setup`))
       continue
     }
     ready.push({ printerId: id, label, creds })
   }
 
-  if (missing.length) {
-    const msg = `Cannot slice — fix Cloud Slicer setup:\n• ${missing.join('\n• ')}`
+  // Start from existing quotes so we never wipe successful printers.
+  const gramsHours: {
+    gramsPabloP1s: number | null
+    hoursPabloP1s: number | null
+    gramsCourtEnder: number | null
+    hoursCourtEnder: number | null
+    gramsJoshKobra: number | null
+    hoursJoshKobra: number | null
+  } = {
+    gramsPabloP1s: existing.gramsPabloP1s,
+    hoursPabloP1s: existing.hoursPabloP1s,
+    gramsCourtEnder: existing.gramsCourtEnder,
+    hoursCourtEnder: existing.hoursCourtEnder,
+    gramsJoshKobra: existing.gramsJoshKobra,
+    hoursJoshKobra: existing.hoursJoshKobra,
+  }
+
+  if (ready.length > 0) {
     await db.run(
-      `UPDATE designs SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
-      msg.slice(0, 2000),
+      `UPDATE designs SET slice_status = 'slicing', updated_at = ? WHERE id = ?`,
       new Date().toISOString(),
       designId,
     )
-    return { ok: false, error: msg }
-  }
-
-  await db.run(
-    `UPDATE designs SET slice_status = 'slicing', slice_error = '', updated_at = ? WHERE id = ?`,
-    new Date().toISOString(),
-    designId,
-  )
-
-  const gramsHours: Record<string, number> = {}
-  try {
     for (const item of ready) {
-      const result = await quoteStlForPrinter(item.creds, localPath)
-      const fields = PRINTER_FIELD[item.printerId]!
-      gramsHours[fields.grams] = result.grams
-      gramsHours[fields.hours] = result.hours
+      try {
+        const result = await quoteStlForPrinter(item.creds, localPath)
+        const fields = PRINTER_FIELD[item.printerId]!
+        gramsHours[fields.grams] = result.grams
+        gramsHours[fields.hours] = result.hours
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
+        quoteErrors.push(`${item.label}: ${msg}`)
+      }
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
-    await db.run(
-      `UPDATE designs SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
-      msg.slice(0, 2000),
-      new Date().toISOString(),
-      designId,
-    )
-    return { ok: false, error: msg }
   }
+
+  const warningParts: string[] = []
+  if (setupGaps.length) {
+    warningParts.push(`Waiting on Cloud Slicer setup:\n• ${setupGaps.join('\n• ')}`)
+  }
+  if (quoteErrors.length) {
+    warningParts.push(`Quote errors:\n• ${quoteErrors.join('\n• ')}`)
+  }
+  const warning = warningParts.join('\n\n')
+
+  const quotedCount = PRINTER_IDS.filter((id) => {
+    const fields = PRINTER_FIELD[id]!
+    return gramsHours[fields.grams] != null && gramsHours[fields.hours] != null
+  }).length
+
+  const sliceStatus = quotedCount === 0 && ready.length === 0 && setupGaps.length > 0
+    ? 'error'
+    : quotedCount > 0
+      ? 'ready'
+      : quoteErrors.length
+        ? 'error'
+        : 'idle'
 
   const now = new Date().toISOString()
   await db.run(
@@ -194,19 +242,62 @@ async function sliceDesignWithCloudSlicer(
       grams_pablo_p1s = ?, hours_pablo_p1s = ?,
       grams_court_ender = ?, hours_court_ender = ?,
       grams_josh_kobra = ?, hours_josh_kobra = ?,
-      slice_status = 'ready', slice_error = '', updated_at = ?
+      slice_status = ?, slice_error = ?, updated_at = ?
      WHERE id = ?`,
-    gramsHours.gramsPabloP1s ?? null,
-    gramsHours.hoursPabloP1s ?? null,
-    gramsHours.gramsCourtEnder ?? null,
-    gramsHours.hoursCourtEnder ?? null,
-    gramsHours.gramsJoshKobra ?? null,
-    gramsHours.hoursJoshKobra ?? null,
+    gramsHours.gramsPabloP1s,
+    gramsHours.hoursPabloP1s,
+    gramsHours.gramsCourtEnder,
+    gramsHours.hoursCourtEnder,
+    gramsHours.gramsJoshKobra,
+    gramsHours.hoursJoshKobra,
+    sliceStatus,
+    warning.slice(0, 2000),
     now,
     designId,
   )
   const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
-  return { ok: true, design: rowToDesign(row!) }
+  return { ok: true, design: rowToDesign(row!), warning: warning || undefined }
+}
+
+const GRAMS_COLUMN: Record<string, string> = {
+  pablo_p1s: 'grams_pablo_p1s',
+  court_ender: 'grams_court_ender',
+  josh_kobra: 'grams_josh_kobra',
+}
+
+/** After an admin finishes Cloud Slicer setup, quote only the printers still missing. */
+export async function fillMissingQuotesForPrinter(
+  db: Awaited<ReturnType<typeof getDb>>,
+  printxPrinterId: string,
+): Promise<{ updated: number; warnings: string[] }> {
+  const col = GRAMS_COLUMN[printxPrinterId]
+  if (!col) return { updated: 0, warnings: [] }
+
+  const rows = await db.all<Record<string, unknown>>(
+    `SELECT * FROM designs
+     WHERE TRIM(stl_path) != ''
+       AND ${col} IS NULL
+       AND status IN ('draft', 'pending_review', 'approved', 'rejected')
+     ORDER BY updated_at DESC
+     LIMIT 40`,
+  )
+
+  let updated = 0
+  const warnings: string[] = []
+  for (const row of rows) {
+    const design = rowToDesign(row)
+    if (!SLICEABLE_EXTS.has(path.extname(design.stlPath).toLowerCase())) continue
+    const sliced = await sliceDesignWithCloudSlicer(db, design.id, design.stlPath, {
+      fillMissingOnly: true,
+    })
+    if (sliced.ok) {
+      if (printerHasQuote(sliced.design, printxPrinterId)) updated++
+      if (sliced.warning) warnings.push(`${design.name}: ${sliced.warning}`)
+    } else {
+      warnings.push(`${design.name}: ${sliced.error}`)
+    }
+  }
+  return { updated, warnings }
 }
 
 function send(res: ServerResponse, status: number, body: unknown) {
@@ -881,9 +972,12 @@ export async function handleCatalogApi(
       // Always queue for main-admin review; Cloud Slicer is best-effort so a setup
       // gap cannot hide the design from Approvals.
       if (SLICEABLE_EXTS.has(modelExt)) {
-        const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath)
+        const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath, {
+          fillMissingOnly: true,
+        })
         if (sliced.ok) {
           design = sliced.design
+          sliceWarning = sliced.warning || ''
         } else {
           sliceWarning = sliced.error
         }
@@ -924,12 +1018,15 @@ export async function handleCatalogApi(
         })
         return true
       }
-      const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath)
+      // Fill only printers still missing quotes — never wipe ones that already succeeded.
+      const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath, {
+        fillMissingOnly: true,
+      })
       if (!sliced.ok) {
         send(res, 400, { error: sliced.error })
         return true
       }
-      send(res, 200, designDto(sliced.design))
+      send(res, 200, { ...designDto(sliced.design), sliceWarning: sliced.warning || undefined })
       return true
     }
 

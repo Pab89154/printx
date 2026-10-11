@@ -93,10 +93,13 @@ export const api = {
           },
         ),
       requote: (id: string) =>
-        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/requote`, {
-          method: 'POST',
-          body: '{}',
-        }),
+        request<import('../types/catalog.ts').Design & { sliceWarning?: string }>(
+          `/api/admin/designs/${id}/requote`,
+          {
+            method: 'POST',
+            body: '{}',
+          },
+        ),
       approve: (id: string) =>
         request<{ design: import('../types/catalog.ts').Design; pricing: unknown }>(
           `/api/admin/designs/${id}/approve`,
@@ -315,6 +318,8 @@ export const api = {
           filamentId: string
           configuredAt: string | null
           ownedPrinterId: string | null
+          filledMissingQuotes?: number
+          fillWarnings?: string[]
         }>('/api/admin/settings/cloud-slicer', {
           method: 'PATCH',
           body: JSON.stringify(body),

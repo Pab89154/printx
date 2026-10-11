@@ -170,15 +170,19 @@ export function AdminApprovals() {
                             setMessage('Re-quoting via Cloud Slicer…')
                             void api.catalog.designs
                               .requote(d.id)
-                              .then(() => {
-                                setMessage('Quotes updated.')
+                              .then((res) => {
+                                setMessage(
+                                  res.sliceWarning
+                                    ? `Filled missing quotes. Note:\n${res.sliceWarning}`
+                                    : 'Missing quotes filled (existing printer quotes kept).',
+                                )
                                 return load()
                               })
                               .catch((e) => setError(e instanceof Error ? e.message : 'Re-quote failed'))
                               .finally(() => setBusyId(null))
                           }}
                         >
-                          Re-quote
+                          Re-quote missing
                         </button>
                         <button
                           type="button"
