@@ -1,4 +1,5 @@
 import type { MouseEvent } from 'react'
+import { isPortalHost } from './portal'
 
 function stickyOffset(): number {
   const header = document.querySelector('header')
@@ -40,10 +41,16 @@ export function onHashLinkClick(event: MouseEvent<HTMLAnchorElement>, href: stri
   if (!href.startsWith('#')) return
   event.preventDefault()
   event.stopPropagation()
-  // From /shop (or other routes), send hash sections back to the home page.
-  if (window.location.pathname !== '/') {
-    window.location.assign(`/${href}`)
+  const path = window.location.pathname.replace(/\/$/, '') || '/'
+  const onMarketingPage = path === '/' || path.endsWith('/sandbox')
+  if (onMarketingPage) {
+    scrollToHash(href)
     return
   }
-  scrollToHash(href)
+  // From /shop (or other routes), return to the marketing home with that section.
+  if (isPortalHost()) {
+    window.location.assign(`/sandbox${href}`)
+    return
+  }
+  window.location.assign(`/${href}`)
 }

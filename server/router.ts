@@ -48,6 +48,11 @@ import { syncStandLifecycle } from './standLifecycle.ts'
 import type { PermissionKey } from '../shared/permissions.ts'
 import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
+import {
+  objectStorageConfigured,
+  sendStoredFile,
+  uploadStoredFile,
+} from './objectStorage.ts'
 
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
 const ALLOWED_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
@@ -172,26 +177,40 @@ async function parseMultipart(
   return new Promise((resolve, reject) => {
     form.parse(req, (err, fields, files) => {
       if (err) return reject(err)
-      const normalized: Record<string, string> = {}
-      for (const [key, val] of Object.entries(fields)) {
-        normalized[key] = Array.isArray(val) ? String(val[0] ?? '') : String(val ?? '')
-      }
-
-      let filePath: string | null = null
-      const upload = files.file
-      const file = Array.isArray(upload) ? upload[0] : upload
-      if (file?.filepath) {
-        const ext = path.extname(file.originalFilename ?? file.filepath).toLowerCase()
-        if (!allowedExt.has(ext)) {
-          fs.unlinkSync(file.filepath)
-          return reject(new Error(invalidTypeMessage))
+      void (async () => {
+        const normalized: Record<string, string> = {}
+        for (const [key, val] of Object.entries(fields)) {
+          normalized[key] = Array.isArray(val) ? String(val[0] ?? '') : String(val ?? '')
         }
-        const safeName = `${randomUUID()}${ext}`
-        const dest = path.join(uploadsDir, safeName)
-        fs.renameSync(file.filepath, dest)
-        filePath = safeName
-      }
-      resolve({ fields: normalized, filePath })
+
+        let filePath: string | null = null
+        const upload = files.file
+        const file = Array.isArray(upload) ? upload[0] : upload
+        if (file?.filepath) {
+          const ext = path.extname(file.originalFilename ?? file.filepath).toLowerCase()
+          if (!allowedExt.has(ext)) {
+            fs.unlinkSync(file.filepath)
+            return reject(new Error(invalidTypeMessage))
+          }
+          const safeName = `${randomUUID()}${ext}`
+          const dest = path.join(uploadsDir, safeName)
+          fs.renameSync(file.filepath, dest)
+          if (objectStorageConfigured()) {
+            try {
+              await uploadStoredFile(dest, safeName)
+            } catch (uploadErr) {
+              try {
+                fs.unlinkSync(dest)
+              } catch {
+                /* ignore */
+              }
+              return reject(uploadErr)
+            }
+          }
+          filePath = safeName
+        }
+        resolve({ fields: normalized, filePath })
+      })()
     })
   })
 }
@@ -542,17 +561,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 400, { error: 'Invalid file name' })
       return true
     }
-    const uploadsDir = await getUploadsDir()
-    const filePath = path.join(uploadsDir, filename)
-    if (!filePath.startsWith(uploadsDir) || !fs.existsSync(filePath)) {
+    const ext = path.extname(filename).toLowerCase()
+    const ok = await sendStoredFile(
+      res,
+      filename,
+      IMAGE_MIME[ext] ?? 'application/octet-stream',
+      'public, max-age=86400',
+    )
+    if (!ok) {
       send(res, 404, { error: 'File not found' })
       return true
     }
-    const ext = path.extname(filename).toLowerCase()
-    res.statusCode = 200
-    res.setHeader('Content-Type', IMAGE_MIME[ext] ?? 'application/octet-stream')
-    res.setHeader('Cache-Control', 'public, max-age=86400')
-    fs.createReadStream(filePath).pipe(res)
     return true
   }
 
@@ -620,16 +639,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 400, { error: 'Invalid file name' })
       return true
     }
-    const uploadsDir = await getUploadsDir()
-    const filePath = path.join(uploadsDir, filename)
-    if (!filePath.startsWith(uploadsDir) || !fs.existsSync(filePath)) {
+    const ok = await sendStoredFile(
+      res,
+      filename,
+      'application/octet-stream',
+      'private, max-age=60',
+      { 'Content-Disposition': `attachment; filename="${filename}"` },
+    )
+    if (!ok) {
       send(res, 404, { error: 'File not found' })
       return true
     }
-    res.statusCode = 200
-    res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-    fs.createReadStream(filePath).pipe(res)
     return true
   }
 

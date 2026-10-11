@@ -31,6 +31,9 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
+      # Service role — Design models in Supabase Storage (survives cold starts)
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       # Email via Resend → hello@printx.pw (set API key after verifying printx.pw domain)
       - key: RESEND_API_KEY
         sync: false

@@ -14,8 +14,16 @@ type PublicDataContextValue = {
 const PublicDataContext = createContext<PublicDataContextValue | null>(null)
 
 function needsPublicBootstrap(pathname: string): boolean {
-  // Portal admin pages don't need the public catalog — only the sandbox preview does.
-  if (isPortalHost()) return pathname.includes('sandbox')
+  // Portal admin pages don't need the public catalog — sandbox + shop preview do.
+  if (isPortalHost()) {
+    return (
+      pathname.includes('sandbox') ||
+      pathname.includes('/shop') ||
+      pathname.endsWith('/shop') ||
+      pathname.includes('/cart') ||
+      pathname.includes('/order')
+    )
+  }
   return true
 }
 

@@ -124,7 +124,7 @@ export function Cart() {
               disabled={busy || !email}
               onClick={() => void checkout()}
             >
-              {busy ? 'Redirecting to Stripe…' : 'Pay with Stripe'}
+              {busy ? 'Redirecting…' : 'Checkout'}
             </button>
           </>
         )}

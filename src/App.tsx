@@ -44,7 +44,12 @@ function PortalRoutes() {
   return (
     <Routes>
       <Route path="/" element={<AdminLogin />} />
+      {/* Shop lives on the public site, but sandbox Shop links are same-origin on portal — serve them here. */}
       <Route element={<AdminGuard />}>
+        <Route path="shop" element={<Shop />} />
+        <Route path="shop/:skuBase" element={<ShopProduct />} />
+        <Route path="cart" element={<Cart />} />
+        <Route path="order/success" element={<OrderSuccess />} />
         <Route path="sandbox" element={<AdminSandbox />} />
         <Route element={<AdminLayout />}>
           <Route path="dashboard" element={<AdminDashboard />} />

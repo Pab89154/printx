@@ -43,6 +43,12 @@ import {
   quoteStlForPrinter,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
+import {
+  objectStorageConfigured,
+  resolveStoredFile,
+  sendStoredFile,
+  uploadStoredFile,
+} from './objectStorage.ts'
 
 const MODEL_MAX_BYTES = 50 * 1024 * 1024
 
@@ -71,24 +77,38 @@ async function parseModelUpload(req: IncomingMessage): Promise<{ fileName: strin
   return new Promise((resolve, reject) => {
     form.parse(req, (err, _fields, files) => {
       if (err) return reject(err)
-      const upload = files.file
-      const file = Array.isArray(upload) ? upload[0] : upload
-      if (!file?.filepath) return reject(new Error('Model file is required.'))
-      const ext = path.extname(file.originalFilename ?? file.filepath).toLowerCase()
-      if (!isModelExt(ext)) {
-        try {
-          fs.unlinkSync(file.filepath)
-        } catch {
-          /* ignore */
+      void (async () => {
+        const upload = files.file
+        const file = Array.isArray(upload) ? upload[0] : upload
+        if (!file?.filepath) return reject(new Error('Model file is required.'))
+        const ext = path.extname(file.originalFilename ?? file.filepath).toLowerCase()
+        if (!isModelExt(ext)) {
+          try {
+            fs.unlinkSync(file.filepath)
+          } catch {
+            /* ignore */
+          }
+          return reject(
+            new Error(`Invalid file type. Upload ${MODEL_EXTS.join(', ')}.`),
+          )
         }
-        return reject(
-          new Error(`Invalid file type. Upload ${MODEL_EXTS.join(', ')}.`),
-        )
-      }
-      const safeName = `${randomUUID()}${ext}`
-      const dest = path.join(uploadsDir, safeName)
-      fs.renameSync(file.filepath, dest)
-      resolve({ fileName: safeName, modelExt: ext })
+        const safeName = `${randomUUID()}${ext}`
+        const dest = path.join(uploadsDir, safeName)
+        fs.renameSync(file.filepath, dest)
+        if (objectStorageConfigured()) {
+          try {
+            await uploadStoredFile(dest, safeName)
+          } catch (uploadErr) {
+            try {
+              fs.unlinkSync(dest)
+            } catch {
+              /* ignore */
+            }
+            return reject(uploadErr)
+          }
+        }
+        resolve({ fileName: safeName, modelExt: ext })
+      })()
     })
   })
 }
@@ -139,124 +159,128 @@ async function sliceDesignWithCloudSlicer(
   opts?: { fillMissingOnly?: boolean },
 ): Promise<{ ok: true; design: Design; warning?: string } | { ok: false; error: string }> {
   const fillMissingOnly = opts?.fillMissingOnly !== false
-  const uploadsDir = await getUploadsDir()
-  const localPath = path.join(uploadsDir, stlPath)
-  if (!fs.existsSync(localPath)) {
+  const resolved = await resolveStoredFile(stlPath)
+  if (!resolved) {
     return { ok: false, error: 'Model file missing on server. Re-upload the design file.' }
   }
+  const localPath = resolved.path
 
-  const existingRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
-  if (!existingRow) return { ok: false, error: 'Design not found.' }
-  const existing = rowToDesign(existingRow)
+  try {
+    const existingRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+    if (!existingRow) return { ok: false, error: 'Design not found.' }
+    const existing = rowToDesign(existingRow)
 
-  const owners = await loadPrinterOwnerCreds(db)
-  const setupGaps: string[] = []
-  const quoteErrors: string[] = []
-  const ready: { printerId: string; label: string; creds: CloudSlicerCreds }[] = []
+    const owners = await loadPrinterOwnerCreds(db)
+    const setupGaps: string[] = []
+    const quoteErrors: string[] = []
+    const ready: { printerId: string; label: string; creds: CloudSlicerCreds }[] = []
 
-  for (const id of PRINTER_IDS) {
-    const label = PRINTER_FIELD[id]?.label ?? id
-    if (fillMissingOnly && printerHasQuote(existing, id)) continue
+    for (const id of PRINTER_IDS) {
+      const label = PRINTER_FIELD[id]?.label ?? id
+      if (fillMissingOnly && printerHasQuote(existing, id)) continue
 
-    const row = owners.find((o) => o.printer_id === id)
-    if (!row?.user_id) {
-      setupGaps.push(
-        missingPrinterWarning(label, 'no admin linked (Settings → Cloud Slicer → Your PrintX printer)'),
+      const row = owners.find((o) => o.printer_id === id)
+      if (!row?.user_id) {
+        setupGaps.push(
+          missingPrinterWarning(label, 'no admin linked (Settings → Cloud Slicer → Your PrintX printer)'),
+        )
+        continue
+      }
+      const creds: CloudSlicerCreds = {
+        token: String(row.cloud_slicer_token || ''),
+        printerId: String(row.cloud_slicer_printer_id || ''),
+        filamentId: String(row.cloud_slicer_filament_id || ''),
+      }
+      if (!cloudSlicerConfigured(creds)) {
+        const who = row.display_name || row.email || 'admin'
+        setupGaps.push(missingPrinterWarning(label, `${who} has not finished Cloud Slicer API setup`))
+        continue
+      }
+      ready.push({ printerId: id, label, creds })
+    }
+
+    // Start from existing quotes so we never wipe successful printers.
+    const gramsHours: {
+      gramsPabloP1s: number | null
+      hoursPabloP1s: number | null
+      gramsCourtEnder: number | null
+      hoursCourtEnder: number | null
+      gramsJoshKobra: number | null
+      hoursJoshKobra: number | null
+    } = {
+      gramsPabloP1s: existing.gramsPabloP1s,
+      hoursPabloP1s: existing.hoursPabloP1s,
+      gramsCourtEnder: existing.gramsCourtEnder,
+      hoursCourtEnder: existing.hoursCourtEnder,
+      gramsJoshKobra: existing.gramsJoshKobra,
+      hoursJoshKobra: existing.hoursJoshKobra,
+    }
+
+    if (ready.length > 0) {
+      await db.run(
+        `UPDATE designs SET slice_status = 'slicing', updated_at = ? WHERE id = ?`,
+        new Date().toISOString(),
+        designId,
       )
-      continue
-    }
-    const creds: CloudSlicerCreds = {
-      token: String(row.cloud_slicer_token || ''),
-      printerId: String(row.cloud_slicer_printer_id || ''),
-      filamentId: String(row.cloud_slicer_filament_id || ''),
-    }
-    if (!cloudSlicerConfigured(creds)) {
-      const who = row.display_name || row.email || 'admin'
-      setupGaps.push(missingPrinterWarning(label, `${who} has not finished Cloud Slicer API setup`))
-      continue
-    }
-    ready.push({ printerId: id, label, creds })
-  }
-
-  // Start from existing quotes so we never wipe successful printers.
-  const gramsHours: {
-    gramsPabloP1s: number | null
-    hoursPabloP1s: number | null
-    gramsCourtEnder: number | null
-    hoursCourtEnder: number | null
-    gramsJoshKobra: number | null
-    hoursJoshKobra: number | null
-  } = {
-    gramsPabloP1s: existing.gramsPabloP1s,
-    hoursPabloP1s: existing.hoursPabloP1s,
-    gramsCourtEnder: existing.gramsCourtEnder,
-    hoursCourtEnder: existing.hoursCourtEnder,
-    gramsJoshKobra: existing.gramsJoshKobra,
-    hoursJoshKobra: existing.hoursJoshKobra,
-  }
-
-  if (ready.length > 0) {
-    await db.run(
-      `UPDATE designs SET slice_status = 'slicing', updated_at = ? WHERE id = ?`,
-      new Date().toISOString(),
-      designId,
-    )
-    for (const item of ready) {
-      try {
-        const result = await quoteStlForPrinter(item.creds, localPath)
-        const fields = PRINTER_FIELD[item.printerId]!
-        gramsHours[fields.grams] = result.grams
-        gramsHours[fields.hours] = result.hours
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
-        quoteErrors.push(`${item.label}: ${msg}`)
+      for (const item of ready) {
+        try {
+          const result = await quoteStlForPrinter(item.creds, localPath)
+          const fields = PRINTER_FIELD[item.printerId]!
+          gramsHours[fields.grams] = result.grams
+          gramsHours[fields.hours] = result.hours
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
+          quoteErrors.push(`${item.label}: ${msg}`)
+        }
       }
     }
-  }
 
-  const warningParts: string[] = []
-  if (setupGaps.length) {
-    warningParts.push(`Waiting on Cloud Slicer setup:\n• ${setupGaps.join('\n• ')}`)
-  }
-  if (quoteErrors.length) {
-    warningParts.push(`Quote errors:\n• ${quoteErrors.join('\n• ')}`)
-  }
-  const warning = warningParts.join('\n\n')
+    const warningParts: string[] = []
+    if (setupGaps.length) {
+      warningParts.push(`Waiting on Cloud Slicer setup:\n• ${setupGaps.join('\n• ')}`)
+    }
+    if (quoteErrors.length) {
+      warningParts.push(`Quote errors:\n• ${quoteErrors.join('\n• ')}`)
+    }
+    const warning = warningParts.join('\n\n')
 
-  const quotedCount = PRINTER_IDS.filter((id) => {
-    const fields = PRINTER_FIELD[id]!
-    return gramsHours[fields.grams] != null && gramsHours[fields.hours] != null
-  }).length
+    const quotedCount = PRINTER_IDS.filter((id) => {
+      const fields = PRINTER_FIELD[id]!
+      return gramsHours[fields.grams] != null && gramsHours[fields.hours] != null
+    }).length
 
-  const sliceStatus = quotedCount === 0 && ready.length === 0 && setupGaps.length > 0
-    ? 'error'
-    : quotedCount > 0
-      ? 'ready'
-      : quoteErrors.length
-        ? 'error'
-        : 'idle'
+    const sliceStatus = quotedCount === 0 && ready.length === 0 && setupGaps.length > 0
+      ? 'error'
+      : quotedCount > 0
+        ? 'ready'
+        : quoteErrors.length
+          ? 'error'
+          : 'idle'
 
-  const now = new Date().toISOString()
-  await db.run(
-    `UPDATE designs SET
+    const now = new Date().toISOString()
+    await db.run(
+      `UPDATE designs SET
       grams_pablo_p1s = ?, hours_pablo_p1s = ?,
       grams_court_ender = ?, hours_court_ender = ?,
       grams_josh_kobra = ?, hours_josh_kobra = ?,
       slice_status = ?, slice_error = ?, updated_at = ?
      WHERE id = ?`,
-    gramsHours.gramsPabloP1s,
-    gramsHours.hoursPabloP1s,
-    gramsHours.gramsCourtEnder,
-    gramsHours.hoursCourtEnder,
-    gramsHours.gramsJoshKobra,
-    gramsHours.hoursJoshKobra,
-    sliceStatus,
-    warning.slice(0, 2000),
-    now,
-    designId,
-  )
-  const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
-  return { ok: true, design: rowToDesign(row!), warning: warning || undefined }
+      gramsHours.gramsPabloP1s,
+      gramsHours.hoursPabloP1s,
+      gramsHours.gramsCourtEnder,
+      gramsHours.hoursCourtEnder,
+      gramsHours.gramsJoshKobra,
+      gramsHours.hoursJoshKobra,
+      sliceStatus,
+      warning.slice(0, 2000),
+      now,
+      designId,
+    )
+    const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+    return { ok: true, design: rowToDesign(row!), warning: warning || undefined }
+  } finally {
+    resolved.cleanup?.()
+  }
 }
 
 const GRAMS_COLUMN: Record<string, string> = {
@@ -524,16 +548,16 @@ export async function handleCatalogApi(
       send(res, 404, { error: 'Interactive preview is STL-only.' })
       return true
     }
-    const uploadsDir = await getUploadsDir()
-    const full = path.join(uploadsDir, stlPath)
-    if (!fs.existsSync(full)) {
+    const ok = await sendStoredFile(
+      res,
+      stlPath,
+      'model/stl',
+      'public, max-age=120, stale-while-revalidate=300',
+    )
+    if (!ok) {
       send(res, 404, { error: 'Model not found' })
       return true
     }
-    res.statusCode = 200
-    res.setHeader('Content-Type', 'model/stl')
-    res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=300')
-    fs.createReadStream(full).pipe(res)
     return true
   }
 
@@ -888,17 +912,17 @@ export async function handleCatalogApi(
       send(res, 404, { error: 'Model not found' })
       return true
     }
-    const uploadsDir = await getUploadsDir()
-    const full = path.join(uploadsDir, stlPath)
-    if (!fs.existsSync(full)) {
+    const ext = path.extname(stlPath).toLowerCase()
+    const ok = await sendStoredFile(
+      res,
+      stlPath,
+      modelContentType(ext),
+      'private, max-age=60',
+    )
+    if (!ok) {
       send(res, 404, { error: 'Model not found' })
       return true
     }
-    const ext = path.extname(stlPath).toLowerCase()
-    res.statusCode = 200
-    res.setHeader('Content-Type', modelContentType(ext))
-    res.setHeader('Cache-Control', 'private, max-age=60')
-    fs.createReadStream(full).pipe(res)
     return true
   }
 

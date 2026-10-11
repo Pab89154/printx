@@ -132,6 +132,9 @@ async function main() {
   }
 
   await ensureDbReady()
+  const { ensureModelBucket, logObjectStorageStatus } = await import('./objectStorage.ts')
+  logObjectStorageStatus()
+  await ensureModelBucket()
   startMailScheduleFlusher()
 
   const shutdown = () => {

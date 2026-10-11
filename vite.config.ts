@@ -12,6 +12,8 @@ export default defineConfig(async ({ mode, command }) => {
     'DATABASE_URL',
     'SUPABASE_URL',
     'SUPABASE_ANON_KEY',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_STORAGE_BUCKET',
     'PRINTX_DATA_DIR',
     'RESEND_API_KEY',
     'PRINTX_NOTIFY_EMAIL',
