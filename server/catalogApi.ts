@@ -1032,37 +1032,45 @@ export async function handleCatalogApi(
       }
 
       const modelExt = path.extname(design.stlPath).toLowerCase()
+      const now = new Date().toISOString()
+      // Queue for Approvals immediately — Cloud Slicer can take minutes and must not
+      // block the submit response (UI was freezing waiting on quotes).
       let sliceWarning = ''
-      // Always queue for main-admin review; Cloud Slicer is best-effort so a setup
-      // gap cannot hide the design from Approvals.
       if (SLICEABLE_EXTS.has(modelExt)) {
-        const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath, {
-          fillMissingOnly: true,
-        })
-        if (sliced.ok) {
-          design = sliced.design
-          sliceWarning = sliced.warning || ''
-        } else {
-          sliceWarning = sliced.error
-        }
+        await db.run(
+          `UPDATE designs SET
+            status = 'pending_review', submitted_at = ?, updated_at = ?, review_note = '',
+            slice_status = 'slicing', slice_error = ''
+           WHERE id = ?`,
+          now,
+          now,
+          designId,
+        )
+        const stlPath = design.stlPath
+        void (async () => {
+          try {
+            const bg = await getDb()
+            await sliceDesignWithCloudSlicer(bg, designId, stlPath, { fillMissingOnly: true })
+          } catch (err) {
+            console.error('[catalog] background slice after submit failed:', err)
+          }
+        })()
+        sliceWarning = 'Cloud Slicer quoting in the background — refresh Approvals shortly.'
       } else {
         sliceWarning =
           'Model is not .stl/.3mf — Cloud Slicer could not auto-quote. Convert and re-quote before approving.'
         await db.run(
-          `UPDATE designs SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
+          `UPDATE designs SET
+            status = 'pending_review', submitted_at = ?, updated_at = ?, review_note = '',
+            slice_status = 'error', slice_error = ?
+           WHERE id = ?`,
+          now,
+          now,
           sliceWarning.slice(0, 2000),
-          new Date().toISOString(),
           designId,
         )
       }
 
-      const now = new Date().toISOString()
-      await db.run(
-        `UPDATE designs SET status = 'pending_review', submitted_at = ?, updated_at = ?, review_note = '' WHERE id = ?`,
-        now,
-        now,
-        designId,
-      )
       design = rowToDesign(
         (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
       )

@@ -272,7 +272,7 @@ export function AdminDesigns() {
                   .then((res) => {
                     setMessage(
                       res.sliceWarning
-                        ? `Submitted for approval. Quote note: ${res.sliceWarning}`
+                        ? `Submitted for approval. ${res.sliceWarning}`
                         : 'Submitted for approval — main admin can review it now.',
                     )
                     setEditingId(null)
@@ -283,7 +283,7 @@ export function AdminDesigns() {
                   .finally(() => setBusy(false))
               }}
             >
-              Submit for approval
+              {busy ? 'Submitting…' : 'Submit for approval'}
             </button>
           )}
           {editingId && (

@@ -70,7 +70,6 @@ export function ShopProduct() {
               <p className="mt-4 text-2xl font-bold text-electric">
                 ${design.catalogPriceUsd?.toFixed(2) ?? '—'}
               </p>
-              <p className="mt-1 text-xs text-muted">SKU {design.skuBase}</p>
 
               <p className="mt-6 text-sm font-semibold text-navy">Color</p>
               <div className="mt-2 flex flex-wrap gap-2">
