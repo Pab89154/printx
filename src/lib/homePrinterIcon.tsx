@@ -5,40 +5,35 @@ type Props = SVGProps<SVGSVGElement> & {
 }
 
 /**
- * Home / marketing 3D-printer mark (open frame + arm nozzle + cube).
+ * Home / marketing 3D-printer mark — enclosed chamber (reads clearly as a printer).
  * Uses currentColor — not the Designs nav icon.
  */
 export const HomePrinterIcon = forwardRef<SVGSVGElement, Props>(
-  ({ className, size = 24, strokeWidth = 2.25, ...props }, ref) => (
+  ({ className, size = 24, ...props }, ref) => (
     <svg
       ref={ref}
       xmlns="http://www.w3.org/2000/svg"
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={strokeWidth}
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      fill="currentColor"
       className={className}
       aria-hidden
       {...props}
     >
-      {/* Open-top printer frame */}
-      <path d="M4 6.5v10.5a3.5 3.5 0 0 0 3.5 3.5h9A3.5 3.5 0 0 0 20 17V6.5" />
-      {/* Arm from top-right down to nozzle */}
-      <path d="M20 6.5H12v7" />
-      {/* Nozzle tip */}
+      {/* Body + chamber + control-button cutouts */}
       <path
-        fill="currentColor"
-        stroke="none"
-        d="M10.15 13.5h3.7l-.85 1.55a1 1 0 0 1-2 0l-.85-1.55z"
+        fillRule="evenodd"
+        d="M3 3h18v18H3V3zm2.5 2.5h13v11h-13v-11zm10.25 13.25a1.15 1.15 0 1 0 0 2.3 1.15 1.15 0 0 0 0-2.3zm3.35 0a1.15 1.15 0 1 0 0 2.3 1.15 1.15 0 0 0 0-2.3z"
       />
-      {/* Isometric cube */}
-      <path d="M8.2 16.6 12 14.5l3.8 2.1-3.8 2.1Z" />
-      <path d="M8.2 16.6v3.2L12 21.9v-3.1" />
-      <path d="M15.8 16.6v3.2L12 21.9" />
+      {/* Gantry */}
+      <rect x="6.25" y="6.5" width="11.5" height="2.4" rx="0.35" />
+      {/* Extruder head */}
+      <path d="M9.5 6.5h5v2.6H13.4v1.4h-2.8V9.1H9.5V6.5z" />
+      {/* Isometric cube being printed */}
+      <path d="M12 11.2 15.4 13l-3.4 1.8L8.6 13Z" />
+      <path d="M8.6 13.35 11.6 15v3.4l-3-1.6Z" />
+      <path d="M12.4 15 15.4 13.35v3.4l-3 1.6Z" />
     </svg>
   ),
 )

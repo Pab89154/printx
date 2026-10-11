@@ -129,14 +129,26 @@ export function AdminDesigns() {
           setBusy(true)
           setError('')
           setMessage('')
-          const run = editingId
-            ? api.catalog.designs.update(editingId, toPayload())
+          const wasEditing = editingId
+          const run = wasEditing
+            ? api.catalog.designs.update(wasEditing, toPayload())
             : api.catalog.designs.create(toPayload())
           void run
-            .then(() => {
-              setForm(emptyForm)
-              setEditingId(null)
-              setMessage(editingId ? 'Design updated.' : 'Design saved as draft.')
+            .then((saved) => {
+              // Keep editing so Submit for approval is available after first save.
+              setEditingId(saved.id)
+              setForm((f) => ({
+                ...f,
+                stlPath: '',
+                hasStl: saved.hasStl,
+                modelExt: saved.modelExt || f.modelExt,
+                skuBase: saved.skuBase,
+              }))
+              setMessage(
+                wasEditing
+                  ? 'Design updated. Click Submit for approval to send it to the main admin.'
+                  : 'Draft saved. Click Submit for approval to send it to the main admin.',
+              )
               return load()
             })
             .catch((err) => setError(err instanceof Error ? err.message : 'Save failed'))
@@ -264,23 +276,27 @@ export function AdminDesigns() {
         </div>
 
         <div className="mt-6 flex flex-wrap gap-3">
-          <button type="submit" className="btn btn-primary" disabled={busy || uploadingStl}>
+          <button type="submit" className="btn btn-secondary" disabled={busy || uploadingStl}>
             {busy ? 'Saving…' : editingId ? 'Update draft' : 'Save draft'}
           </button>
           {editingId && (
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-primary"
               disabled={busy || uploadingStl}
               onClick={() => {
                 setBusy(true)
                 setError('')
-                setMessage('Submitting — quoting all 3 printers via Cloud Slicer…')
+                setMessage('Submitting for approval…')
                 void api.catalog.designs
                   .update(editingId, toPayload())
                   .then(() => api.catalog.designs.submit(editingId))
-                  .then(() => {
-                    setMessage('Submitted for approval (grams/hours filled from Cloud Slicer).')
+                  .then((res) => {
+                    setMessage(
+                      res.sliceWarning
+                        ? `Submitted for approval. Quote note: ${res.sliceWarning}`
+                        : 'Submitted for approval — main admin can review it now.',
+                    )
                     setEditingId(null)
                     setForm(emptyForm)
                     return load()
@@ -351,18 +367,22 @@ export function AdminDesigns() {
                     className="btn btn-primary btn-compact"
                     onClick={() => {
                       setBusy(true)
-                      setMessage('Submitting — quoting all 3 printers…')
+                      setMessage('Submitting for approval…')
                       void api.catalog.designs
                         .submit(d.id)
-                        .then(() => {
-                          setMessage('Submitted for approval.')
+                        .then((res) => {
+                          setMessage(
+                            res.sliceWarning
+                              ? `Submitted. Quote note: ${res.sliceWarning}`
+                              : 'Submitted for approval.',
+                          )
                           return load()
                         })
                         .catch((err) => setError(err instanceof Error ? err.message : 'Submit failed'))
                         .finally(() => setBusy(false))
                     }}
                   >
-                    Submit
+                    Submit for approval
                   </button>
                 ) : null}
                 <button

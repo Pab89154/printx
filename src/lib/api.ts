@@ -85,7 +85,15 @@ export const api = {
       stlUrl: (id: string) => `/api/admin/designs/${id}/stl`,
       remove: (id: string) => request(`/api/admin/designs/${id}`, { method: 'DELETE' }),
       submit: (id: string) =>
-        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/submit`, {
+        request<import('../types/catalog.ts').Design & { sliceWarning?: string }>(
+          `/api/admin/designs/${id}/submit`,
+          {
+            method: 'POST',
+            body: '{}',
+          },
+        ),
+      requote: (id: string) =>
+        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/requote`, {
           method: 'POST',
           body: '{}',
         }),

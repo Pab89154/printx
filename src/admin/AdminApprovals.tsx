@@ -7,6 +7,18 @@ import { BUILTIN_COLORS } from '../../shared/colors'
 import type { Design, PricingSettingsDto, PrinterDto } from '../types/catalog'
 import { StlViewer } from './StlViewer'
 
+function hasQuoteInputs(d: Design): boolean {
+  return (
+    d.gramsPabloP1s != null &&
+    d.hoursPabloP1s != null &&
+    d.gramsCourtEnder != null &&
+    d.hoursCourtEnder != null &&
+    d.gramsJoshKobra != null &&
+    d.hoursJoshKobra != null &&
+    d.availableColorIds.length > 0
+  )
+}
+
 export function AdminApprovals() {
   const { isMainAdmin } = useAdminAuth()
   const [designs, setDesigns] = useState<Design[]>([])
@@ -18,6 +30,7 @@ export function AdminApprovals() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
 
   async function load() {
     const [d, p] = await Promise.all([api.catalog.designs.list(), api.catalog.pricing.get()])
@@ -34,6 +47,7 @@ export function AdminApprovals() {
   if (!isMainAdmin) return <Navigate to={adminHomePath()} replace />
 
   const pending = designs.filter((d) => d.status === 'pending_review')
+  const drafts = designs.filter((d) => (d.status === 'draft' || d.status === 'rejected') && d.hasStl)
   const approved = designs.filter((d) => d.status === 'approved')
 
   async function savePricing() {
@@ -63,21 +77,220 @@ export function AdminApprovals() {
     }
   }
 
+  function DesignPreview({ d }: { d: Design }) {
+    if (d.hasStl && (d.modelExt === '.stl' || !d.modelExt)) {
+      return (
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">3D preview</p>
+          <StlViewer url={api.catalog.designs.stlUrl(d.id)} height={240} />
+        </div>
+      )
+    }
+    if (d.hasStl) {
+      return (
+        <p className="self-center text-sm text-muted">
+          Model on file ({(d.modelExt || '').replace('.', '').toUpperCase() || '3D'}) — preview is
+          STL-only.
+        </p>
+      )
+    }
+    return <p className="self-center text-sm text-muted">No model on file.</p>
+  }
+
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold text-navy">Approvals & Pricing</h1>
         <p className="mt-1 text-sm text-muted">
-          Main admin only — review STL previews, cost inputs, custom colors, and approve designs for the shop.
+          Main admin only — review models first, then pricing inputs below.
         </p>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {message && <p className="text-sm text-electric">{message}</p>}
+      {error && <p className="whitespace-pre-wrap text-sm text-red-600">{error}</p>}
+      {message && <p className="whitespace-pre-wrap text-sm text-electric">{message}</p>}
+
+      <section className="rounded-2xl border bg-white p-6">
+        <h2 className="font-semibold text-navy">Pending approval ({pending.length})</h2>
+        <div className="mt-4 space-y-4">
+          {pending.length === 0 && <p className="text-sm text-muted">No designs waiting.</p>}
+          {pending.map((d) => {
+            const ready = hasQuoteInputs(d)
+            return (
+              <div key={d.id} className="rounded-xl border border-slate-100 p-4">
+                <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+                  <div>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-navy">{d.name}</p>
+                        <p className="text-xs text-muted">
+                          SKU {d.skuBase} · colors {d.availableColorIds.join(', ') || '—'}
+                        </p>
+                        <p className="mt-1 text-xs text-muted">
+                          P1S {d.gramsPabloP1s ?? '—'}g / {d.hoursPabloP1s ?? '—'}h · Ender{' '}
+                          {d.gramsCourtEnder ?? '—'}g / {d.hoursCourtEnder ?? '—'}h · Kobra{' '}
+                          {d.gramsJoshKobra ?? '—'}g / {d.hoursJoshKobra ?? '—'}h
+                        </p>
+                        {d.sliceError ? (
+                          <p className="mt-2 whitespace-pre-wrap text-xs text-amber-700">{d.sliceError}</p>
+                        ) : null}
+                        {!ready ? (
+                          <p className="mt-2 text-xs text-amber-700">
+                            Quotes incomplete — run Re-quote (needs Cloud Slicer on all 3 printers)
+                            before Approve.
+                          </p>
+                        ) : null}
+                        {d.description ? (
+                          <p className="mt-2 text-sm text-muted line-clamp-3">{d.description}</p>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-compact"
+                          disabled={!ready || busyId === d.id}
+                          onClick={() => {
+                            setBusyId(d.id)
+                            setError('')
+                            void api.catalog.designs
+                              .approve(d.id)
+                              .then(() => load())
+                              .catch((e) => setError(e instanceof Error ? e.message : 'Approve failed'))
+                              .finally(() => setBusyId(null))
+                          }}
+                        >
+                          Approve + price
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-compact"
+                          disabled={busyId === d.id}
+                          onClick={() => {
+                            setBusyId(d.id)
+                            setError('')
+                            setMessage('Re-quoting via Cloud Slicer…')
+                            void api.catalog.designs
+                              .requote(d.id)
+                              .then(() => {
+                                setMessage('Quotes updated.')
+                                return load()
+                              })
+                              .catch((e) => setError(e instanceof Error ? e.message : 'Re-quote failed'))
+                              .finally(() => setBusyId(null))
+                          }}
+                        >
+                          Re-quote
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-compact"
+                          disabled={busyId === d.id}
+                          onClick={() => {
+                            setBusyId(d.id)
+                            void api.catalog.designs
+                              .reject(d.id, 'Needs changes')
+                              .then(() => load())
+                              .catch((e) => setError(e instanceof Error ? e.message : 'Reject failed'))
+                              .finally(() => setBusyId(null))
+                          }}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <DesignPreview d={d} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      {drafts.length > 0 && (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50/40 p-6">
+          <h2 className="font-semibold text-navy">Drafts with a model ({drafts.length})</h2>
+          <p className="mt-1 text-sm text-muted">
+            Saved but not submitted yet — send them here to appear under Pending approval.
+          </p>
+          <div className="mt-4 space-y-3">
+            {drafts.map((d) => (
+              <div
+                key={d.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-white px-4 py-3"
+              >
+                <div>
+                  <p className="font-medium text-navy">{d.name}</p>
+                  <p className="text-xs text-muted">
+                    {d.skuBase} · {d.status.replace('_', ' ')}
+                    {d.sliceError ? ' · quote error' : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-compact"
+                  disabled={busyId === d.id}
+                  onClick={() => {
+                    setBusyId(d.id)
+                    setError('')
+                    setMessage('Submitting for approval…')
+                    void api.catalog.designs
+                      .submit(d.id)
+                      .then((res) => {
+                        setMessage(
+                          res.sliceWarning
+                            ? `Queued for approval. Quote note: ${res.sliceWarning}`
+                            : 'Queued for approval.',
+                        )
+                        return load()
+                      })
+                      .catch((e) => setError(e instanceof Error ? e.message : 'Submit failed'))
+                      .finally(() => setBusyId(null))
+                  }}
+                >
+                  Submit for approval
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-2xl border bg-white p-6">
+        <h2 className="font-semibold text-navy">Approved in catalog ({approved.length})</h2>
+        <div className="mt-4 space-y-3">
+          {approved.length === 0 && <p className="text-sm text-muted">None approved yet.</p>}
+          {approved.map((d) => (
+            <div
+              key={d.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 px-4 py-3"
+            >
+              <div>
+                <p className="font-medium text-navy">{d.name}</p>
+                <p className="text-xs text-muted">
+                  Worst cost ${d.worstCostUsd?.toFixed(2)} → catalog ${d.catalogPriceUsd?.toFixed(2)}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-compact"
+                onClick={() =>
+                  void api.catalog.designs
+                    .reprice(d.id)
+                    .then(() => load())
+                    .catch((e) => setError(e instanceof Error ? e.message : 'Reprice failed'))
+                }
+              >
+                Recalculate price
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
 
       {settings && (
         <section className="rounded-2xl border bg-white p-6">
-          <h2 className="font-semibold text-navy">Cost model inputs</h2>
+          <h2 className="font-semibold text-navy">Pricing</h2>
+          <p className="mt-1 text-sm text-muted">Cost model used when you approve a design.</p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {(
               [
@@ -96,9 +309,7 @@ export function AdminApprovals() {
                   step="any"
                   className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                   value={settings[key]}
-                  onChange={(e) =>
-                    setSettings({ ...settings, [key]: Number(e.target.value) })
-                  }
+                  onChange={(e) => setSettings({ ...settings, [key]: Number(e.target.value) })}
                 />
               </label>
             ))}
@@ -181,108 +392,6 @@ export function AdminApprovals() {
           </button>
         </section>
       )}
-
-      <section className="rounded-2xl border bg-white p-6">
-        <h2 className="font-semibold text-navy">Pending approval ({pending.length})</h2>
-        <div className="mt-4 space-y-4">
-          {pending.length === 0 && <p className="text-sm text-muted">No designs waiting.</p>}
-          {pending.map((d) => (
-            <div key={d.id} className="rounded-xl border border-slate-100 p-4">
-              <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
-                <div>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-navy">{d.name}</p>
-                      <p className="text-xs text-muted">
-                        SKU {d.skuBase} · colors {d.availableColorIds.join(', ') || '—'}
-                      </p>
-                      <p className="mt-1 text-xs text-muted">
-                        P1S {d.gramsPabloP1s}g / {d.hoursPabloP1s}h · Ender {d.gramsCourtEnder}g /{' '}
-                        {d.hoursCourtEnder}h · Kobra {d.gramsJoshKobra}g / {d.hoursJoshKobra}h
-                      </p>
-                      {d.description ? (
-                        <p className="mt-2 text-sm text-muted line-clamp-3">{d.description}</p>
-                      ) : null}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-compact"
-                        onClick={() =>
-                          void api.catalog.designs
-                            .approve(d.id)
-                            .then(() => load())
-                            .catch((e) => setError(e instanceof Error ? e.message : 'Approve failed'))
-                        }
-                      >
-                        Approve + price
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-compact"
-                        onClick={() =>
-                          void api.catalog.designs
-                            .reject(d.id, 'Needs changes')
-                            .then(() => load())
-                            .catch((e) => setError(e instanceof Error ? e.message : 'Reject failed'))
-                        }
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                {d.hasStl && (d.modelExt === '.stl' || !d.modelExt) ? (
-                  <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                      3D preview
-                    </p>
-                    <StlViewer url={api.catalog.designs.stlUrl(d.id)} height={240} />
-                  </div>
-                ) : d.hasStl ? (
-                  <p className="self-center text-sm text-muted">
-                    Model on file ({(d.modelExt || '').replace('.', '').toUpperCase() || '3D'}) —
-                    interactive preview is STL-only.
-                  </p>
-                ) : (
-                  <p className="self-center text-sm text-muted">No model on file.</p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-2xl border bg-white p-6">
-        <h2 className="font-semibold text-navy">Approved in catalog ({approved.length})</h2>
-        <div className="mt-4 space-y-3">
-          {approved.map((d) => (
-            <div
-              key={d.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 px-4 py-3"
-            >
-              <div>
-                <p className="font-medium text-navy">{d.name}</p>
-                <p className="text-xs text-muted">
-                  Worst cost ${d.worstCostUsd?.toFixed(2)} → catalog ${d.catalogPriceUsd?.toFixed(2)}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-compact"
-                onClick={() =>
-                  void api.catalog.designs
-                    .reprice(d.id)
-                    .then(() => load())
-                    .catch((e) => setError(e instanceof Error ? e.message : 'Reprice failed'))
-                }
-              >
-                Recalculate price
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
     </div>
   )
 }

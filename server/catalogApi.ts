@@ -771,9 +771,8 @@ export async function handleCatalogApi(
     return true
   }
 
-  const designMatch = /^\/api\/admin\/designs\/([^/]+)(?:\/(submit|approve|reject|reprice))?$/.exec(
-    urlPath,
-  )
+  const designMatch =
+    /^\/api\/admin\/designs\/([^/]+)(?:\/(submit|requote|approve|reject|reprice))?$/.exec(urlPath)
   if (designMatch) {
     const designId = designMatch[1]!
     const action = designMatch[2]
@@ -872,31 +871,31 @@ export async function handleCatalogApi(
         send(res, 400, { error: 'Upload a 3D model before submitting.' })
         return true
       }
-      const modelExt = path.extname(design.stlPath).toLowerCase()
-      if (!SLICEABLE_EXTS.has(modelExt)) {
-        send(res, 400, {
-          error:
-            'Cloud Slicer auto-quote needs .stl or .3mf. Convert STEP/OBJ to STL (or upload STL/3MF) before submitting.',
-        })
-        return true
-      }
       if (design.availableColorIds.length === 0) {
         send(res, 400, { error: 'Pick at least one color before submitting.' })
         return true
       }
 
-      // Re-slice when not ready, or always refresh quotes on submit.
-      const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath)
-      if (!sliced.ok) {
-        send(res, 400, { error: sliced.error })
-        return true
-      }
-      design = sliced.design
-      if (!designHasCompletePrinterInputs(design)) {
-        send(res, 400, {
-          error: 'Cloud Slicer did not return complete grams/hours for all 3 printers.',
-        })
-        return true
+      const modelExt = path.extname(design.stlPath).toLowerCase()
+      let sliceWarning = ''
+      // Always queue for main-admin review; Cloud Slicer is best-effort so a setup
+      // gap cannot hide the design from Approvals.
+      if (SLICEABLE_EXTS.has(modelExt)) {
+        const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath)
+        if (sliced.ok) {
+          design = sliced.design
+        } else {
+          sliceWarning = sliced.error
+        }
+      } else {
+        sliceWarning =
+          'Model is not .stl/.3mf — Cloud Slicer could not auto-quote. Convert and re-quote before approving.'
+        await db.run(
+          `UPDATE designs SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
+          sliceWarning.slice(0, 2000),
+          new Date().toISOString(),
+          designId,
+        )
       }
 
       const now = new Date().toISOString()
@@ -909,7 +908,28 @@ export async function handleCatalogApi(
       design = rowToDesign(
         (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
       )
-      send(res, 200, designDto(design))
+      send(res, 200, { ...designDto(design), sliceWarning: sliceWarning || undefined })
+      return true
+    }
+
+    if (method === 'POST' && action === 'requote') {
+      if (!design.hasStl || !design.stlPath) {
+        send(res, 400, { error: 'Upload a 3D model before quoting.' })
+        return true
+      }
+      const modelExt = path.extname(design.stlPath).toLowerCase()
+      if (!SLICEABLE_EXTS.has(modelExt)) {
+        send(res, 400, {
+          error: 'Cloud Slicer needs .stl or .3mf to auto-quote.',
+        })
+        return true
+      }
+      const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath)
+      if (!sliced.ok) {
+        send(res, 400, { error: sliced.error })
+        return true
+      }
+      send(res, 200, designDto(sliced.design))
       return true
     }
 
