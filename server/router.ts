@@ -38,7 +38,7 @@ import {
   setWebsiteSetting,
 } from './db.ts'
 import { rowToDesign } from './catalog.ts'
-import { notifyContactMessage, notifyCustomRequest } from './mail.ts'
+import { notifyContactMessage } from './mail.ts'
 import {
   getCachedBootstrap,
   invalidateBootstrapCache,
@@ -405,7 +405,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   // Dev/preview middleware hits the router; production also short-circuits in production.ts.
   if (urlPath === '/api/health' && method === 'GET') {
     res.setHeader('Cache-Control', 'no-store')
-    send(res, 200, { ok: true })
+    const { objectStorageHealth } = await import('./objectStorage.ts')
+    send(res, 200, { ok: true, objectStorage: objectStorageHealth() })
     return true
   }
 
@@ -507,6 +508,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       const school = sanitizeText(fields.school, 200)
       const description = sanitizeText(fields.description, 3000)
       const size = sanitizeText(fields.size, 100)
+      if (!name || !email || !description || !size) {
+        send(res, 400, { error: 'Name, email, description, and size are required.' })
+        return true
+      }
+      // Portal Custom Requests only — do not email hello@printx.pw.
       await db.run(
         `
         INSERT INTO custom_requests (id, name, email, school, description, size, uploaded_file, status, created_at, updated_at)
@@ -522,7 +528,6 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         now,
         now,
       )
-      void notifyCustomRequest({ name, email, school, description, size })
       send(res, 201, { ok: true, id })
     } catch (e) {
       send(res, 400, { error: e instanceof Error ? e.message : 'Upload failed' })
@@ -1512,6 +1517,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const status = ['new', 'reviewing', 'approved', 'declined', 'completed'].includes(String(body.status))
       ? (body.status as RequestStatus)
       : 'new'
+    // Accept / decline (and other status changes) are main-admin only.
+    if (!admin.isMainAdmin) {
+      send(res, 403, { error: 'Only the main admin can accept or decline custom print requests.' })
+      return true
+    }
     await db.run('UPDATE custom_requests SET status = ?, updated_at = ? WHERE id = ?', status, new Date().toISOString(), id)
     send(res, 200, { ok: true })
     return true
@@ -1529,7 +1539,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   if (urlPath === '/api/admin/content' && method === 'GET') {
-    if (!adminCan(admin, 'content') && !adminCan(admin, 'website_status')) {
+    // Website copy editing removed from the portal; status toggle still needs a read.
+    if (!adminCan(admin, 'website_status') && !adminCan(admin, 'settings')) {
       return forbid(res)
     }
     send(res, 200, await getWebsiteContent(db))
@@ -1539,16 +1550,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   if (urlPath === '/api/admin/content' && method === 'PATCH') {
     const body = await readJson(req)
     const keys = Object.keys(body)
+    // Only pause/unpause remains editable from the portal (Settings).
     const onlyWebsiteOnline = keys.length > 0 && keys.every((k) => k === 'websiteOnline')
-    if (onlyWebsiteOnline) {
-      if (!requirePerm(admin, 'website_status', res)) return true
-    } else if (!requirePerm(admin, 'content', res)) {
+    if (!onlyWebsiteOnline) {
+      send(res, 403, { error: 'Website content editing has been removed from the portal.' })
       return true
     }
-    for (const [key, value] of Object.entries(body)) {
-      if (key === 'websiteOnline' && !adminCan(admin, 'website_status')) continue
-      await setWebsiteSetting(db, key, value)
-    }
+    if (!requirePerm(admin, 'website_status', res)) return true
+    await setWebsiteSetting(db, 'websiteOnline', body.websiteOnline)
     bumpPublicCache()
     send(res, 200, await getWebsiteContent(db))
     return true

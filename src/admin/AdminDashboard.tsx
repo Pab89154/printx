@@ -95,11 +95,6 @@ export function AdminDashboard() {
         Designs
       </Link>
     ),
-    can('content') && (
-      <Link key="content" to={adminPath('content')} className="btn btn-secondary">
-        Website Content
-      </Link>
-    ),
   ].filter(Boolean)
 
   return (

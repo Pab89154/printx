@@ -18,7 +18,7 @@ const inputClass =
   'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
 
 /** Permissions the main admin can grant to regular admins (not manage_admins). */
-const EDITABLE_PERMS = PERMISSION_KEYS.filter((k) => k !== 'manage_admins')
+const EDITABLE_PERMS = PERMISSION_KEYS.filter((k) => k !== 'manage_admins' && k !== 'content')
 
 export function AdminSettings() {
   const { email, displayName, label, isMainAdmin, can, refresh, setDisplayName } = useAdminAuth()
@@ -90,7 +90,7 @@ export function AdminSettings() {
   }
 
   async function loadSiteStatus() {
-    if (!can('website_status') && !can('content')) return
+    if (!can('website_status')) return
     const content = await api.admin.content.get()
     setWebsiteOnline(content.websiteOnline !== false)
   }

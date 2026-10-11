@@ -14,7 +14,7 @@ export function Footer() {
   const hasStands = (data?.stands?.length ?? 0) > 0
   const links = FOOTER_LINKS.filter((link) => link.href !== '#stands' || hasStands)
 
-  // Always show Instagram, WhatsApp, and Email — URLs come from Admin → Website Content
+  // Always show Instagram, WhatsApp, and Email — URLs come from site content settings
   const socialLinks = [
     {
       label: 'Instagram',

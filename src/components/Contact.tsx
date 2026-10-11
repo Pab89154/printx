@@ -6,11 +6,7 @@ import { Button } from './Button'
 import { ScrollReveal } from './ScrollReveal'
 import { SectionHeading } from './SectionHeading'
 
-const INQUIRY_TYPES = [
-  'General question',
-  'Custom print request',
-  'Website feedback',
-] as const
+const INQUIRY_TYPES = ['General question', 'Website feedback'] as const
 
 export function Contact() {
   const { data } = usePublicData()
@@ -61,7 +57,13 @@ export function Contact() {
                 </a>
               </p>
               <p><strong>General questions</strong> — ask us anything about PrintX.</p>
-              <p><strong>Custom print requests</strong> — tell us about your idea.</p>
+              <p>
+                <strong>Custom print ideas</strong> — use{' '}
+                <a href="#custom" className="text-electric hover:underline">
+                  Custom Prints
+                </a>{' '}
+                above (reviewed in the portal).
+              </p>
             </div>
           </ScrollReveal>
 

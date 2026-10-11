@@ -28,7 +28,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   products: 'Designs',
   orders: 'Orders (print queue)',
   requests: 'Custom Requests',
-  content: 'Website Content',
+  content: 'Website Content (removed)',
   sandbox: 'Site sandbox',
   settings: 'Settings (profile)',
   website_status: 'Pause / unpause public website',
@@ -45,7 +45,7 @@ export function defaultPermissions(): AdminPermissions {
     products: true,
     orders: true,
     requests: true,
-    content: true,
+    content: false,
     sandbox: true,
     settings: true,
     website_status: false,
@@ -54,7 +54,10 @@ export function defaultPermissions(): AdminPermissions {
 }
 
 export function allPermissions(): AdminPermissions {
-  return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true])) as AdminPermissions
+  const perms = Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true])) as AdminPermissions
+  // Website copy/hero/contact editing removed from the portal.
+  perms.content = false
+  return perms
 }
 
 export function isMainAdminEmail(email: string | null | undefined): boolean {
@@ -97,6 +100,8 @@ export function normalizePermissions(input: unknown): AdminPermissions {
   // Regular admins never get manage_admins through stored JSON alone —
   // only the primary admin account grants it.
   base.manage_admins = false
+  // Website content editing removed from the portal.
+  base.content = false
   return base
 }
 

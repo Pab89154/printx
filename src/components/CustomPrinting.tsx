@@ -1,15 +1,13 @@
 import { useState } from 'react'
 import { CheckCircle2 } from 'lucide-react'
-import { mailtoHref, openPrintXMailto, PRINTX_CONTACT_EMAIL } from '../lib/mailto'
-import { usePublicData } from '../context/PublicDataContext'
+import { api } from '../lib/api'
 import { Button } from './Button'
 import { ScrollReveal } from './ScrollReveal'
 
 export function CustomPrinting() {
-  const { data } = usePublicData()
-  const contactEmail = data?.content?.contactEmail?.trim() || PRINTX_CONTACT_EMAIL
   const [submitted, setSubmitted] = useState(false)
-  const [showForm, setShowForm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -20,25 +18,21 @@ export function CustomPrinting() {
     const description = String(formData.get('description') || '').trim()
     const size = String(formData.get('size') || '').trim()
 
-    openPrintXMailto({
-      email: contactEmail,
-      subject: `[PrintX] Custom print request: ${name || 'Visitor'}`,
-      body: [
-        `Name: ${name}`,
-        `Reply-to: ${email}`,
-        size ? `Approximate size: ${size}` : null,
-        '',
-        'What I would like printed:',
-        description,
-        '',
-        '(If you have a .STL or .OBJ file, please attach it in this email.)',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    })
-    setSubmitted(true)
-    setShowForm(false)
-    form.reset()
+    if (!name || !email || !description || !size) {
+      setError('Please fill in all required fields.')
+      return
+    }
+
+    setBusy(true)
+    setError('')
+    void api.public
+      .customRequest(formData)
+      .then(() => {
+        setSubmitted(true)
+        form.reset()
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Could not submit request'))
+      .finally(() => setBusy(false))
   }
 
   return (
@@ -49,49 +43,35 @@ export function CustomPrinting() {
             <h2 className="text-3xl font-bold tracking-tight text-navy sm:text-4xl">Have an Idea?</h2>
             <p className="mt-4 text-lg leading-relaxed text-muted">
               Want something we don&apos;t currently sell? Tell us about your idea and we&apos;ll see if we can 3D
-              print it. We may not print your requested print.
+              print it. We may not print every request.
             </p>
-            {!showForm && !submitted && (
-              <Button
-                size="lg"
-                className="mt-8"
-                href={mailtoHref(contactEmail, {
-                  subject: '[PrintX] Custom print request',
-                  body: 'Hi PrintX,\n\nI have a custom print idea:\n\n',
-                })}
-              >
-                Request a Custom Print
-              </Button>
-            )}
-            {!showForm && !submitted && (
-              <button
-                type="button"
-                className="mt-3 block text-sm font-medium text-electric hover:underline"
-                onClick={() => setShowForm(true)}
-              >
-                Or fill in details first
-              </button>
-            )}
             {submitted && (
               <div className="mt-8 flex items-start gap-3 rounded-2xl border border-cyan/30 bg-cyan/5 p-5">
                 <CheckCircle2 size={22} className="mt-0.5 shrink-0 text-cyan" />
                 <div>
-                  <p className="font-semibold text-navy">Opening your email app…</p>
+                  <p className="font-semibold text-navy">Request submitted</p>
                   <p className="mt-1 text-sm leading-relaxed text-muted">
-                    Send the request to {contactEmail}. Attach a .STL/.OBJ in your mail app if you have one.
+                    Your idea is in our Custom Prints queue. A main admin will accept or decline it — we&apos;ll
+                    follow up by email.
                   </p>
                   <Button type="button" size="sm" className="mt-4" onClick={() => setSubmitted(false)}>
-                    Write another
+                    Submit another
                   </Button>
                 </div>
               </div>
             )}
           </ScrollReveal>
 
-          {showForm && (
+          {!submitted && (
             <ScrollReveal delay={150}>
-              <form className="rounded-2xl border border-slate-100 bg-white p-6 shadow-lg sm:p-8" onSubmit={handleSubmit}>
-                <div className="grid gap-4 sm:grid-cols-2">
+              <form
+                className="rounded-2xl border border-slate-100 bg-white p-6 shadow-lg sm:p-8"
+                onSubmit={handleSubmit}
+              >
+                <h3 className="font-semibold text-navy">Request a custom print</h3>
+                <p className="mt-1 text-sm text-muted">All fields below are required (file optional).</p>
+                {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-medium text-navy">Name</span>
                     <input name="name" required type="text" className="field-input" placeholder="Your name" />
@@ -103,30 +83,40 @@ export function CustomPrinting() {
                 </div>
                 <label className="mt-4 block">
                   <span className="mb-1.5 block text-sm font-medium text-navy">What would you like printed?</span>
-                  <input name="description" required type="text" className="field-input" placeholder="Describe your idea" />
+                  <textarea
+                    name="description"
+                    required
+                    rows={4}
+                    className="field-input"
+                    placeholder="Describe your idea"
+                  />
                 </label>
                 <label className="mt-4 block">
                   <span className="mb-1.5 block text-sm font-medium text-navy">Approximate size</span>
-                  <select name="size" className="field-input">
+                  <select name="size" required className="field-input" defaultValue="">
+                    <option value="" disabled>
+                      Select a size
+                    </option>
                     <option>Small (under 3 inches)</option>
                     <option>Medium (3–6 inches)</option>
                     <option>Large (6+ inches)</option>
                     <option>Not sure</option>
                   </select>
                 </label>
-                <p className="mt-3 text-xs text-muted">
-                  Your email app will open to {contactEmail}. Attach a .STL or .OBJ there if you have one.
-                </p>
-                <Button type="submit" size="lg" className="mt-4 w-full">
-                  Email request
+                <label className="mt-4 block">
+                  <span className="mb-1.5 block text-sm font-medium text-navy">
+                    Model file <span className="font-normal text-muted">(optional · .stl or .obj)</span>
+                  </span>
+                  <input
+                    name="file"
+                    type="file"
+                    accept=".stl,.obj,model/stl,model/obj"
+                    className="mt-1.5 block w-full text-sm text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-electric/10 file:px-3 file:py-2 file:text-sm file:font-medium file:text-electric"
+                  />
+                </label>
+                <Button type="submit" size="lg" className="mt-6 w-full" disabled={busy}>
+                  {busy ? 'Submitting…' : 'Submit request'}
                 </Button>
-                <button
-                  type="button"
-                  className="mt-3 w-full text-sm font-medium text-muted hover:text-navy"
-                  onClick={() => setShowForm(false)}
-                >
-                  Cancel
-                </button>
               </form>
             </ScrollReveal>
           )}

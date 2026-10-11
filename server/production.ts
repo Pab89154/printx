@@ -91,10 +91,11 @@ const server = http.createServer(async (req, res) => {
 
   // Lightweight wake probe — no DB. Used by the static-site cold-start shell.
   if (url === '/api/health' && method === 'GET') {
+    const { objectStorageHealth } = await import('./objectStorage.ts')
     res.statusCode = 200
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Cache-Control', 'no-store')
-    res.end(JSON.stringify({ ok: true }))
+    res.end(JSON.stringify({ ok: true, objectStorage: objectStorageHealth() }))
     return
   }
 

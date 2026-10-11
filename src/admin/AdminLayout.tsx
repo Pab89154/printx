@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   ClipboardCheck,
-  FileText,
   Inbox,
   LayoutDashboard,
   LogOut,
@@ -37,7 +36,6 @@ const links: {
   { section: 'approvals', label: 'Approvals & Pricing', icon: ClipboardCheck, perm: 'main_only' },
   { section: 'orders', label: 'Orders', icon: ShoppingBag, perm: 'orders' },
   { section: 'requests', label: 'Custom Requests', icon: Sparkles, perm: 'requests' },
-  { section: 'content', label: 'Website Content', icon: FileText, perm: 'content' },
   { section: 'settings', label: 'Settings', icon: Settings, perm: 'settings' },
 ]
 
