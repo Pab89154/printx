@@ -1639,7 +1639,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const printxPrinterId = sanitizeText(String(body.ownedPrinterId ?? ''), 60)
     const validPrinterIds = new Set(['pablo_p1s', 'court_ender', 'josh_kobra'])
     if (printxPrinterId && !validPrinterIds.has(printxPrinterId)) {
-      send(res, 400, { error: 'Pick a valid PrintX printer (P1S, Ender, or Kobra).' })
+      send(res, 400, { error: 'Pick a valid PrintX printer (P1S, Ender 3v2, or Anycubic Kobra X).' })
       return true
     }
 

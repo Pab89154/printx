@@ -349,8 +349,8 @@ export function AdminDesigns() {
                   </p>
                   {d.sliceStatus === 'ready' ? (
                     <p className="text-xs text-muted">
-                      P1S {d.gramsPabloP1s}g / {d.hoursPabloP1s}h · Ender {d.gramsCourtEnder}g /{' '}
-                      {d.hoursCourtEnder}h · Kobra {d.gramsJoshKobra}g / {d.hoursJoshKobra}h
+                      P1S {d.gramsPabloP1s}g / {d.hoursPabloP1s}h · Ender 3v2 {d.gramsCourtEnder}g /{' '}
+                      {d.hoursCourtEnder}h · Kobra X {d.gramsJoshKobra}g / {d.hoursJoshKobra}h
                     </p>
                   ) : null}
                   {d.sliceError ? <p className="whitespace-pre-wrap text-xs text-amber-700">{d.sliceError}</p> : null}

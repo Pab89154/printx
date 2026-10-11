@@ -19,7 +19,7 @@ import {
   buildSku,
   colorById,
   computeDesignPrice,
-  designHasCompletePrinterInputs,
+  designHasPricableInputs,
   getPricingSettings,
   listPrinters,
   rowToDesign,
@@ -51,8 +51,8 @@ const PRINTER_FIELD: Record<
   { grams: keyof Design; hours: keyof Design; label: string }
 > = {
   pablo_p1s: { grams: 'gramsPabloP1s', hours: 'hoursPabloP1s', label: 'Pablo P1S' },
-  court_ender: { grams: 'gramsCourtEnder', hours: 'hoursCourtEnder', label: 'Court Ender' },
-  josh_kobra: { grams: 'gramsJoshKobra', hours: 'hoursJoshKobra', label: 'Josh Kobra' },
+  court_ender: { grams: 'gramsCourtEnder', hours: 'hoursCourtEnder', label: 'Court Ender 3v2' },
+  josh_kobra: { grams: 'gramsJoshKobra', hours: 'hoursJoshKobra', label: 'Josh Anycubic Kobra X' },
 }
 
 function designDto(d: Design): Omit<Design, 'stlPath'> & { stlPath: ''; modelExt: string } {
@@ -883,8 +883,8 @@ export async function handleCatalogApi(
     let design = rowToDesign(existingRow)
 
     if (method === 'GET' && !action) {
-      const priced = designHasCompletePrinterInputs(design)
-        ? await computeDesignPrice(db, design)
+      const priced = designHasPricableInputs(design)
+        ? await computeDesignPrice(db, design).catch(() => null)
         : null
       send(res, 200, { design: designDto(design), preview: priced?.result ?? null })
       return true
@@ -1035,8 +1035,11 @@ export async function handleCatalogApi(
         send(res, 403, { error: 'Only the main admin can approve designs.' })
         return true
       }
-      if (!designHasCompletePrinterInputs(design)) {
-        send(res, 400, { error: 'Design is missing printer inputs or colors.' })
+      if (!designHasPricableInputs(design)) {
+        send(res, 400, {
+          error:
+            'Need colors and at least one printer quote. Link Cloud Slicer and use Re-quote missing.',
+        })
         return true
       }
       const { result, settings, printers } = await computeDesignPrice(db, design)

@@ -220,7 +220,9 @@ export async function seedCatalogDefaults(database: DbApi) {
     await database.run(
       `INSERT INTO printers (id, owner_label, model_name, avg_power_kw, active, owner_user_id)
        VALUES (?, ?, ?, ?, ?, NULL)
-       ON CONFLICT(id) DO NOTHING`,
+       ON CONFLICT(id) DO UPDATE SET
+         owner_label = excluded.owner_label,
+         model_name = excluded.model_name`,
       p.id,
       p.ownerLabel,
       p.modelName,
@@ -275,6 +277,7 @@ export async function listPrinters(database: DbApi): Promise<PrinterRow[]> {
   }))
 }
 
+/** True when every printer has grams/hours (legacy “full” quote). */
 export function designHasCompletePrinterInputs(d: Design): boolean {
   return (
     d.gramsPabloP1s != null &&
@@ -287,30 +290,51 @@ export function designHasCompletePrinterInputs(d: Design): boolean {
   )
 }
 
+/** Enough to price: colors + at least one printer with grams/hours. */
+export function designHasPricableInputs(d: Design): boolean {
+  if (d.availableColorIds.length === 0) return false
+  return (
+    (d.gramsPabloP1s != null && d.hoursPabloP1s != null) ||
+    (d.gramsCourtEnder != null && d.hoursCourtEnder != null) ||
+    (d.gramsJoshKobra != null && d.hoursJoshKobra != null)
+  )
+}
+
 export async function computeDesignPrice(database: DbApi, design: Design) {
   const settings = await getPricingSettings(database)
   const printers = await listPrinters(database)
   const byId = Object.fromEntries(printers.map((p) => [p.id, p]))
-  const inputs = [
+  const candidates = [
     {
       printerId: 'pablo_p1s',
-      grams: design.gramsPabloP1s ?? 0,
-      hours: design.hoursPabloP1s ?? 0,
+      grams: design.gramsPabloP1s,
+      hours: design.hoursPabloP1s,
       avgPowerKw: byId.pablo_p1s?.avgPowerKw ?? 0.22,
     },
     {
       printerId: 'court_ender',
-      grams: design.gramsCourtEnder ?? 0,
-      hours: design.hoursCourtEnder ?? 0,
+      grams: design.gramsCourtEnder,
+      hours: design.hoursCourtEnder,
       avgPowerKw: byId.court_ender?.avgPowerKw ?? 0.2,
     },
     {
       printerId: 'josh_kobra',
-      grams: design.gramsJoshKobra ?? 0,
-      hours: design.hoursJoshKobra ?? 0,
+      grams: design.gramsJoshKobra,
+      hours: design.hoursJoshKobra,
       avgPowerKw: byId.josh_kobra?.avgPowerKw ?? 0.25,
     },
   ]
+  const inputs = candidates
+    .filter((c) => c.grams != null && c.hours != null)
+    .map((c) => ({
+      printerId: c.printerId,
+      grams: c.grams as number,
+      hours: c.hours as number,
+      avgPowerKw: c.avgPowerKw,
+    }))
+  if (inputs.length === 0) {
+    throw new Error('No printer quotes available to price this design.')
+  }
   return { result: priceDesign(inputs, settings), settings, printers }
 }
 

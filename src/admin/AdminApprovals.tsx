@@ -7,15 +7,24 @@ import { BUILTIN_COLORS } from '../../shared/colors'
 import type { Design, PricingSettingsDto, PrinterDto } from '../types/catalog'
 import { StlViewer } from './StlViewer'
 
+/** Approve when at least one printer has grams/hours (others can fill in later). */
 function hasQuoteInputs(d: Design): boolean {
+  if (d.availableColorIds.length === 0) return false
+  return (
+    (d.gramsPabloP1s != null && d.hoursPabloP1s != null) ||
+    (d.gramsCourtEnder != null && d.hoursCourtEnder != null) ||
+    (d.gramsJoshKobra != null && d.hoursJoshKobra != null)
+  )
+}
+
+function designHasAllThree(d: Design): boolean {
   return (
     d.gramsPabloP1s != null &&
     d.hoursPabloP1s != null &&
     d.gramsCourtEnder != null &&
     d.hoursCourtEnder != null &&
     d.gramsJoshKobra != null &&
-    d.hoursJoshKobra != null &&
-    d.availableColorIds.length > 0
+    d.hoursJoshKobra != null
   )
 }
 
@@ -126,8 +135,8 @@ export function AdminApprovals() {
                           SKU {d.skuBase} · colors {d.availableColorIds.join(', ') || '—'}
                         </p>
                         <p className="mt-1 text-xs text-muted">
-                          P1S {d.gramsPabloP1s ?? '—'}g / {d.hoursPabloP1s ?? '—'}h · Ender{' '}
-                          {d.gramsCourtEnder ?? '—'}g / {d.hoursCourtEnder ?? '—'}h · Kobra{' '}
+                          P1S {d.gramsPabloP1s ?? '—'}g / {d.hoursPabloP1s ?? '—'}h · Ender 3v2{' '}
+                          {d.gramsCourtEnder ?? '—'}g / {d.hoursCourtEnder ?? '—'}h · Kobra X{' '}
                           {d.gramsJoshKobra ?? '—'}g / {d.hoursJoshKobra ?? '—'}h
                         </p>
                         {d.sliceError ? (
@@ -135,8 +144,13 @@ export function AdminApprovals() {
                         ) : null}
                         {!ready ? (
                           <p className="mt-2 text-xs text-amber-700">
-                            Quotes incomplete — run Re-quote (needs Cloud Slicer on all 3 printers)
-                            before Approve.
+                            No printer quotes yet — link at least one admin Cloud Slicer account, then
+                            Re-quote missing. You can approve once any printer has grams/hours.
+                          </p>
+                        ) : !designHasAllThree(d) ? (
+                          <p className="mt-2 text-xs text-muted">
+                            Pricing uses the worst quoted printer so far. Missing printers can fill in
+                            later when their Cloud Slicer is set up.
                           </p>
                         ) : null}
                         {d.description ? (

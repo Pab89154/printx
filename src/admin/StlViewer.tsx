@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
@@ -12,10 +12,14 @@ type Props = {
 /** Interactive STL preview for admin Approvals / Designs. */
 export function StlViewer({ url, className = '', height = 280 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     const host = hostRef.current
     if (!host || !url) return
+
+    let cancelled = false
+    setError('')
 
     const width = host.clientWidth || 320
     const scene = new THREE.Scene()
@@ -40,16 +44,23 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
 
     let mesh: THREE.Mesh | null = null
     let frame = 0
-    let cancelled = false
 
     const loader = new STLLoader()
-    loader.load(
-      url,
-      (geometry) => {
-        if (cancelled) {
-          geometry.dispose()
-          return
+
+    void (async () => {
+      try {
+        // Must include cookies — /api/admin/designs/:id/stl is session-auth.
+        const res = await fetch(url, { credentials: 'include' })
+        if (!res.ok) {
+          throw new Error(
+            res.status === 404
+              ? 'Model file missing on server — re-upload the STL on Designs.'
+              : `Could not load model (${res.status}).`,
+          )
         }
+        const buffer = await res.arrayBuffer()
+        if (cancelled) return
+        const geometry = loader.parse(buffer)
         geometry.computeVertexNormals()
         geometry.center()
         const material = new THREE.MeshStandardMaterial({
@@ -66,12 +77,12 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
         camera.position.set(dist * 0.7, dist * 0.55, dist)
         controls.target.set(0, 0, 0)
         controls.update()
-      },
-      undefined,
-      () => {
-        /* load error — leave empty canvas */
-      },
-    )
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Could not load 3D preview.')
+        }
+      }
+    })()
 
     const tick = () => {
       frame = requestAnimationFrame(tick)
@@ -104,10 +115,13 @@ export function StlViewer({ url, className = '', height = 280 }: Props) {
   }, [url, height])
 
   return (
-    <div
-      ref={hostRef}
-      className={`overflow-hidden rounded-xl border border-slate-200 bg-slate-100 ${className}`}
-      style={{ height }}
-    />
+    <div className={className}>
+      <div
+        ref={hostRef}
+        className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+        style={{ height }}
+      />
+      {error ? <p className="mt-2 text-xs text-amber-700">{error}</p> : null}
+    </div>
   )
 }

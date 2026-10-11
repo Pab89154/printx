@@ -68,14 +68,14 @@ export const DEFAULT_PRINTERS: Omit<PrinterRow, 'ownerUserId'>[] = [
   {
     id: 'court_ender',
     ownerLabel: 'Court',
-    modelName: 'Ender S1 Pro',
+    modelName: 'Ender 3v2',
     avgPowerKw: 0.2,
     active: true,
   },
   {
     id: 'josh_kobra',
     ownerLabel: 'Josh',
-    modelName: 'Kobra X Combo',
+    modelName: 'Anycubic Kobra X',
     avgPowerKw: 0.25,
     active: true,
   },
