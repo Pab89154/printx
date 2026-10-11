@@ -53,10 +53,20 @@ import {
   sendStoredFile,
   uploadStoredFile,
 } from './objectStorage.ts'
+import {
+  clearCustomRequestSliceArtifacts,
+  downloadCustomRequestGcode,
+  mapCustomRequestRow,
+  quoteCustomRequest,
+} from './customRequestSlice.ts'
+import { publicOrigin, stripeClient } from './catalogApi.ts'
+import { roundMoney } from './pricing.ts'
 
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
+const CUSTOM_REQUEST_MODEL_EXT = new Set(['.stl', '.obj', '.3mf'])
 const ALLOWED_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+const MAX_CUSTOM_MODEL_BYTES = 50 * 1024 * 1024
 const IMAGE_MIME: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -162,7 +172,11 @@ function publicStand(row: ReturnType<typeof rowToStand>) {
 
 async function parseMultipart(
   req: IncomingMessage,
-  opts?: { allowedExt?: Set<string>; invalidTypeMessage?: string },
+  opts?: {
+    allowedExt?: Set<string>
+    invalidTypeMessage?: string
+    maxFileSize?: number
+  },
 ): Promise<{ fields: Record<string, string>; filePath: string | null }> {
   const allowedExt = opts?.allowedExt ?? ALLOWED_UPLOAD_EXT
   const invalidTypeMessage = opts?.invalidTypeMessage ?? 'Invalid file type. Only .stl and .obj allowed.'
@@ -170,7 +184,7 @@ async function parseMultipart(
   const form = formidable({
     uploadDir: uploadsDir,
     keepExtensions: true,
-    maxFileSize: MAX_UPLOAD_BYTES,
+    maxFileSize: opts?.maxFileSize ?? MAX_UPLOAD_BYTES,
     multiples: false,
   })
 
@@ -500,23 +514,34 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/public/custom-requests' && method === 'POST') {
     try {
-      const { fields, filePath } = await parseMultipart(req)
+      const { fields, filePath } = await parseMultipart(req, {
+        allowedExt: CUSTOM_REQUEST_MODEL_EXT,
+        invalidTypeMessage: 'Invalid file type. Upload .stl, .3mf, or .obj.',
+        maxFileSize: MAX_CUSTOM_MODEL_BYTES,
+      })
       const now = new Date().toISOString()
       const id = randomUUID()
-      const name = sanitizeText(fields.name, 120)
-      const email = sanitizeEmail(fields.email)
+      // Name/email come from Stripe Checkout after Pay — optional on estimate.
+      const name = sanitizeText(fields.name, 120) || 'Customer'
+      const email = sanitizeEmail(fields.email) || ''
       const school = sanitizeText(fields.school, 200)
-      const description = sanitizeText(fields.description, 3000)
-      const size = sanitizeText(fields.size, 100)
-      if (!name || !email || !description || !size) {
-        send(res, 400, { error: 'Name, email, description, and size are required.' })
+      if (!filePath) {
+        send(res, 400, { error: 'A 3D model file (.stl or .3mf preferred) is required.' })
         return true
       }
-      // Portal Custom Requests only — do not email hello@printx.pw.
+      // Description/size come from the model file; keep optional DB fields filled for display.
+      const description =
+        sanitizeText(fields.description, 3000) || `Custom model: ${filePath}`
+      const size = sanitizeText(fields.size, 100) || 'From model file'
+      // Estimate draft — not in admin queue until Stripe payment succeeds.
       await db.run(
         `
-        INSERT INTO custom_requests (id, name, email, school, description, size, uploaded_file, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
+        INSERT INTO custom_requests (
+          id, name, email, school, description, size, uploaded_file, status,
+          slice_status, slice_error, quote_ids_json, file_ids_json,
+          created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', 'slicing', '', '{}', '{}', ?, ?)
       `,
         id,
         name,
@@ -528,10 +553,142 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         now,
         now,
       )
-      send(res, 201, { ok: true, id })
+      void (async () => {
+        try {
+          const bg = await getDb()
+          await quoteCustomRequest(bg, id)
+        } catch (err) {
+          console.error('[custom-request] background quote failed:', err)
+        }
+      })()
+      send(res, 201, { ok: true, id, sliceStatus: 'slicing' })
     } catch (e) {
       send(res, 400, { error: e instanceof Error ? e.message : 'Upload failed' })
     }
+    return true
+  }
+
+  const publicCustomStatusMatch = /^\/api\/public\/custom-requests\/([^/]+)$/.exec(urlPath)
+  if (publicCustomStatusMatch && method === 'GET') {
+    const id = publicCustomStatusMatch[1]!
+    const row = await db.get<Record<string, unknown>>(
+      'SELECT id, slice_status, slice_error, catalog_price_usd, status FROM custom_requests WHERE id = ?',
+      id,
+    )
+    if (!row) {
+      send(res, 404, { error: 'Request not found' })
+      return true
+    }
+    send(res, 200, {
+      id: String(row.id),
+      sliceStatus: String(row.slice_status || 'idle'),
+      catalogPriceUsd: row.catalog_price_usd == null ? null : Number(row.catalog_price_usd),
+      error: String(row.slice_error || '') || undefined,
+      status: String(row.status || 'awaiting_payment'),
+    })
+    return true
+  }
+
+  const publicCustomCheckoutMatch = /^\/api\/public\/custom-requests\/([^/]+)\/checkout$/.exec(urlPath)
+  if (publicCustomCheckoutMatch && method === 'POST') {
+    const stripe = stripeClient()
+    if (!stripe) {
+      send(res, 503, { error: 'Stripe is not configured (STRIPE_SECRET_KEY).' })
+      return true
+    }
+    const id = publicCustomCheckoutMatch[1]!
+    const row = await db.get<Record<string, unknown>>(
+      'SELECT * FROM custom_requests WHERE id = ?',
+      id,
+    )
+    if (!row) {
+      send(res, 404, { error: 'Estimate not found' })
+      return true
+    }
+    if (String(row.status) !== 'awaiting_payment') {
+      send(res, 400, { error: 'This estimate is no longer available for checkout.' })
+      return true
+    }
+    if (String(row.slice_status) !== 'ready' || row.catalog_price_usd == null) {
+      send(res, 400, { error: 'Price is not ready yet. Wait for the estimate to finish.' })
+      return true
+    }
+    const price = roundMoney(Number(row.catalog_price_usd))
+    if (!(price > 0)) {
+      send(res, 400, { error: 'Invalid estimate price.' })
+      return true
+    }
+    const email = sanitizeEmail(String(row.email || ''))
+    const origin = publicOrigin(req)
+    const successUrl =
+      process.env.STRIPE_SUCCESS_URL?.trim() ||
+      `${origin}/order/success?session_id={CHECKOUT_SESSION_ID}`
+    const cancelUrl = `${origin}/#custom`
+
+    try {
+      const session = await stripe.checkout.sessions.create({
+        mode: 'payment',
+        // Stripe Checkout collects name + email.
+        ...(email ? { customer_email: email } : {}),
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        client_reference_id: id,
+        metadata: { customRequestId: id },
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: 'usd',
+              unit_amount: Math.round(price * 100),
+              product_data: {
+                name: 'Custom 3D print',
+                description: sanitizeText(String(row.description || ''), 200) || 'Custom 3D print',
+              },
+            },
+          },
+        ],
+      })
+      await db.run(
+        `UPDATE custom_requests SET stripe_session_id = ?, updated_at = ? WHERE id = ?`,
+        session.id,
+        new Date().toISOString(),
+        id,
+      )
+      send(res, 200, { url: session.url, sessionId: session.id })
+    } catch (err) {
+      send(res, 400, { error: err instanceof Error ? err.message : 'Checkout failed' })
+    }
+    return true
+  }
+
+  const publicCustomCancelMatch = /^\/api\/public\/custom-requests\/([^/]+)\/cancel$/.exec(urlPath)
+  if (publicCustomCancelMatch && method === 'POST') {
+    const id = publicCustomCancelMatch[1]!
+    const row = await db.get<{ status: string; uploaded_file: string | null }>(
+      'SELECT status, uploaded_file FROM custom_requests WHERE id = ?',
+      id,
+    )
+    if (!row) {
+      send(res, 404, { error: 'Estimate not found' })
+      return true
+    }
+    if (row.status !== 'awaiting_payment') {
+      send(res, 400, { error: 'Only unpaid estimates can be cancelled.' })
+      return true
+    }
+    await clearCustomRequestSliceArtifacts(db, id)
+    await db.run('DELETE FROM custom_requests WHERE id = ?', id)
+    const fileName = row.uploaded_file?.trim()
+    if (fileName && !fileName.includes('..') && !fileName.includes('/') && !fileName.includes('\\')) {
+      try {
+        const uploadsDir = await getUploadsDir()
+        const full = path.join(uploadsDir, fileName)
+        if (full.startsWith(uploadsDir) && fs.existsSync(full)) fs.unlinkSync(full)
+      } catch {
+        /* ignore */
+      }
+    }
+    send(res, 200, { ok: true })
     return true
   }
 
@@ -640,7 +797,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     }
     if (!requirePerm(adminUser, 'requests', res)) return true
     const filename = uploadMatch[1] ?? ''
-    if (!/^[\w-]+\.(stl|obj)$/i.test(filename)) {
+    if (!/^[\w-]+\.(stl|obj|3mf)$/i.test(filename)) {
       send(res, 400, { error: 'Invalid file name' })
       return true
     }
@@ -932,7 +1089,65 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/admin/custom-requests' && method === 'GET') {
     if (!requirePerm(admin, 'requests', res)) return true
-    send(res, 200, await db.all('SELECT * FROM custom_requests ORDER BY created_at DESC'))
+    // Hide unpaid estimates — they enter the queue after Stripe payment (status → new).
+    const rows = await db.all<Record<string, unknown>>(
+      `SELECT * FROM custom_requests
+       WHERE status != 'awaiting_payment'
+       ORDER BY created_at DESC`,
+    )
+    send(
+      res,
+      200,
+      rows.map((r) => {
+        const mapped = mapCustomRequestRow(r)
+        return {
+          id: mapped.id,
+          name: mapped.name,
+          email: mapped.email,
+          school: mapped.school,
+          description: mapped.description,
+          size: mapped.size,
+          uploaded_file: mapped.uploaded_file,
+          status: mapped.status,
+          slice_status: mapped.slice_status,
+          slice_error: mapped.slice_error,
+          grams_pablo_p1s: mapped.grams_pablo_p1s,
+          hours_pablo_p1s: mapped.hours_pablo_p1s,
+          grams_court_ender: mapped.grams_court_ender,
+          hours_court_ender: mapped.hours_court_ender,
+          grams_josh_kobra: mapped.grams_josh_kobra,
+          hours_josh_kobra: mapped.hours_josh_kobra,
+          worst_printer_id: mapped.worst_printer_id,
+          worst_cost_usd: mapped.worst_cost_usd,
+          catalog_price_usd: mapped.catalog_price_usd,
+          quoted_at: mapped.quoted_at,
+          has_gcode: Object.keys(mapped.quote_ids).length > 0,
+          created_at: mapped.created_at,
+          updated_at: mapped.updated_at,
+        }
+      }),
+    )
+    return true
+  }
+
+  const adminCustomGcodeMatch = /^\/api\/admin\/custom-requests\/([^/]+)\/gcode$/.exec(urlPath)
+  if (adminCustomGcodeMatch && method === 'GET') {
+    if (!requirePerm(admin, 'requests', res)) return true
+    if (!admin.isMainAdmin) {
+      send(res, 403, { error: 'Only the main admin can download sliced G-code.' })
+      return true
+    }
+    const id = adminCustomGcodeMatch[1]!
+    try {
+      const { buffer, filename } = await downloadCustomRequestGcode(db, id)
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'application/octet-stream')
+      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`)
+      res.setHeader('Cache-Control', 'private, no-store')
+      res.end(buffer)
+    } catch (err) {
+      send(res, 400, { error: err instanceof Error ? err.message : 'G-code download failed' })
+    }
     return true
   }
 
@@ -1510,17 +1725,50 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
   }
 
   const requestMatch = urlPath.match(/^\/api\/admin\/custom-requests\/([^/]+)$/)
-  if (requestMatch && method === 'PATCH') {
+  if (requestMatch && (method === 'PATCH' || method === 'DELETE')) {
     if (!requirePerm(admin, 'requests', res)) return true
-    const id = requestMatch[1]
+    const id = requestMatch[1]!
+
+    if (method === 'DELETE') {
+      const row = await db.get<{ uploaded_file: string | null }>(
+        'SELECT uploaded_file FROM custom_requests WHERE id = ?',
+        id,
+      )
+      if (!row) {
+        send(res, 404, { error: 'Request not found' })
+        return true
+      }
+      // Clear CS artifacts before removing the row.
+      await clearCustomRequestSliceArtifacts(db, id)
+      await db.run('DELETE FROM custom_requests WHERE id = ?', id)
+      const fileName = row.uploaded_file?.trim()
+      if (fileName && !fileName.includes('..') && !fileName.includes('/') && !fileName.includes('\\')) {
+        try {
+          const uploadsDir = await getUploadsDir()
+          const full = path.join(uploadsDir, fileName)
+          if (full.startsWith(uploadsDir) && fs.existsSync(full)) fs.unlinkSync(full)
+        } catch {
+          /* best-effort local cleanup */
+        }
+      }
+      send(res, 200, { ok: true })
+      return true
+    }
+
     const body = await readJson(req)
-    const status = ['new', 'reviewing', 'approved', 'declined', 'completed'].includes(String(body.status))
+    const status = ['new', 'reviewing', 'approved', 'declined', 'completed', 'awaiting_payment'].includes(
+      String(body.status),
+    )
       ? (body.status as RequestStatus)
       : 'new'
     // Accept / decline (and other status changes) are main-admin only.
     if (!admin.isMainAdmin) {
       send(res, 403, { error: 'Only the main admin can accept or decline custom print requests.' })
       return true
+    }
+    if (status === 'declined') {
+      // Keep contact info; only remove Cloud Slicer sliced artifacts.
+      await clearCustomRequestSliceArtifacts(db, id)
     }
     await db.run('UPDATE custom_requests SET status = ?, updated_at = ? WHERE id = ?', status, new Date().toISOString(), id)
     send(res, 200, { ok: true })

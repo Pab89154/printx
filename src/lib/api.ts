@@ -22,7 +22,25 @@ export const api = {
       fetch('/api/public/custom-requests', { method: 'POST', body: formData, credentials: 'include' }).then(async (res) => {
         const data = await res.json()
         if (!res.ok) throw new Error(data.error ?? 'Request failed')
-        return data
+        return data as { ok: true; id: string; sliceStatus: string }
+      }),
+    customRequestStatus: (id: string) =>
+      request<{
+        id: string
+        sliceStatus: string
+        catalogPriceUsd: number | null
+        error?: string
+        status: string
+      }>(`/api/public/custom-requests/${id}`),
+    customRequestCheckout: (id: string) =>
+      request<{ url: string; sessionId: string }>(`/api/public/custom-requests/${id}/checkout`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }),
+    customRequestCancel: (id: string) =>
+      request<{ ok: true }>(`/api/public/custom-requests/${id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({}),
       }),
   },
   catalog: {
@@ -32,8 +50,8 @@ export const api = {
         colors: import('../types/catalog.ts').CatalogColor[]
       }>('/api/public/catalog'),
     checkout: (body: {
-      customerName: string
-      customerEmail: string
+      customerName?: string
+      customerEmail?: string
       items: { designId: string; colorId: string; qty: number }[]
     }) =>
       request<{ url: string; orderId: string; sessionId: string }>('/api/public/checkout', {
@@ -207,6 +225,24 @@ export const api = {
       list: () => request<import('../types/api.ts').CustomRequest[]>('/api/admin/custom-requests'),
       updateStatus: (id: string, status: string) =>
         request(`/api/admin/custom-requests/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+      delete: (id: string) => request(`/api/admin/custom-requests/${id}`, { method: 'DELETE' }),
+      downloadGcode: async (id: string) => {
+        const res = await fetch(`/api/admin/custom-requests/${id}/gcode`, { credentials: 'include' })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error((data as { error?: string }).error ?? 'G-code download failed')
+        }
+        const blob = await res.blob()
+        const disposition = res.headers.get('content-disposition') || ''
+        const match = /filename="?([^"]+)"?/i.exec(disposition)
+        const filename = match?.[1] || `printx-custom-${id.slice(0, 8)}.gcode`
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = filename
+        a.click()
+        URL.revokeObjectURL(url)
+      },
     },
     messages: {
       list: () => request<import('../types/api.ts').ContactMessage[]>('/api/admin/contact-messages'),

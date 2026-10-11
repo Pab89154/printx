@@ -1,6 +1,12 @@
 export type StandStatus = 'upcoming' | 'active' | 'past'
 
-export type RequestStatus = 'new' | 'reviewing' | 'approved' | 'declined' | 'completed'
+export type RequestStatus =
+  | 'awaiting_payment'
+  | 'new'
+  | 'reviewing'
+  | 'approved'
+  | 'declined'
+  | 'completed'
 
 export type User = {
   id: string

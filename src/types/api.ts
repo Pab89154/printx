@@ -1,5 +1,11 @@
 export type StandStatus = 'upcoming' | 'active' | 'past'
-export type RequestStatus = 'new' | 'reviewing' | 'approved' | 'declined' | 'completed'
+export type RequestStatus =
+  | 'awaiting_payment'
+  | 'new'
+  | 'reviewing'
+  | 'approved'
+  | 'declined'
+  | 'completed'
 
 export type PublicStand = {
   id: string
@@ -83,6 +89,19 @@ export type CustomRequest = {
   size: string
   uploaded_file: string | null
   status: RequestStatus
+  slice_status: string
+  slice_error: string
+  grams_pablo_p1s: number | null
+  hours_pablo_p1s: number | null
+  grams_court_ender: number | null
+  hours_court_ender: number | null
+  grams_josh_kobra: number | null
+  hours_josh_kobra: number | null
+  worst_printer_id: string | null
+  worst_cost_usd: number | null
+  catalog_price_usd: number | null
+  quoted_at: string | null
+  has_gcode: boolean
   created_at: string
   updated_at: string
 }

@@ -153,3 +153,61 @@ export async function quoteStlForPrinter(
   const { grams, hours } = extractGramsHours(quote)
   return { grams, hours, quoteId, fileId }
 }
+
+/** Download sliced G-code for a successful quote. */
+export async function downloadQuoteGcode(
+  creds: CloudSlicerCreds,
+  quoteId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const id = quoteId.trim()
+  if (!id) throw new Error('Missing Cloud Slicer quote id.')
+  const res = await fetch(`${apiBase()}/v1/quote/output/${encodeURIComponent(id)}`, {
+    headers: authHeaders(creds.token),
+  })
+  if (!res.ok) {
+    const data = await readJsonSafe(res)
+    throw new Error(
+      String(data.error || data.message || data.detail || `G-code download failed (${res.status})`),
+    )
+  }
+  const disposition = res.headers.get('content-disposition') || ''
+  const match = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(disposition)
+  const filename = match?.[1]
+    ? decodeURIComponent(match[1].replace(/"/g, '').trim())
+    : `${id}.gcode`
+  const buffer = Buffer.from(await res.arrayBuffer())
+  if (!buffer.length) throw new Error('Cloud Slicer returned an empty G-code file.')
+  return { buffer, filename: filename.endsWith('.gcode') ? filename : `${filename}.gcode` }
+}
+
+/** Delete a quote record and its G-code on Cloud Slicer. */
+export async function deleteQuote(creds: CloudSlicerCreds, quoteId: string): Promise<void> {
+  const id = quoteId.trim()
+  if (!id) return
+  const res = await fetch(`${apiBase()}/v1/quote/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(creds.token),
+  })
+  if (!res.ok && res.status !== 404) {
+    const data = await readJsonSafe(res)
+    throw new Error(
+      String(data.error || data.message || data.detail || `Quote delete failed (${res.status})`),
+    )
+  }
+}
+
+/** Delete an uploaded source file on Cloud Slicer. */
+export async function deleteCloudSlicerFile(creds: CloudSlicerCreds, fileId: string): Promise<void> {
+  const id = fileId.trim()
+  if (!id) return
+  const res = await fetch(`${apiBase()}/v1/file/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(creds.token),
+  })
+  if (!res.ok && res.status !== 404) {
+    const data = await readJsonSafe(res)
+    throw new Error(
+      String(data.error || data.message || data.detail || `File delete failed (${res.status})`),
+    )
+  }
+}

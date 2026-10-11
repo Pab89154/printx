@@ -12,7 +12,7 @@ export function OrderSuccess() {
       <main className="mx-auto max-w-lg px-4 py-20 text-center">
         <h1 className="text-3xl font-extrabold text-navy">Thanks for your order!</h1>
         <p className="mt-4 text-muted">
-          Payment received. PrintX will print your design and follow up by email.
+          Payment received. PrintX will review your order (shop or custom print) and follow up by email.
         </p>
         {sessionId ? (
           <p className="mt-2 break-all text-xs text-muted">Stripe session: {sessionId}</p>

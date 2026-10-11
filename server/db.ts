@@ -88,6 +88,22 @@ async function migrate(database: DbApi) {
       size TEXT NOT NULL DEFAULT '',
       uploaded_file TEXT,
       status TEXT NOT NULL DEFAULT 'new',
+      slice_status TEXT NOT NULL DEFAULT 'idle',
+      slice_error TEXT NOT NULL DEFAULT '',
+      grams_pablo_p1s REAL,
+      hours_pablo_p1s REAL,
+      grams_court_ender REAL,
+      hours_court_ender REAL,
+      grams_josh_kobra REAL,
+      hours_josh_kobra REAL,
+      quote_ids_json TEXT NOT NULL DEFAULT '{}',
+      file_ids_json TEXT NOT NULL DEFAULT '{}',
+      worst_printer_id TEXT,
+      worst_cost_usd REAL,
+      catalog_price_usd REAL,
+      quoted_at TEXT,
+      stripe_session_id TEXT,
+      paid_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -403,6 +419,34 @@ async function migrateDesignStl(database: DbApi) {
   }
 }
 
+async function migrateCustomRequestQuotes(database: DbApi) {
+  const cols: [string, string][] = [
+    ['slice_status', `TEXT NOT NULL DEFAULT 'idle'`],
+    ['slice_error', `TEXT NOT NULL DEFAULT ''`],
+    ['grams_pablo_p1s', 'REAL'],
+    ['hours_pablo_p1s', 'REAL'],
+    ['grams_court_ender', 'REAL'],
+    ['hours_court_ender', 'REAL'],
+    ['grams_josh_kobra', 'REAL'],
+    ['hours_josh_kobra', 'REAL'],
+    ['quote_ids_json', `TEXT NOT NULL DEFAULT '{}'`],
+    ['file_ids_json', `TEXT NOT NULL DEFAULT '{}'`],
+    ['worst_printer_id', 'TEXT'],
+    ['worst_cost_usd', 'REAL'],
+    ['catalog_price_usd', 'REAL'],
+    ['quoted_at', 'TEXT'],
+    ['stripe_session_id', 'TEXT'],
+    ['paid_at', 'TEXT'],
+  ]
+  for (const [name, def] of cols) {
+    try {
+      await database.exec(`ALTER TABLE custom_requests ADD COLUMN ${name} ${def}`)
+    } catch {
+      /* column already exists */
+    }
+  }
+}
+
 async function migrateContactMessagesStatus(database: DbApi) {
   try {
     await database.exec(
@@ -695,6 +739,7 @@ async function initDb(): Promise<DbApi> {
   await migrate(database)
   await migrateUserAuth(database)
   await migrateDesignStl(database)
+  await migrateCustomRequestQuotes(database)
   await migrateContactMessagesStatus(database)
   await migrateMailArchive(database)
   await migrateMailTrash(database)

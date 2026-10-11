@@ -7,8 +7,6 @@ import { Footer } from '../components/Footer'
 
 export function Cart() {
   const { lines, setQty, remove, subtotal, clear } = useCart()
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -17,8 +15,6 @@ export function Cart() {
     setError('')
     try {
       const { url } = await api.catalog.checkout({
-        customerName: name,
-        customerEmail: email,
         items: lines.map((l) => ({
           designId: l.designId,
           colorId: l.colorId,
@@ -94,34 +90,16 @@ export function Cart() {
               Subtotal ${subtotal.toFixed(2)}
             </p>
 
-            <div className="mt-8 grid gap-3 rounded-2xl border bg-white p-6 sm:grid-cols-2">
-              <label className="text-sm font-medium">
-                Name
-                <input
-                  required
-                  className="mt-1 w-full rounded-xl border px-3 py-2"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </label>
-              <label className="text-sm font-medium">
-                Email
-                <input
-                  required
-                  type="email"
-                  className="mt-1 w-full rounded-xl border px-3 py-2"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </label>
-            </div>
+            <p className="mt-4 text-sm text-muted">
+              Name and email are collected securely on the Checkout page.
+            </p>
 
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
             <button
               type="button"
               className="btn btn-primary mt-6 w-full"
-              disabled={busy || !email}
+              disabled={busy}
               onClick={() => void checkout()}
             >
               {busy ? 'Redirecting…' : 'Checkout'}

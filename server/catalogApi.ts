@@ -349,13 +349,13 @@ async function requireAdmin(req: IncomingMessage): Promise<SessionAdmin | null> 
   return getSessionUser(cookies[SESSION_COOKIE] ?? null)
 }
 
-function stripeClient(): Stripe | null {
+export function stripeClient(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY?.trim()
   if (!key) return null
   return new Stripe(key)
 }
 
-function publicOrigin(req: IncomingMessage): string {
+export function publicOrigin(req: IncomingMessage): string {
   const env = process.env.PRINTX_PUBLIC_ORIGIN?.trim()
   if (env) return env.replace(/\/$/, '')
   const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim() || 'http'
@@ -568,11 +568,12 @@ export async function handleCatalogApi(
       return true
     }
     const body = await readJson(req)
+    // Name/email are collected by Stripe Checkout — optional if the client still sends them.
     const customerName = sanitizeText(String(body.customerName ?? ''), 120)
     const customerEmail = sanitizeEmail(String(body.customerEmail ?? ''))
     const itemsIn = Array.isArray(body.items) ? body.items : []
-    if (!customerEmail || itemsIn.length === 0) {
-      send(res, 400, { error: 'Name, email, and at least one item are required.' })
+    if (itemsIn.length === 0) {
+      send(res, 400, { error: 'At least one item is required.' })
       return true
     }
     const settings = await getPricingSettings(db)
@@ -635,7 +636,7 @@ export async function handleCatalogApi(
       ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 'usd', ?, ?, NULL)`,
       orderId,
       customerName || 'Customer',
-      customerEmail,
+      customerEmail || '',
       'pending_payment',
       subtotal,
       subtotal,
@@ -669,7 +670,8 @@ export async function handleCatalogApi(
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      customer_email: customerEmail,
+      // Let Stripe collect name/email on the Checkout page.
+      ...(customerEmail ? { customer_email: customerEmail } : {}),
       success_url: successUrl,
       cancel_url: cancelUrl,
       client_reference_id: orderId,
@@ -721,17 +723,56 @@ export async function handleCatalogApi(
     }
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as Stripe.Checkout.Session
-      const orderId = session.metadata?.orderId || session.client_reference_id
-      if (orderId) {
-        const now = new Date().toISOString()
+      const now = new Date().toISOString()
+      const paymentIntent =
+        typeof session.payment_intent === 'string' ? session.payment_intent : null
+      const stripeEmail =
+        session.customer_details?.email?.trim() ||
+        session.customer_email?.trim() ||
+        ''
+      const stripeName = session.customer_details?.name?.trim() || ''
+      const customRequestId = session.metadata?.customRequestId?.trim()
+      if (customRequestId) {
         await db.run(
-          `UPDATE orders SET status = 'paid', stripe_payment_intent = ?, paid_at = ?, updated_at = ?
-           WHERE id = ? AND status = 'pending_payment'`,
-          typeof session.payment_intent === 'string' ? session.payment_intent : null,
+          `UPDATE custom_requests SET
+            status = 'new',
+            name = CASE WHEN ? != '' THEN ? ELSE name END,
+            email = CASE WHEN ? != '' THEN ? ELSE email END,
+            stripe_session_id = ?,
+            paid_at = ?,
+            updated_at = ?
+           WHERE id = ? AND status = 'awaiting_payment'`,
+          stripeName,
+          stripeName,
+          stripeEmail,
+          stripeEmail,
+          session.id,
           now,
           now,
-          orderId,
+          customRequestId,
         )
+      } else {
+        const orderId = session.metadata?.orderId || session.client_reference_id
+        if (orderId) {
+          await db.run(
+            `UPDATE orders SET
+              status = 'paid',
+              customer_name = CASE WHEN ? != '' THEN ? ELSE customer_name END,
+              customer_email = CASE WHEN ? != '' THEN ? ELSE customer_email END,
+              stripe_payment_intent = ?,
+              paid_at = ?,
+              updated_at = ?
+             WHERE id = ? AND status = 'pending_payment'`,
+            stripeName,
+            stripeName,
+            stripeEmail,
+            stripeEmail,
+            paymentIntent,
+            now,
+            now,
+            orderId,
+          )
+        }
       }
     }
     send(res, 200, { received: true })
