@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import { api } from '../lib/api'
+import { colorSwatchStyle } from '../../shared/colors'
 import type { CatalogColor, PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
@@ -52,7 +53,18 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
       </Link>
 
       <div className="px-4 pb-4 pt-3">
-        {design.availableColors.length > 0 ? (
+        {design.multicolorOnly ||
+        (design.availableColors.length === 1 && design.availableColors[0]?.id === 'multicolor') ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="h-5 w-5 rounded-full border border-slate-200 shadow-sm"
+              style={colorSwatchStyle(design.availableColors[0] ?? { id: 'multicolor', hex: '#7C3AED' })}
+              title="Multicolor"
+              aria-hidden
+            />
+            <span className="text-xs text-muted">Multicolor</span>
+          </div>
+        ) : design.availableColors.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2">
             {design.availableColors.map((c) => {
               const selected = previewColor?.id === c.id
@@ -68,7 +80,7 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
                       ? 'scale-110 ring-2 ring-electric ring-offset-1'
                       : 'border-slate-200 hover:scale-105'
                   }`}
-                  style={{ background: c.hex }}
+                  style={colorSwatchStyle(c)}
                   onClick={(e) => {
                     e.preventDefault()
                     e.stopPropagation()
@@ -127,7 +139,7 @@ export function Shop() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search by name, category, or SKU…"
             autoComplete="off"
-            className="field-input w-full !py-3 pl-10 pr-4"
+            className="field-input w-full !py-3 !pl-10 pr-4"
           />
         </label>
 

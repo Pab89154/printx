@@ -105,6 +105,26 @@ export const api = {
       ),
     logout: () =>
       request<{ ok: true }>('/api/public/auth/logout', { method: 'POST', body: '{}' }),
+    updateProfile: (name: string) =>
+      request<{ customer: { id: string; email: string; displayName: string | null } }>(
+        '/api/public/account/profile',
+        { method: 'PATCH', body: JSON.stringify({ name }) },
+      ),
+    updatePassword: (currentPassword: string, newPassword: string) =>
+      request<{ ok: true }>('/api/public/account/password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+    discounts: () =>
+      request<{
+        discounts: {
+          code: string
+          kind: string
+          percentOff: number | null
+          amountOffCents: number | null
+          maxRedemptions: number | null
+        }[]
+      }>('/api/public/account/discounts'),
     orders: () =>
       request<{ shopOrders: unknown[]; customOrders: unknown[] }>('/api/public/account/orders'),
     requestShopRefund: (orderId: string, reason: string) =>
@@ -159,6 +179,7 @@ export const api = {
     checkout: (body: {
       customerName?: string
       customerEmail?: string
+      promoCode?: string
       items: { designId: string; colorId: string; qty: number }[]
     }) =>
       request<{ url: string; orderId: string; sessionId: string }>('/api/public/checkout', {
@@ -325,15 +346,22 @@ export const api = {
               amountOffCents: number | null
               maxRedemptions: number | null
               active: boolean
+              visibleToCustomers: boolean
               createdAt: string
             }[]
           }>('/api/admin/discounts'),
         create: (body: {
           code: string
-          kind: 'percent' | 'amount'
+          kind:
+            | 'percent'
+            | 'amount'
+            | 'free_shipping'
+            | 'percent_and_shipping'
+            | 'amount_and_shipping'
           percentOff?: number
           amountOffCents?: number
           maxRedemptions?: number | null
+          visibleToCustomers?: boolean
         }) =>
           request<{ discount: { id: string; code: string } }>('/api/admin/discounts', {
             method: 'POST',

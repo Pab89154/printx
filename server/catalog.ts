@@ -47,6 +47,7 @@ export type Design = {
   gramsJoshKobra: number | null
   hoursJoshKobra: number | null
   availableColorIds: string[]
+  multicolorOnly: boolean
   worstCostUsd: number | null
   catalogPriceUsd: number | null
   pricedAt: string | null
@@ -160,6 +161,7 @@ export function rowToDesign(row: Record<string, unknown>): Design {
     gramsJoshKobra: numOrNull(row.grams_josh_kobra),
     hoursJoshKobra: numOrNull(row.hours_josh_kobra),
     availableColorIds: Array.isArray(colors) ? colors : [],
+    multicolorOnly: Boolean(Number(row.multicolor_only ?? 0)),
     worstCostUsd: numOrNull(row.worst_cost_usd),
     catalogPriceUsd: numOrNull(row.catalog_price_usd),
     pricedAt: (row.priced_at as string | null) ?? null,

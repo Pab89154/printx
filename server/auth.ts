@@ -280,6 +280,52 @@ export async function setCustomerStripeId(userId: string, stripeCustomerId: stri
   }
 }
 
+export async function updateCustomerProfile(
+  userId: string,
+  name: unknown,
+): Promise<{ ok: true; customer: SessionCustomer } | { ok: false; error: string }> {
+  const displayName = sanitizeText(String(name ?? ''), 80)
+  if (!displayName) return { ok: false, error: 'Name is required.' }
+  const db = await getDb()
+  const row = await db.get<{ id: string; email: string; stripe_customer_id?: string | null }>(
+    `SELECT id, email, stripe_customer_id FROM users WHERE id = ? AND role = 'customer'`,
+    userId,
+  )
+  if (!row) return { ok: false, error: 'Account not found.' }
+  await db.run(`UPDATE users SET display_name = ? WHERE id = ? AND role = 'customer'`, displayName, userId)
+  return {
+    ok: true,
+    customer: {
+      id: row.id,
+      email: row.email,
+      displayName,
+      stripeCustomerId:
+        typeof row.stripe_customer_id === 'string' && row.stripe_customer_id.trim()
+          ? row.stripe_customer_id.trim()
+          : null,
+    },
+  }
+}
+
+export async function updateCustomerPassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (newPassword.length < 8) return { ok: false, error: 'Password must be at least 8 characters.' }
+  const db = await getDb()
+  const user = await db.get<{ password_hash: string }>(
+    `SELECT password_hash FROM users WHERE id = ? AND role = 'customer'`,
+    userId,
+  )
+  if (!user || !bcrypt.compareSync(currentPassword, user.password_hash)) {
+    return { ok: false, error: 'Current password is incorrect.' }
+  }
+  const hash = bcrypt.hashSync(newPassword, 12)
+  await db.run(`UPDATE users SET password_hash = ? WHERE id = ? AND role = 'customer'`, hash, userId)
+  return { ok: true }
+}
+
 export async function verifyAdminLogin(
   email: string,
   password: string,

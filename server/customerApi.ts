@@ -10,6 +10,8 @@ import {
   parseCookies,
   registerCustomer,
   sanitizeText,
+  updateCustomerPassword,
+  updateCustomerProfile,
   verifyCustomerLogin,
   type SessionCustomer,
 } from './auth.ts'
@@ -102,6 +104,68 @@ export async function handleCustomerApi(
       return true
     }
     send(res, 200, { customer: customerDto(customer) })
+    return true
+  }
+
+  if (urlPath === '/api/public/account/profile' && method === 'PATCH') {
+    const customer = await requireCustomer(req)
+    if (!customer) {
+      send(res, 401, { error: 'Unauthorized' })
+      return true
+    }
+    const body = await readJson(req)
+    const result = await updateCustomerProfile(customer.id, body.name)
+    if (!result.ok) {
+      send(res, 400, { error: result.error })
+      return true
+    }
+    send(res, 200, { customer: customerDto(result.customer) })
+    return true
+  }
+
+  if (urlPath === '/api/public/account/password' && method === 'POST') {
+    const customer = await requireCustomer(req)
+    if (!customer) {
+      send(res, 401, { error: 'Unauthorized' })
+      return true
+    }
+    const body = await readJson(req)
+    const result = await updateCustomerPassword(
+      customer.id,
+      String(body.currentPassword ?? ''),
+      String(body.newPassword ?? ''),
+    )
+    if (!result.ok) {
+      send(res, 400, { error: result.error })
+      return true
+    }
+    send(res, 200, { ok: true })
+    return true
+  }
+
+  if (urlPath === '/api/public/account/discounts' && method === 'GET') {
+    const customer = await requireCustomer(req)
+    if (!customer) {
+      send(res, 401, { error: 'Unauthorized' })
+      return true
+    }
+    const db = await getDb()
+    const rows = await db.all<Record<string, unknown>>(
+      `SELECT code, kind, percent_off, amount_off_cents, max_redemptions, created_at
+       FROM discounts
+       WHERE active = 1 AND COALESCE(visible_to_customers, 1) = 1
+       ORDER BY created_at DESC
+       LIMIT 50`,
+    )
+    send(res, 200, {
+      discounts: rows.map((d) => ({
+        code: String(d.code || ''),
+        kind: String(d.kind || 'percent'),
+        percentOff: d.percent_off != null ? Number(d.percent_off) : null,
+        amountOffCents: d.amount_off_cents != null ? Number(d.amount_off_cents) : null,
+        maxRedemptions: d.max_redemptions != null ? Number(d.max_redemptions) : null,
+      })),
+    })
     return true
   }
 

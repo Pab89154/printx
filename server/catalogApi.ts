@@ -50,6 +50,7 @@ import {
   probeCheckoutShippingSources,
   resolveShippingMethodName,
   stripeAccountSavedPaymentFields,
+  standardShippingCents,
   stripeCheckoutShippingFields,
   type ShippingSourceProbe,
 } from './stripeShipping.ts'
@@ -709,9 +710,18 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
   const description = sanitizeText(String(body.description ?? existing?.description ?? ''), 2000)
   const category = sanitizeText(String(body.category ?? existing?.category ?? 'General'), 60) || 'General'
   const imageUrl = String(body.imageUrl ?? existing?.imageUrl ?? '').trim().slice(0, 500)
+  const multicolorOnly =
+    body.multicolorOnly !== undefined
+      ? Boolean(body.multicolorOnly)
+      : Boolean(existing?.multicolorOnly)
   let availableColorIds: string[] = existing?.availableColorIds ?? []
   if (Array.isArray(body.availableColorIds)) {
     availableColorIds = body.availableColorIds.map((x) => String(x)).filter(Boolean).slice(0, 20)
+  }
+  if (multicolorOnly) {
+    availableColorIds = ['multicolor']
+  } else {
+    availableColorIds = availableColorIds.filter((id) => id !== 'multicolor')
   }
   const num = (key: string, fallback: number | null) => {
     if (body[key] === undefined || body[key] === null || body[key] === '') return fallback
@@ -725,6 +735,7 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
     category,
     imageUrl,
     availableColorIds,
+    multicolorOnly,
     gramsPabloP1s: num('gramsPabloP1s', existing?.gramsPabloP1s ?? null),
     hoursPabloP1s: num('hoursPabloP1s', existing?.hoursPabloP1s ?? null),
     gramsCourtEnder: num('gramsCourtEnder', existing?.gramsCourtEnder ?? null),
@@ -824,6 +835,7 @@ export async function handleCatalogApi(
         /** Public STL preview for approved catalog items. */
         modelUrl: d.hasStl && modelExt === '.stl' ? `/api/public/catalog/${d.id}/stl` : '',
         catalogPriceUsd: d.catalogPriceUsd,
+        multicolorOnly: d.multicolorOnly,
         availableColors: d.availableColorIds
           .map((id) => colorById(id, settings.customColors))
           .filter(Boolean),
@@ -954,6 +966,39 @@ export async function handleCatalogApi(
       return true
     }
 
+    const promoCode = sanitizeText(String(body.promoCode ?? ''), 40)
+      .toUpperCase()
+      .replace(/\s+/g, '')
+    let appliedPromo: {
+      stripePromotionCodeId: string
+      kind: string
+      code: string
+    } | null = null
+    if (promoCode) {
+      const promoRow = await db.get<{
+        stripe_promotion_code_id: string
+        kind: string
+        code: string
+        active: number | string
+      }>(
+        `SELECT stripe_promotion_code_id, kind, code, active FROM discounts
+         WHERE UPPER(REPLACE(code, ' ', '')) = ? LIMIT 1`,
+        promoCode,
+      )
+      if (!promoRow || !Number(promoRow.active) || !promoRow.stripe_promotion_code_id) {
+        send(res, 400, { error: 'That promo code is invalid or inactive.' })
+        return true
+      }
+      appliedPromo = {
+        stripePromotionCodeId: String(promoRow.stripe_promotion_code_id),
+        kind: String(promoRow.kind || 'percent'),
+        code: String(promoRow.code || promoCode),
+      }
+    }
+    const freeStandardShipping =
+      appliedPromo?.kind === 'percent_and_shipping' ||
+      appliedPromo?.kind === 'amount_and_shipping'
+
     const subtotal = roundMoney(lineItems.reduce((s, i) => s + i.unit * i.qty, 0))
     const now = new Date().toISOString()
     const orderId = randomUUID()
@@ -1001,12 +1046,19 @@ export async function handleCatalogApi(
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       customer: stripeCustomerId,
-      allow_promotion_codes: true,
+      // Stripe disallows allow_promotion_codes when a discount is already applied.
+      ...(appliedPromo
+        ? { discounts: [{ promotion_code: appliedPromo.stripePromotionCodeId }] }
+        : { allow_promotion_codes: true }),
       success_url: successUrl,
       cancel_url: cancelUrl,
       client_reference_id: orderId,
-      metadata: { orderId, customerUserId: account.id },
-      ...stripeCheckoutShippingFields(),
+      metadata: {
+        orderId,
+        customerUserId: account.id,
+        ...(appliedPromo ? { promoCode: appliedPromo.code, promoKind: appliedPromo.kind } : {}),
+      },
+      ...stripeCheckoutShippingFields({ freeStandard: freeStandardShipping }),
       ...stripeAccountSavedPaymentFields(),
       line_items: lineItems.map((i) => ({
         quantity: i.qty,
@@ -1313,10 +1365,10 @@ export async function handleCatalogApi(
           status, created_by,
           submitted_at, reviewed_by, reviewed_at, review_note,
           grams_pablo_p1s, hours_pablo_p1s, grams_court_ender, hours_court_ender,
-          grams_josh_kobra, hours_josh_kobra, available_color_ids,
+          grams_josh_kobra, hours_josh_kobra, available_color_ids, multicolor_only,
           worst_cost_usd, catalog_price_usd, priced_at, pricing_inputs_json,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', '', 'draft', ?, NULL, NULL, NULL, '', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}', ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', '', 'draft', ?, NULL, NULL, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}', ?, ?)`,
         id,
         parsed.skuBase,
         parsed.name,
@@ -1332,6 +1384,7 @@ export async function handleCatalogApi(
         parsed.gramsJoshKobra,
         parsed.hoursJoshKobra,
         JSON.stringify(parsed.availableColorIds),
+        parsed.multicolorOnly ? 1 : 0,
         now,
         now,
       )
@@ -1427,7 +1480,7 @@ export async function handleCatalogApi(
             slice_status = ?,
             slice_error = ?,
             grams_pablo_p1s = ?, hours_pablo_p1s = ?, grams_court_ender = ?, hours_court_ender = ?,
-            grams_josh_kobra = ?, hours_josh_kobra = ?, available_color_ids = ?,
+            grams_josh_kobra = ?, hours_josh_kobra = ?, available_color_ids = ?, multicolor_only = ?,
             quote_ids_json = CASE WHEN ? THEN '{}' ELSE quote_ids_json END,
             file_ids_json = CASE WHEN ? THEN '{}' ELSE file_ids_json END,
             updated_at = ?
@@ -1447,6 +1500,7 @@ export async function handleCatalogApi(
           stlChanged ? null : parsed.gramsJoshKobra,
           stlChanged ? null : parsed.hoursJoshKobra,
           JSON.stringify(parsed.availableColorIds),
+          parsed.multicolorOnly ? 1 : 0,
           stlChanged ? 1 : 0,
           stlChanged ? 1 : 0,
           now,
@@ -2226,6 +2280,7 @@ export async function handleCatalogApi(
         stripeCouponId: String(d.stripe_coupon_id || ''),
         stripePromotionCodeId: String(d.stripe_promotion_code_id || ''),
         active: Boolean(Number(d.active)),
+        visibleToCustomers: d.visible_to_customers == null ? true : Boolean(Number(d.visible_to_customers)),
         createdAt: String(d.created_at || ''),
       })),
     })
@@ -2249,14 +2304,46 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'Enter a promo code (at least 3 characters).' })
       return true
     }
-    const kind = String(body.kind ?? 'percent') === 'amount' ? 'amount' : 'percent'
+    const kindRaw = String(body.kind ?? 'percent')
+    type DiscountKind =
+      | 'percent'
+      | 'amount'
+      | 'free_shipping'
+      | 'percent_and_shipping'
+      | 'amount_and_shipping'
+    let kind: DiscountKind
+    if (
+      kindRaw === 'free_shipping' ||
+      kindRaw === 'percent_and_shipping' ||
+      kindRaw === 'amount_and_shipping'
+    ) {
+      if (!admin.isMainAdmin) {
+        send(res, 403, {
+          error: 'Only main admins can create free-shipping or item+shipping promo codes.',
+        })
+        return true
+      }
+      kind = kindRaw
+    } else if (kindRaw === 'amount') {
+      kind = 'amount'
+    } else {
+      kind = 'percent'
+    }
     const percentOff = Number(body.percentOff)
-    const amountOffCents = Math.round(Number(body.amountOffCents) || 0)
+    const amountOffCents =
+      kind === 'free_shipping'
+        ? standardShippingCents()
+        : Math.round(Number(body.amountOffCents) || 0)
     const maxRedemptions =
       body.maxRedemptions != null && body.maxRedemptions !== ''
         ? Math.max(1, Math.floor(Number(body.maxRedemptions)))
         : null
-    if (kind === 'percent') {
+    const visibleToCustomers =
+      body.visibleToCustomers === false || body.visibleToCustomers === 0 || body.visibleToCustomers === '0'
+        ? 0
+        : 1
+    const usesPercent = kind === 'percent' || kind === 'percent_and_shipping'
+    if (usesPercent) {
       if (!(percentOff > 0 && percentOff <= 100)) {
         send(res, 400, { error: 'Percent off must be between 1 and 100.' })
         return true
@@ -2265,13 +2352,21 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'Amount off must be greater than zero.' })
       return true
     }
+    const couponName =
+      kind === 'free_shipping'
+        ? `${code} (free shipping)`
+        : kind === 'percent_and_shipping'
+          ? `${code} (${percentOff}% + free ship)`
+          : kind === 'amount_and_shipping'
+            ? `${code} ($ off + free ship)`
+            : code
     try {
       const coupon = await stripe.coupons.create({
-        ...(kind === 'percent'
+        ...(usesPercent
           ? { percent_off: percentOff }
           : { amount_off: amountOffCents, currency: 'usd' }),
         duration: 'once',
-        name: code,
+        name: couponName,
       })
       const promo = await stripe.promotionCodes.create({
         // Stripe API 2025+: coupon is nested under `promotion`, not a top-level field.
@@ -2284,16 +2379,17 @@ export async function handleCatalogApi(
       await db.run(
         `INSERT INTO discounts (
           id, code, kind, percent_off, amount_off_cents, currency, max_redemptions,
-          stripe_coupon_id, stripe_promotion_code_id, active, created_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'usd', ?, ?, ?, 1, ?, ?, ?)`,
+          stripe_coupon_id, stripe_promotion_code_id, active, visible_to_customers, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'usd', ?, ?, ?, 1, ?, ?, ?, ?)`,
         id,
         code,
         kind,
-        kind === 'percent' ? percentOff : null,
-        kind === 'amount' ? amountOffCents : null,
+        usesPercent ? percentOff : null,
+        usesPercent ? null : amountOffCents,
         maxRedemptions,
         coupon.id,
         promo.id,
+        visibleToCustomers,
         admin.id,
         now,
         now,
@@ -2303,9 +2399,10 @@ export async function handleCatalogApi(
           id,
           code,
           kind,
-          percentOff: kind === 'percent' ? percentOff : null,
-          amountOffCents: kind === 'amount' ? amountOffCents : null,
+          percentOff: usesPercent ? percentOff : null,
+          amountOffCents: usesPercent ? null : amountOffCents,
           active: true,
+          visibleToCustomers: Boolean(visibleToCustomers),
           stripePromotionCodeId: promo.id,
         },
       })

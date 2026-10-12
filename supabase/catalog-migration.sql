@@ -46,6 +46,7 @@ create table if not exists designs (
   grams_josh_kobra double precision,
   hours_josh_kobra double precision,
   available_color_ids text not null default '[]',
+  multicolor_only integer not null default 0,
   worst_cost_usd double precision,
   catalog_price_usd double precision,
   priced_at text,
@@ -62,6 +63,7 @@ alter table users add column if not exists cloud_slicer_configured_at text;
 alter table designs add column if not exists stl_path text not null default '';
 alter table designs add column if not exists slice_status text not null default 'idle';
 alter table designs add column if not exists slice_error text not null default '';
+alter table designs add column if not exists multicolor_only integer not null default 0;
 
 create table if not exists orders (
   id text primary key,

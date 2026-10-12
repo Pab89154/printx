@@ -132,7 +132,10 @@ export function AdminApprovals() {
                       <div>
                         <p className="font-semibold text-navy">{d.name}</p>
                         <p className="text-xs text-muted">
-                          SKU {d.skuBase} · colors {d.availableColorIds.join(', ') || '—'}
+                          SKU {d.skuBase} ·{' '}
+                          {d.multicolorOnly
+                            ? 'Multicolor only'
+                            : `colors ${d.availableColorIds.join(', ') || '—'}`}
                         </p>
                         <p className="mt-1 text-xs text-muted">
                           P1S {d.gramsPabloP1s ?? '—'}g / {d.hoursPabloP1s ?? '—'}h · Ender 3v2{' '}

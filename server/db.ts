@@ -194,6 +194,7 @@ async function migrate(database: DbApi) {
       grams_josh_kobra REAL,
       hours_josh_kobra REAL,
       available_color_ids TEXT NOT NULL DEFAULT '[]',
+      multicolor_only INTEGER NOT NULL DEFAULT 0,
       worst_cost_usd REAL,
       catalog_price_usd REAL,
       priced_at TEXT,
@@ -273,6 +274,28 @@ async function migratePrinterSettlements(database: DbApi) {
       UNIQUE (user_id, year_month)
     );
   `)
+}
+
+/** Show selected promo codes on signed-in customer accounts. */
+async function migrateDiscountCustomerVisibility(database: DbApi) {
+  try {
+    await database.exec(
+      `ALTER TABLE discounts ADD COLUMN visible_to_customers INTEGER NOT NULL DEFAULT 1`,
+    )
+  } catch {
+    /* column already exists */
+  }
+}
+
+/** Multicolor-only designs expose a single Multicolor shop option. */
+async function migrateDesignMulticolorOnly(database: DbApi) {
+  try {
+    await database.exec(
+      `ALTER TABLE designs ADD COLUMN multicolor_only INTEGER NOT NULL DEFAULT 0`,
+    )
+  } catch {
+    /* column already exists */
+  }
 }
 
 /** Persist Cloud Slicer quote/file ids + captured G-code paths on catalog designs. */
@@ -364,6 +387,7 @@ async function migrateCustomerAccounts(database: DbApi) {
       stripe_coupon_id TEXT NOT NULL DEFAULT '',
       stripe_promotion_code_id TEXT NOT NULL DEFAULT '',
       active INTEGER NOT NULL DEFAULT 1,
+      visible_to_customers INTEGER NOT NULL DEFAULT 1,
       created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -952,6 +976,8 @@ async function initDb(): Promise<DbApi> {
   await migratePrinterSettlements(database)
   await migrateCheckoutShipping(database)
   await migrateDesignQuoteIds(database)
+  await migrateDiscountCustomerVisibility(database)
+  await migrateDesignMulticolorOnly(database)
   await migrateCustomerAccounts(database)
   await seed(database)
   await ensurePrimaryAdmin(database)

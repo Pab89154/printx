@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import { colorSwatchStyle } from '../../shared/colors'
 import { useCart } from '../context/CartContext'
 import { useCustomerAuth } from '../context/CustomerAuthContext'
 import { Header } from '../components/Header'
@@ -12,6 +13,7 @@ export function Cart() {
   const navigate = useNavigate()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [promoCode, setPromoCode] = useState('')
 
   async function checkout() {
     if (!customer) {
@@ -22,6 +24,7 @@ export function Cart() {
     setError('')
     try {
       const { url } = await api.catalog.checkout({
+        promoCode: promoCode.trim() || undefined,
         items: lines.map((l) => ({
           designId: l.designId,
           colorId: l.colorId,
@@ -61,7 +64,7 @@ export function Cart() {
                   >
                     <span
                       className="h-8 w-8 rounded-full border border-slate-200 shadow-sm"
-                      style={{ background: l.colorHex }}
+                      style={colorSwatchStyle({ id: l.colorId, hex: l.colorHex })}
                     />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -69,7 +72,7 @@ export function Cart() {
                     <p className="text-sm text-muted">
                       <span
                         className="mr-1 inline-block h-2.5 w-2.5 rounded-full border align-middle"
-                        style={{ background: l.colorHex }}
+                        style={colorSwatchStyle({ id: l.colorId, hex: l.colorHex })}
                       />
                       {l.colorName} · ${l.unitPrice.toFixed(2)}
                     </p>
@@ -97,9 +100,20 @@ export function Cart() {
               Subtotal ${subtotal.toFixed(2)}
             </p>
 
+            <label className="mt-6 block text-sm text-navy">
+              Promo code
+              <input
+                className="mt-1 w-full rounded-lg border px-3 py-2 uppercase"
+                value={promoCode}
+                onChange={(e) => setPromoCode(e.target.value)}
+                placeholder="Optional"
+                autoComplete="off"
+              />
+            </label>
+
             <p className="mt-4 text-sm text-muted">
               {customer
-                ? 'Shipping address and payment are collected securely on Checkout. Promo codes work there too.'
+                ? 'Enter item+shipping promos here. Other codes can also be entered on Checkout.'
                 : 'Sign in to checkout so you can track your order and shipping.'}
             </p>
 

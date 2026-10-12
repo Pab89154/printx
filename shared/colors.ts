@@ -8,6 +8,31 @@ export type ColorDef = {
   builtin: boolean
 }
 
+/** Single shop option for multicolor-only designs (SKU suffix MLT). */
+export const MULTICOLOR_COLOR_ID = 'multicolor'
+
+export const MULTICOLOR_COLOR: ColorDef = {
+  id: MULTICOLOR_COLOR_ID,
+  code: 'MLT',
+  name: 'Multicolor',
+  /** Solid tint for STL preview; UI swatches use a gradient instead. */
+  hex: '#7C3AED',
+  builtin: true,
+}
+
+/** CSS background for multicolor swatches (one option that reads as multi). */
+export const MULTICOLOR_SWATCH_BACKGROUND =
+  'conic-gradient(from 180deg, #E11D48, #EAB308, #16A34A, #2563EB, #7C3AED, #E11D48)'
+
+export function isMulticolorColorId(id: string | null | undefined): boolean {
+  return id === MULTICOLOR_COLOR_ID
+}
+
+export function colorSwatchStyle(color: { id: string; hex: string }): { background: string } {
+  if (isMulticolorColorId(color.id)) return { background: MULTICOLOR_SWATCH_BACKGROUND }
+  return { background: color.hex }
+}
+
 export const BUILTIN_COLORS: ColorDef[] = [
   { id: 'white', code: 'WHT', name: 'White', hex: '#F5F7FA', builtin: true },
   { id: 'red', code: 'RED', name: 'Red', hex: '#E11D48', builtin: true },
@@ -18,7 +43,13 @@ export const BUILTIN_COLORS: ColorDef[] = [
   { id: 'orange', code: 'ORG', name: 'Orange', hex: '#EA580C', builtin: true },
   { id: 'yellow', code: 'YLW', name: 'Yellow', hex: '#EAB308', builtin: true },
   { id: 'purple', code: 'PRP', name: 'Purple', hex: '#7C3AED', builtin: true },
+  MULTICOLOR_COLOR,
 ]
+
+/** Solid filament chips in admin (excludes Multicolor — that is a design mode). */
+export function solidBuiltinColors(): ColorDef[] {
+  return BUILTIN_COLORS.filter((c) => !isMulticolorColorId(c.id))
+}
 
 export const CUSTOM_COLOR_SLOT_COUNT = 5
 

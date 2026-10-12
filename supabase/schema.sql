@@ -215,6 +215,7 @@ create table if not exists designs (
   grams_josh_kobra double precision,
   hours_josh_kobra double precision,
   available_color_ids text not null default '[]',
+  multicolor_only integer not null default 0,
   worst_cost_usd double precision,
   catalog_price_usd double precision,
   priced_at text,
@@ -317,6 +318,7 @@ create table if not exists discounts (
   stripe_coupon_id text not null default '',
   stripe_promotion_code_id text not null default '',
   active integer not null default 1,
+  visible_to_customers integer not null default 1,
   created_by text references users(id) on delete set null,
   created_at text not null,
   updated_at text not null

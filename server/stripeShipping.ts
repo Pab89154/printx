@@ -8,6 +8,11 @@ const STANDARD_CENTS = Number(process.env.PRINTX_SHIP_STANDARD_CENTS || 599)
 const PRIORITY_CENTS = Number(process.env.PRINTX_SHIP_PRIORITY_CENTS || 1199)
 const EXPRESS_CENTS = Number(process.env.PRINTX_SHIP_EXPRESS_CENTS || 1999)
 
+/** Standard flat rate in cents — used for free-shipping promo credit at Checkout. */
+export function standardShippingCents(): number {
+  return cents(STANDARD_CENTS, 599)
+}
+
 function cents(n: number, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : fallback
 }
@@ -33,13 +38,17 @@ export function stripeAccountSavedPaymentFields(): Pick<
 }
 
 /** Fields to merge into checkout.sessions.create for shipping + name collection. */
-export function stripeCheckoutShippingFields(): Pick<
+export function stripeCheckoutShippingFields(opts?: {
+  /** Waive Standard shipping (used with item+shipping promo codes). */
+  freeStandard?: boolean
+}): Pick<
   Stripe.Checkout.SessionCreateParams,
   | 'shipping_address_collection'
   | 'shipping_options'
   | 'billing_address_collection'
   | 'customer_update'
 > {
+  const standardAmount = opts?.freeStandard ? 0 : cents(STANDARD_CENTS, 599)
   return {
     // Always collect a billing address so we have a street even if ship-to is missing in API.
     billing_address_collection: 'required',
@@ -56,8 +65,8 @@ export function stripeCheckoutShippingFields(): Pick<
       {
         shipping_rate_data: {
           type: 'fixed_amount',
-          fixed_amount: { amount: cents(STANDARD_CENTS, 599), currency: 'usd' },
-          display_name: 'Standard',
+          fixed_amount: { amount: standardAmount, currency: 'usd' },
+          display_name: opts?.freeStandard ? 'Standard (free with promo)' : 'Standard',
           delivery_estimate: {
             minimum: { unit: 'business_day', value: 5 },
             maximum: { unit: 'business_day', value: 9 },

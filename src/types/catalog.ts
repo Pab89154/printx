@@ -36,6 +36,7 @@ export type Design = {
   gramsJoshKobra: number | null
   hoursJoshKobra: number | null
   availableColorIds: string[]
+  multicolorOnly: boolean
   worstCostUsd: number | null
   catalogPriceUsd: number | null
   pricedAt: string | null
@@ -56,6 +57,7 @@ export type PublicCatalogDesign = {
   /** Public URL for STL preview (approved designs only). */
   modelUrl?: string
   catalogPriceUsd: number | null
+  multicolorOnly?: boolean
   availableColors: CatalogColor[]
 }
 

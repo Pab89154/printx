@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Upload } from 'lucide-react'
 import { api } from '../lib/api'
-import { BUILTIN_COLORS } from '../../shared/colors'
+import {
+  MULTICOLOR_COLOR_ID,
+  colorSwatchStyle,
+  solidBuiltinColors,
+} from '../../shared/colors'
 import { MODEL_ACCEPT, modelLabel, SLICEABLE_EXTS } from '../../shared/modelFormats'
 import type { Design } from '../types/catalog'
 import { StlViewer } from '../components/StlViewer'
@@ -16,6 +20,7 @@ const emptyForm = {
   hasStl: false,
   modelExt: '',
   availableColorIds: ['black', 'white'] as string[],
+  multicolorOnly: false,
 }
 
 export function AdminDesigns() {
@@ -59,7 +64,7 @@ export function AdminDesigns() {
   }, [])
 
   const colorOptions = [
-    ...BUILTIN_COLORS.map((c) => ({ id: c.id, name: c.name, hex: c.hex })),
+    ...solidBuiltinColors().map((c) => ({ id: c.id, name: c.name, hex: c.hex })),
     ...extraColors,
   ]
 
@@ -72,7 +77,8 @@ export function AdminDesigns() {
       imageUrl: '',
       // Only send when a new upload is pending — never send '' (that used to wipe stl_path).
       ...(form.stlPath ? { stlPath: form.stlPath } : {}),
-      availableColorIds: form.availableColorIds,
+      multicolorOnly: form.multicolorOnly,
+      availableColorIds: form.multicolorOnly ? [MULTICOLOR_COLOR_ID] : form.availableColorIds,
     }
   }
 
@@ -88,7 +94,10 @@ export function AdminDesigns() {
       stlPath: '',
       hasStl: d.hasStl,
       modelExt: d.modelExt || '',
-      availableColorIds: d.availableColorIds,
+      availableColorIds: d.multicolorOnly
+        ? ['black', 'white']
+        : d.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID),
+      multicolorOnly: Boolean(d.multicolorOnly),
     })
   }
 
@@ -277,32 +286,67 @@ export function AdminDesigns() {
           ) : null}
         </div>
 
-        <h3 className="mt-6 text-sm font-semibold text-navy">Available colors</h3>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {colorOptions.map((c) => {
-            const on = form.availableColorIds.includes(c.id)
-            return (
-              <button
-                key={c.id}
-                type="button"
-                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
-                  on ? 'border-electric bg-electric/10 text-electric' : 'border-slate-200'
-                }`}
-                onClick={() =>
-                  setForm((f) => ({
-                    ...f,
-                    availableColorIds: on
-                      ? f.availableColorIds.filter((x) => x !== c.id)
-                      : [...f.availableColorIds, c.id],
-                  }))
-                }
-              >
-                <span className="h-3 w-3 rounded-full border" style={{ background: c.hex }} />
-                {c.name}
-              </button>
-            )
-          })}
-        </div>
+        <h3 className="mt-6 text-sm font-semibold text-navy">Colors</h3>
+        <label className="mt-2 flex items-start gap-2 text-sm text-navy">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={form.multicolorOnly}
+            onChange={(e) => {
+              const on = e.target.checked
+              setForm((f) => ({
+                ...f,
+                multicolorOnly: on,
+                availableColorIds: on
+                  ? [MULTICOLOR_COLOR_ID]
+                  : f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID).length
+                    ? f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
+                    : ['black', 'white'],
+              }))
+            }}
+          />
+          <span>
+            <span className="font-medium">Multicolor print (single option)</span>
+            <span className="mt-0.5 block text-xs text-muted">
+              Shop shows one Multicolor swatch — no solid color picker.
+            </span>
+          </span>
+        </label>
+        {form.multicolorOnly ? (
+          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-electric bg-electric/10 px-3 py-1.5 text-xs font-medium text-electric">
+            <span
+              className="h-3 w-3 rounded-full border"
+              style={colorSwatchStyle({ id: MULTICOLOR_COLOR_ID, hex: '#7C3AED' })}
+            />
+            Multicolor
+          </div>
+        ) : (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {colorOptions.map((c) => {
+              const on = form.availableColorIds.includes(c.id)
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    on ? 'border-electric bg-electric/10 text-electric' : 'border-slate-200'
+                  }`}
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      availableColorIds: on
+                        ? f.availableColorIds.filter((x) => x !== c.id)
+                        : [...f.availableColorIds, c.id],
+                    }))
+                  }
+                >
+                  <span className="h-3 w-3 rounded-full border" style={{ background: c.hex }} />
+                  {c.name}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         <div className="mt-6 flex flex-wrap gap-3">
           <button type="submit" className="btn btn-secondary" disabled={busy || uploadingStl}>

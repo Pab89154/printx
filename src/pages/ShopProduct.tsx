@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
+import { colorSwatchStyle, isMulticolorColorId } from '../../shared/colors'
 import { useCart } from '../context/CartContext'
 import type { PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
@@ -31,6 +32,9 @@ export function ShopProduct() {
   }, [skuBase])
 
   const color = design?.availableColors.find((c) => c.id === colorId)
+  const multicolorOnly =
+    Boolean(design?.multicolorOnly) ||
+    (design?.availableColors.length === 1 && isMulticolorColorId(design.availableColors[0]?.id))
 
   return (
     <div className="min-h-screen bg-surface">
@@ -73,23 +77,33 @@ export function ShopProduct() {
               </p>
 
               <p className="mt-6 text-sm font-semibold text-navy">Color</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {design.availableColors.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
-                      colorId === c.id
-                        ? 'border-electric bg-electric/10 text-electric'
-                        : 'border-slate-200'
-                    }`}
-                    onClick={() => setColorId(c.id)}
-                  >
-                    <span className="h-3.5 w-3.5 rounded-full border" style={{ background: c.hex }} />
-                    {c.name}
-                  </button>
-                ))}
-              </div>
+              {multicolorOnly ? (
+                <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-electric bg-electric/10 px-3 py-1.5 text-sm text-electric">
+                  <span
+                    className="h-3.5 w-3.5 rounded-full border"
+                    style={colorSwatchStyle(color ?? { id: 'multicolor', hex: '#7C3AED' })}
+                  />
+                  Multicolor
+                </div>
+              ) : (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {design.availableColors.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
+                        colorId === c.id
+                          ? 'border-electric bg-electric/10 text-electric'
+                          : 'border-slate-200'
+                      }`}
+                      onClick={() => setColorId(c.id)}
+                    >
+                      <span className="h-3.5 w-3.5 rounded-full border" style={colorSwatchStyle(c)} />
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <label className="mt-6 flex items-center gap-4 text-sm font-semibold text-navy">
                 <span>Quantity</span>
