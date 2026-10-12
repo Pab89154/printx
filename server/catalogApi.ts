@@ -72,7 +72,7 @@ import {
   GCODE_SAVE_HINT,
   isGcodeOutputMissing,
   quoteAndDownloadGcode,
-  quoteStlForPrinter,
+  quoteStlForPrintxPrinter,
   requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
@@ -339,14 +339,16 @@ async function sliceDesignWithCloudSlicer(
         printerId: String(row?.cloud_slicer_printer_id || ''),
         filamentId: String(row?.cloud_slicer_filament_id || ''),
       }
-      if (!cloudSlicerConfigured(creds)) {
+      const canLocal = localSlicerAvailable(id)
+      const canCloud = cloudSlicerConfigured(creds)
+      if (!canLocal && !canCloud) {
         const who = row?.display_name || row?.email
         setupGaps.push(
           missingPrinterWarning(
             label,
             who
-              ? `${who} has not finished Cloud Slicer API setup`
-              : 'no Cloud Slicer API key on this printer (Settings → Cloud Slicer)',
+              ? `${who} has not finished Cloud Slicer API setup (and local slicer is unavailable)`
+              : 'local slicer unavailable and no Cloud Slicer API key (Settings → Cloud Slicer)',
           ),
         )
         continue
@@ -379,12 +381,12 @@ async function sliceDesignWithCloudSlicer(
       )
       for (const item of ready) {
         try {
-          const result = await quoteStlForPrinter(item.creds, localPath)
+          const result = await quoteStlForPrintxPrinter(item.printerId, localPath, item.creds)
           const fields = PRINTER_FIELD[item.printerId]!
           gramsHours[fields.grams] = result.grams
           gramsHours[fields.hours] = result.hours
           quoteIds[item.printerId] = result.quoteId
-          fileIds[item.printerId] = result.fileId
+          if (result.fileId) fileIds[item.printerId] = result.fileId
           if (result.gcodeBuffer?.length) {
             try {
               gcodePaths[item.printerId] = await storeGcodeBuffer(result.gcodeBuffer, {
@@ -398,7 +400,7 @@ async function sliceDesignWithCloudSlicer(
             }
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
+          const msg = err instanceof Error ? err.message : 'Slicer quoting failed'
           quoteErrors.push(`${item.label}: ${msg}`)
         }
       }
@@ -406,7 +408,7 @@ async function sliceDesignWithCloudSlicer(
 
     const warningParts: string[] = []
     if (setupGaps.length) {
-      warningParts.push(`Waiting on Cloud Slicer setup:\n• ${setupGaps.join('\n• ')}`)
+      warningParts.push(`Waiting on slicer setup:\n• ${setupGaps.join('\n• ')}`)
     }
     if (quoteErrors.length) {
       warningParts.push(`Quote errors:\n• ${quoteErrors.join('\n• ')}`)

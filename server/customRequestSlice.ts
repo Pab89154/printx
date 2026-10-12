@@ -11,7 +11,7 @@ import {
   GCODE_SAVE_HINT,
   isGcodeOutputMissing,
   quoteAndDownloadGcode,
-  quoteStlForPrinter,
+  quoteStlForPrintxPrinter,
   requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
@@ -191,7 +191,7 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
   if (!SLICEABLE_EXTS.has(ext)) {
     await db.run(
       `UPDATE custom_requests SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
-      'Upload a .stl or .3mf file so Cloud Slicer can quote. .obj is not auto-quoted.',
+      'Upload a .stl or .3mf file so we can quote. .obj is not auto-quoted.',
       new Date().toISOString(),
       requestId,
     )
@@ -239,21 +239,23 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
         printerId: String(owner?.cloud_slicer_printer_id || ''),
         filamentId: String(owner?.cloud_slicer_filament_id || ''),
       }
-      if (!cloudSlicerConfigured(creds)) {
+      const canLocal = localSlicerAvailable(id)
+      const canCloud = cloudSlicerConfigured(creds)
+      if (!canLocal && !canCloud) {
         const who = owner?.display_name || owner?.email
         setupGaps.push(
           who
-            ? `${label}: ${who} has not finished Cloud Slicer setup`
-            : `${label}: no Cloud Slicer API key saved (Settings → Cloud Slicer)`,
+            ? `${label}: ${who} has not finished Cloud Slicer setup (and local slicer is unavailable)`
+            : `${label}: local slicer unavailable and no Cloud Slicer API key (Settings → Cloud Slicer)`,
         )
         continue
       }
       try {
-        const result = await quoteStlForPrinter(creds, resolved.path)
+        const result = await quoteStlForPrintxPrinter(id, resolved.path, creds)
         gramsHours[GRAMS_COL[id]!] = result.grams
         gramsHours[HOURS_COL[id]!] = result.hours
         quoteIds[id] = result.quoteId
-        fileIds[id] = result.fileId
+        if (result.fileId) fileIds[id] = result.fileId
         if (result.gcodeBuffer?.length) {
           try {
             gcodePaths[id] = await storeGcodeBuffer(result.gcodeBuffer, {
@@ -267,7 +269,7 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
           }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
+        const msg = err instanceof Error ? err.message : 'Slicer quoting failed'
         quoteErrors.push(`${label}: ${msg}`)
       }
     }

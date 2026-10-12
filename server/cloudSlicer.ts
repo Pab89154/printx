@@ -287,6 +287,39 @@ export async function waitForQuoteAndDownloadGcode(
   throw new Error('Cloud Slicer quote timed out.')
 }
 
+/**
+ * Prefer local Bambu CLI for grams/hours (+ G-code). Fall back to Cloud Slicer when the
+ * local slicer is not installed for that PrintX printer.
+ */
+export async function quoteStlForPrintxPrinter(
+  printxPrinterId: string,
+  localPath: string,
+  creds?: CloudSlicerCreds | null,
+): Promise<CloudSlicerQuoteResult> {
+  if (localSlicerAvailable(printxPrinterId)) {
+    const local = await sliceStlLocally(localPath, printxPrinterId)
+    if (!(local.grams > 0) || !(local.hours > 0)) {
+      throw new Error(
+        `Local slicer returned incomplete metrics (grams=${local.grams}, hours=${local.hours}).`,
+      )
+    }
+    return {
+      grams: local.grams,
+      hours: local.hours,
+      quoteId: `local-${Date.now().toString(36)}`,
+      fileId: '',
+      gcodeBuffer: local.buffer,
+      gcodeFilename: local.filename,
+    }
+  }
+  if (!creds || !cloudSlicerConfigured(creds)) {
+    throw new Error(
+      'Local slicer unavailable and Cloud Slicer is not configured for this printer.',
+    )
+  }
+  return quoteStlForPrinter(creds, localPath)
+}
+
 /** Upload STL + quote for one printer; capture G-code when Cloud Slicer still has it. */
 export async function quoteStlForPrinter(
   creds: CloudSlicerCreds,
@@ -407,28 +440,16 @@ export async function requoteFileAndDownloadGcode(
   }
 }
 
-/** Fresh upload + slice; use local slicer when Cloud Slicer Free withholds G-code. */
+/** Fresh upload + slice; prefer local slicer, else Cloud Slicer when it still has G-code. */
 export async function quoteAndDownloadGcode(
   creds: CloudSlicerCreds,
   localPath: string,
   opts?: { printxPrinterId?: string },
 ): Promise<{ buffer: Buffer; filename: string; quoteId: string; fileId: string; grams: number; hours: number }> {
   const printxPrinterId = opts?.printxPrinterId?.trim() || ''
-  const canLocal = Boolean(printxPrinterId && localSlicerAvailable(printxPrinterId))
-
-  if (canLocal) {
-    const local = await sliceStlLocally(localPath, printxPrinterId)
-    return {
-      buffer: local.buffer,
-      filename: local.filename,
-      quoteId: `local-${Date.now().toString(36)}`,
-      fileId: '',
-      grams: local.grams,
-      hours: local.hours,
-    }
-  }
-
-  const quoted = await quoteStlForPrinter(creds, localPath)
+  const quoted = printxPrinterId
+    ? await quoteStlForPrintxPrinter(printxPrinterId, localPath, creds)
+    : await quoteStlForPrinter(creds, localPath)
   if (quoted.gcodeBuffer && quoted.gcodeBuffer.length) {
     return {
       buffer: quoted.gcodeBuffer,
