@@ -379,7 +379,7 @@ export function AdminOrders() {
                           onClick={() => {
                             setGcodeBusyId(item.id)
                             setError(
-                              'Preparing G-code for the claimed printer only. If Cloud Slicer must re-slice, this can take 1–2 minutes — leave this tab open.',
+                              'Preparing G-code for the claimed printer. Re-slice can take 2–3 minutes — leave this tab open.',
                             )
                             void api.catalog.orders
                               .downloadGcode(item.id)

@@ -584,8 +584,7 @@ export function AdminSettings() {
         </label>
         <p className="mt-2 text-xs text-muted">
           Dashboard: cloudslicer3d.com → create printer/filament → copy IDs. Free plan: 100 quotes/month per
-          account. For reliable G-code downloads, turn on “Save gcode files” under Cloud Slicer → Settings →
-          File Retention (Pro/Max). PrintX also tries to capture G-code at slice time into our storage.
+          account. PrintX captures G-code when you download (no Cloud Slicer Pro needed) and stores a copy.
         </p>
         {csError && <p className="mt-3 text-sm text-red-600">{csError}</p>}
         {csMessage && <p className="mt-3 text-sm text-green-600">{csMessage}</p>}
