@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
+import { useAdminAuth } from '../context/AdminAuthContext'
 import type { MoneySummaryDto } from '../types/catalog'
 
 function currentUtcMonth(): string {
@@ -12,6 +13,7 @@ function personLabel(p: { displayName: string | null; email: string }): string {
 }
 
 export function AdminMoney() {
+  const { email } = useAdminAuth()
   const [month, setMonth] = useState(currentUtcMonth)
   const [data, setData] = useState<MoneySummaryDto | null>(null)
   const [error, setError] = useState('')
@@ -48,14 +50,21 @@ export function AdminMoney() {
     )
   }, [data])
 
+  const owedToMeUsd = useMemo(() => {
+    if (!data || !email) return 0
+    const me = email.trim().toLowerCase()
+    const mine = data.owedByPerson.find((p) => p.email.trim().toLowerCase() === me)
+    return mine?.totalOwedUsd ?? 0
+  }, [data, email])
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-navy">Money</h1>
           <p className="mt-1 text-sm text-muted">
-            Stripe earnings from paid checkouts, plus what each printer is owed (worst-case cost only).
-            Profit stays in Stripe — settle printer costs outside Stripe.
+            Stripe earnings, what PrintX owes you for prints you finished, and everyone&apos;s
+            totals. Profit stays in Stripe — settle costs outside Stripe.
           </p>
         </div>
         <label className="text-sm font-semibold text-navy">
@@ -89,12 +98,10 @@ export function AdminMoney() {
             </div>
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                Owed to printers
+                Owed to me
               </p>
-              <p className="mt-2 text-2xl font-bold text-navy">
-                ${data.reimbursementsTotalUsd.toFixed(2)}
-              </p>
-              <p className="mt-1 text-xs text-muted">Worst-case cost · paid outside Stripe</p>
+              <p className="mt-2 text-2xl font-bold text-navy">${owedToMeUsd.toFixed(2)}</p>
+              <p className="mt-1 text-xs text-muted">Your worst-case cost · paid outside Stripe</p>
             </div>
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -103,15 +110,27 @@ export function AdminMoney() {
               <p className="mt-2 text-2xl font-bold text-electric">
                 ${data.businessKeptUsd.toFixed(2)}
               </p>
-              <p className="mt-1 text-xs text-muted">Earnings minus printer costs</p>
+              <p className="mt-1 text-xs text-muted">Earnings minus all print costs</p>
             </div>
           </div>
 
           <section className="rounded-2xl border bg-white p-6">
-            <h2 className="text-lg font-bold text-navy">Owed by person</h2>
-            <p className="mt-1 text-sm text-muted">
-              Separate totals for each person who finished prints this month.
-            </p>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-navy">Owed by person</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Everyone who finished prints this month.
+                </p>
+              </div>
+              <p className="text-right">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                  Total owed
+                </span>
+                <span className="text-2xl font-bold tabular-nums text-electric">
+                  ${data.reimbursementsTotalUsd.toFixed(2)}
+                </span>
+              </p>
+            </div>
 
             {data.owedByPerson.length === 0 ? (
               <p className="mt-4 text-sm text-muted">No printer reimbursements this month.</p>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { DashboardStats } from '../types/api'
@@ -23,7 +23,7 @@ function monthLabel(ym: string): string {
 }
 
 export function AdminDashboard() {
-  const { can } = useAdminAuth()
+  const { can, email } = useAdminAuth()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [money, setMoney] = useState<MoneySummaryDto | null>(null)
 
@@ -39,6 +39,13 @@ export function AdminDashboard() {
       .then(setMoney)
       .catch(console.error)
   }, [can])
+
+  const owedToMeUsd = useMemo(() => {
+    if (!money || !email) return 0
+    const me = email.trim().toLowerCase()
+    const mine = money.owedByPerson.find((p) => p.email.trim().toLowerCase() === me)
+    return mine?.totalOwedUsd ?? 0
+  }, [money, email])
 
   const online = stats?.websiteOnline !== false
 
@@ -154,10 +161,10 @@ export function AdminDashboard() {
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
-                Owed to printers
+                Owed to me
               </p>
               <p className="mt-2 text-4xl font-extrabold tracking-tight tabular-nums text-cyan sm:text-5xl">
-                {money ? `$${money.reimbursementsTotalUsd.toFixed(2)}` : '—'}
+                {money ? `$${owedToMeUsd.toFixed(2)}` : '—'}
               </p>
             </div>
             <div>
@@ -169,16 +176,6 @@ export function AdminDashboard() {
               </p>
             </div>
           </div>
-          {money && money.owedByPerson.length > 0 ? (
-            <p className="mt-5 text-sm text-white/70">
-              {money.owedByPerson
-                .map(
-                  (p) =>
-                    `${p.displayName?.trim() || p.email.split('@')[0] || 'Printer'} $${p.totalOwedUsd.toFixed(2)}`,
-                )
-                .join(' · ')}
-            </p>
-          ) : null}
         </Link>
       )}
 

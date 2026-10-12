@@ -11,7 +11,6 @@ import {
   Settings,
   ShoppingBag,
   Sparkles,
-  Wallet,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -20,6 +19,7 @@ import { Logo } from '../components/Logo'
 import { useMailUnread } from '../hooks/useMailUnread'
 import { SandboxIcon } from '../lib/sandboxIcon'
 import { Printer3d } from '../lib/printer3dIcon'
+import { MoneyBills } from '../lib/moneyBillsIcon'
 import { adminHomePath, adminPath, firstAllowedAdminPath, publicSiteUrl } from '../lib/portal'
 import type { PermissionKey } from '../../shared/permissions'
 
@@ -32,7 +32,7 @@ const links: {
   { section: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, perm: 'dashboard' },
   { section: 'messages', label: 'Inbox', icon: Inbox, perm: 'messages' },
   { section: 'mail', label: 'Mail', icon: Mail, perm: 'mail' },
-  { section: 'money', label: 'Money', icon: Wallet, perm: 'orders' },
+  { section: 'money', label: 'Money', icon: MoneyBills as LucideIcon, perm: 'orders' },
   { section: 'stands', label: 'Stands', icon: MapPin, perm: 'stands' },
   { section: 'designs', label: 'Designs', icon: Printer3d as LucideIcon, perm: 'products' },
   { section: 'approvals', label: 'Approvals & Pricing', icon: ClipboardCheck, perm: 'main_only' },
