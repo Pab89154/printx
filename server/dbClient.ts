@@ -34,7 +34,7 @@ function isPoolExhaustedError(err: unknown): boolean {
   return msg.includes('EMAXCONNSESSION') || msg.includes('max clients reached') || msg.includes('too many clients')
 }
 
-async function poolQuery(pool: pg.Pool, sql: string, params: unknown[] = [], attempts = 4) {
+async function poolQuery(pool: pg.Pool, sql: string, params: unknown[] = [], attempts = 8) {
   let lastErr: unknown
   for (let i = 0; i < attempts; i++) {
     try {
@@ -42,8 +42,12 @@ async function poolQuery(pool: pg.Pool, sql: string, params: unknown[] = [], att
     } catch (err) {
       lastErr = err
       if (!isPoolExhaustedError(err) || i === attempts - 1) throw err
-      // Session pooler saturated (often after Vite restarts) — brief backoff.
-      await new Promise((r) => setTimeout(r, 150 * (i + 1)))
+      // Session pooler saturated (Vite restarts / rolling deploys) — wait for slots.
+      const waitMs = Math.min(8_000, 400 * 2 ** i)
+      console.warn(
+        `[printx] Postgres session pool busy (attempt ${i + 1}/${attempts}); retry in ${waitMs}ms`,
+      )
+      await new Promise((r) => setTimeout(r, waitMs))
     }
   }
   throw lastErr
@@ -124,22 +128,24 @@ export async function getDbApi(): Promise<DbApi> {
 
   const databaseUrl = process.env.DATABASE_URL?.trim()
   if (databaseUrl) {
-    // Supabase session pooler caps ~15 clients project-wide. Keep this small —
-    // each Vite restart used to leak another pool of 5 and trip EMAXCONNSESSION.
-    const isDev = process.env.NODE_ENV !== 'production'
+    // Supabase session pooler is project-wide (~15). One client per process avoids
+    // EMAXCONNSESSION when Vite, Render, and rolling deploys share the pool.
+    const poolMax = Number(process.env.PRINTX_PG_POOL_MAX || 1)
     pool = new pg.Pool({
       connectionString: databaseUrl,
       ssl: databaseUrl.includes('localhost') ? undefined : { rejectUnauthorized: false },
-      max: isDev ? 2 : 4,
-      idleTimeoutMillis: 8_000,
-      connectionTimeoutMillis: 15_000,
+      max: Number.isFinite(poolMax) && poolMax > 0 ? Math.min(poolMax, 3) : 1,
+      idleTimeoutMillis: 5_000,
+      connectionTimeoutMillis: 20_000,
       allowExitOnIdle: true,
     })
     pool.on('error', (err) => {
       console.error('[printx] idle Postgres client error', err)
     })
     api = createPostgresApi(pool)
-    console.log('[printx] Using Supabase/Postgres DATABASE_URL')
+    console.log(
+      `[printx] Using Supabase/Postgres DATABASE_URL (pool max ${pool.options.max})`,
+    )
   } else {
     // Lazy-load node:sqlite so production with DATABASE_URL does not need --experimental-sqlite
     const { DatabaseSync } = await import('node:sqlite')

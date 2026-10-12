@@ -890,11 +890,40 @@ async function initDb(): Promise<DbApi> {
   return database
 }
 
+function isSessionPoolBusy(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return (
+    msg.includes('EMAXCONNSESSION') ||
+    msg.includes('max clients reached') ||
+    msg.includes('too many clients')
+  )
+}
+
 /** Initialize once (migrate, seed, ensurePrimaryAdmin). Safe to call repeatedly. */
 export async function ensureDbReady(): Promise<DbApi> {
   if (ready) return getDbApi()
   if (!readyPromise) {
-    readyPromise = initDb().catch((err) => {
+    readyPromise = (async () => {
+      // Session pooler may be full after crashed deploys / local Vite — retry boot.
+      const attempts = 6
+      let lastErr: unknown
+      for (let i = 0; i < attempts; i++) {
+        try {
+          return await initDb()
+        } catch (err) {
+          lastErr = err
+          ready = false
+          await closeDbApi()
+          if (!isSessionPoolBusy(err) || i === attempts - 1) throw err
+          const waitMs = Math.min(20_000, 1_000 * 2 ** i)
+          console.warn(
+            `[printx] DB start blocked by session pool (attempt ${i + 1}/${attempts}); waiting ${waitMs}ms`,
+          )
+          await new Promise((r) => setTimeout(r, waitMs))
+        }
+      }
+      throw lastErr
+    })().catch((err) => {
       readyPromise = null
       throw err
     })

@@ -1856,21 +1856,13 @@ export async function handleCatalogApi(
       owedByPerson.reduce((sum, p) => sum + p.totalOwedUsd, 0),
     )
 
-    const [
-      yearStripeUsd,
-      yearOwedToMeUsd,
-      yearReimbursementsUsd,
-      allTimeStripeUsd,
-      allTimeOwedToMeUsd,
-      allTimeReimbursementsUsd,
-    ] = await Promise.all([
-      sumStripeInRange(yearStart, yearEnd),
-      sumReimburseInRange(yearStart, yearEnd, admin.id),
-      sumReimburseInRange(yearStart, yearEnd),
-      sumStripeInRange(null, null),
-      sumReimburseInRange(null, null, admin.id),
-      sumReimburseInRange(null, null),
-    ])
+    // Sequential — session pooler has one client; parallel queries queue/saturate it.
+    const yearStripeUsd = await sumStripeInRange(yearStart, yearEnd)
+    const yearOwedToMeUsd = await sumReimburseInRange(yearStart, yearEnd, admin.id)
+    const yearReimbursementsUsd = await sumReimburseInRange(yearStart, yearEnd)
+    const allTimeStripeUsd = await sumStripeInRange(null, null)
+    const allTimeOwedToMeUsd = await sumReimburseInRange(null, null, admin.id)
+    const allTimeReimbursementsUsd = await sumReimburseInRange(null, null)
 
     // ISO timestamps → YYYY-MM via substr works on both SQLite and Postgres.
     const shopByMonth = await db.all<{ ym: string; total: number | string | null }>(
