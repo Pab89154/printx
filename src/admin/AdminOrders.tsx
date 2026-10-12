@@ -144,8 +144,8 @@ export function AdminOrders() {
                   {order.shippingCountry ? <p>{order.shippingCountry}</p> : null}
                   {!order.shippingLine1 && !order.shippingCity && !order.shippingPostal ? (
                     <p className="text-amber-700">
-                      Street address not in Stripe yet — use Refresh from Stripe, or check the
-                      Checkout session in the Stripe Dashboard.
+                      Street not saved in PrintX yet — click Refresh from Stripe (imports ship-to or
+                      billing address from the payment).
                     </p>
                   ) : null}
                   {(order.shippingMethod || order.shippingUsd > 0) && (

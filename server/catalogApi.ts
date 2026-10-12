@@ -41,8 +41,10 @@ import { roundMoney } from './pricing.ts'
 import {
   loadCheckoutShipping,
   parseCheckoutShipping,
+  probeCheckoutShippingSources,
   resolveShippingMethodName,
   stripeCheckoutShippingFields,
+  type ShippingSourceProbe,
 } from './stripeShipping.ts'
 import {
   cloudSlicerConfigured,
@@ -888,9 +890,9 @@ export async function handleCatalogApi(
       const now = new Date().toISOString()
       const paymentIntent =
         typeof session.payment_intent === 'string' ? session.payment_intent : null
-      // Webhook payload may omit nested ship-to; re-fetch session + PI for a durable address.
+      // Webhook payload may omit nested ship-to; always re-fetch session + PI/charge/customer.
       let ship = parseCheckoutShipping(session)
-      if (!ship.shippingLine1 && !ship.shippingCity && !ship.shippingPostal && session.id) {
+      if (session.id) {
         try {
           const loaded = await loadCheckoutShipping(stripe, session.id)
           session = loaded.session
@@ -1441,16 +1443,36 @@ export async function handleCatalogApi(
   }
 
   // ----- Orders -----
+  async function persistShippingProbe(orderId: string, probe: ShippingSourceProbe) {
+    const now = new Date().toISOString()
+    const key = `shipping_backfill_debug_${orderId}`
+    try {
+      await db.run(
+        `INSERT INTO website_settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        key,
+        JSON.stringify(probe),
+        now,
+      )
+    } catch (err) {
+      console.warn(
+        '[printx] Could not persist shipping probe',
+        orderId,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
   async function backfillOrderShippingFromStripe(
     row: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> {
-    if (String(row.shipping_line1 || '').trim()) return row
+  ): Promise<{ row: Record<string, unknown>; probe: ShippingSourceProbe | null }> {
+    if (String(row.shipping_line1 || '').trim()) return { row, probe: null }
     let sessionId = String(row.stripe_session_id || '').trim()
     const piId = String(row.stripe_payment_intent || '').trim()
     const stripe = stripeClient()
     if (!stripe) {
       console.warn('[printx] Shipping backfill skipped — STRIPE_SECRET_KEY not configured')
-      return row
+      return { row, probe: null }
     }
     try {
       if (!sessionId && piId) {
@@ -1471,33 +1493,31 @@ export async function handleCatalogApi(
 
       let ship: ReturnType<typeof parseCheckoutShipping>
       let session: Stripe.Checkout.Session | null = null
+      let probe: ShippingSourceProbe | null = null
       if (sessionId) {
         const loaded = await loadCheckoutShipping(stripe, sessionId)
         ship = loaded.ship
         session = loaded.session
+        probe = loaded.probe
       } else if (piId) {
         const paymentIntent = await stripe.paymentIntents.retrieve(piId, {
-          expand: ['latest_charge'],
+          expand: ['latest_charge', 'payment_method'],
         })
-        ship = parseCheckoutShipping(
-          { customer_details: null, shipping_cost: null } as Stripe.Checkout.Session,
-          paymentIntent,
-        )
+        const emptySession = {
+          customer_details: null,
+          shipping_cost: null,
+        } as Stripe.Checkout.Session
+        ship = parseCheckoutShipping(emptySession, paymentIntent)
+        probe = probeCheckoutShippingSources(emptySession, paymentIntent)
       } else {
-        return row
+        return { row, probe: null }
       }
 
+      if (probe) await persistShippingProbe(String(row.id), probe)
+
       if (!ship.shippingLine1 && !ship.shippingCity && !ship.shippingPostal) {
-        console.warn('[printx] Stripe has no ship-to address for order', String(row.id), {
-          sessionId: sessionId || null,
-          piId: piId || null,
-          hasCollected: Boolean(
-            session &&
-              (session as { collected_information?: unknown }).collected_information,
-          ),
-          shippingCost: session?.shipping_cost?.amount_total ?? null,
-        })
-        return row
+        console.warn('[printx] Stripe has no usable street address for order', String(row.id), probe)
+        return { row, probe }
       }
       const shippingMethod = session
         ? await resolveShippingMethodName(stripe, session, ship.shippingMethod)
@@ -1537,17 +1557,17 @@ export async function handleCatalogApi(
         now,
         String(row.id),
       )
-      return (
+      const updated =
         (await db.get<Record<string, unknown>>('SELECT * FROM orders WHERE id = ?', String(row.id))) ||
         row
-      )
+      return { row: updated, probe }
     } catch (err) {
       console.warn(
         '[printx] Could not backfill shipping from Stripe',
         sessionId || piId || String(row.id),
         err instanceof Error ? err.message : err,
       )
-      return row
+      return { row, probe: null }
     }
   }
 
@@ -1563,8 +1583,10 @@ export async function handleCatalogApi(
     )
     const orders = []
     for (const raw of rows) {
-      const row = await backfillOrderShippingFromStripe(raw)
-      const order = rowToOrder(row)
+      const { row, probe } = await backfillOrderShippingFromStripe(raw)
+      const order = rowToOrder(row) as ReturnType<typeof rowToOrder> & {
+        shippingStripeProbe?: ShippingSourceProbe
+      }
       const items = await db.all<Record<string, unknown>>(
         `SELECT oi.*, d.name as design_name
          FROM order_items oi
@@ -1574,6 +1596,9 @@ export async function handleCatalogApi(
         order.id,
       )
       order.items = items.map(rowToOrderItem)
+      if (!order.shippingLine1 && !order.shippingCity && !order.shippingPostal && probe) {
+        order.shippingStripeProbe = probe
+      }
       orders.push(order)
     }
     const printers = await listPrinters(db)
