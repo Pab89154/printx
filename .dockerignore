@@ -1,0 +1,16 @@
+node_modules
+.git
+.slicer
+.tmp*
+*.md
+dist
+.env
+.env.*
+passcode.env
+data
+ios
+cloudflare
+supabase
+.cursor
+**/*.mov
+**/*.mp4

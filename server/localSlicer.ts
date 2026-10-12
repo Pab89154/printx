@@ -50,8 +50,10 @@ function candidateBins(): string[] {
   const home = process.env.PRINTX_SLICER_HOME?.trim()
   return [
     fromEnv,
+    home ? path.join(home, 'printx-slice') : '',
     home ? path.join(home, 'AppRun') : '',
     home ? path.join(home, 'bambu-studio') : '',
+    '/opt/printx-slicer/printx-slice',
     '/opt/printx-slicer/AppRun',
     '/opt/printx-slicer/bambu-studio',
     '/Applications/BambuStudio.app/Contents/MacOS/BambuStudio',

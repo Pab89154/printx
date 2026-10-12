@@ -5,6 +5,7 @@ echo "==> PrintX Render build"
 echo "Node: $(node -v)"
 echo "NPM: $(npm -v)"
 echo "PWD: $(pwd)"
+echo "OS: $(uname -a)"
 
 npm ci
 
@@ -20,7 +21,11 @@ echo "==> Installing local slicer (Bambu Studio AppImage) for Free-plan G-code"
 if bash scripts/install-slicer.sh; then
   echo "==> Local slicer install OK"
 else
-  echo "WARNING: local slicer install failed — G-code download needs Bambu Studio on the host"
+  # Native Node hosts on Render often cannot extract the AppImage (no FUSE / libs).
+  # Docker runtime (render.yaml + Dockerfile) bakes the slicer in at image build time.
+  echo "WARNING: local slicer install failed on this host."
+  echo "If this service is still Environment=Node, switch it to Docker (see render.yaml)"
+  echo "so Free Cloud Slicer G-code downloads work. Continuing so the site can boot."
 fi
 
 echo "==> Build complete"
