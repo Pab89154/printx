@@ -16,6 +16,74 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T
 }
 
+function isAppleTouchBrowser() {
+  if (typeof navigator === 'undefined') return false
+  return (
+    /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  )
+}
+
+function filenameFromDisposition(disposition: string, fallback: string) {
+  const utf = /filename\*=(?:UTF-8''|utf-8'')([^;]+)/i.exec(disposition)
+  if (utf?.[1]) {
+    try {
+      return decodeURIComponent(utf[1].trim().replace(/^"+|"+$/g, ''))
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(disposition)
+  return plain?.[1]?.trim() || fallback
+}
+
+/** Authenticated file download that survives Safari/iOS (gesture + delayed revoke). */
+async function downloadAuthFile(url: string, fallbackFilename: string, errorLabel: string) {
+  // Open while still in the click call stack — iOS blocks blob saves after await otherwise.
+  const popup = isAppleTouchBrowser() ? window.open('about:blank', '_blank') : null
+  try {
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      popup?.close()
+      throw new Error((data as { error?: string }).error ?? errorLabel)
+    }
+    const blob = await res.blob()
+    if (!blob.size) {
+      popup?.close()
+      throw new Error(errorLabel)
+    }
+    const filename = filenameFromDisposition(
+      res.headers.get('content-disposition') || '',
+      fallbackFilename,
+    )
+    const objectUrl = URL.createObjectURL(blob)
+
+    if (popup) {
+      popup.location.href = objectUrl
+    } else {
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = filename
+      a.rel = 'noopener'
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // iOS often ignores <a download> after an async fetch; open the blob instead.
+      if (isAppleTouchBrowser()) {
+        const opened = window.open(objectUrl, '_blank')
+        if (!opened) window.location.assign(objectUrl)
+      }
+    }
+    // Revoking immediately can cancel the download in Chromium.
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+  } catch (err) {
+    popup?.close()
+    throw err
+  }
+}
+
 export const api = {
   customer: {
     me: () =>
@@ -279,25 +347,12 @@ export const api = {
           method: 'POST',
           body: JSON.stringify(body),
         }),
-      downloadGcode: async (itemId: string) => {
-        const res = await fetch(`/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`, {
-          credentials: 'include',
-        })
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}))
-          throw new Error((data as { error?: string }).error ?? 'G-code download failed')
-        }
-        const blob = await res.blob()
-        const disposition = res.headers.get('content-disposition') || ''
-        const match = /filename="?([^"]+)"?/i.exec(disposition)
-        const filename = match?.[1] || `printx-${itemId.slice(0, 8)}.gcode`
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = filename
-        a.click()
-        URL.revokeObjectURL(url)
-      },
+      downloadGcode: (itemId: string) =>
+        downloadAuthFile(
+          `/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`,
+          `printx-${itemId.slice(0, 8)}.gcode`,
+          'G-code download failed',
+        ),
     },
     money: {
       get: (month?: string) => {
@@ -379,23 +434,18 @@ export const api = {
       updateStatus: (id: string, status: string) =>
         request(`/api/admin/custom-requests/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
       delete: (id: string) => request(`/api/admin/custom-requests/${id}`, { method: 'DELETE' }),
-      downloadGcode: async (id: string) => {
-        const res = await fetch(`/api/admin/custom-requests/${id}/gcode`, { credentials: 'include' })
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}))
-          throw new Error((data as { error?: string }).error ?? 'G-code download failed')
-        }
-        const blob = await res.blob()
-        const disposition = res.headers.get('content-disposition') || ''
-        const match = /filename="?([^"]+)"?/i.exec(disposition)
-        const filename = match?.[1] || `printx-custom-${id.slice(0, 8)}.gcode`
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = filename
-        a.click()
-        URL.revokeObjectURL(url)
-      },
+      downloadGcode: (id: string) =>
+        downloadAuthFile(
+          `/api/admin/custom-requests/${encodeURIComponent(id)}/gcode`,
+          `printx-custom-${id.slice(0, 8)}.gcode`,
+          'G-code download failed',
+        ),
+      downloadSource: (fileName: string) =>
+        downloadAuthFile(
+          `/api/admin/uploads/${encodeURIComponent(fileName)}`,
+          fileName,
+          'Source model download failed',
+        ),
     },
     push: {
       vapidPublicKey: () =>

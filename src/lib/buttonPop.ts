@@ -92,8 +92,11 @@ function shouldDelayNav(anchor: HTMLAnchorElement) {
   if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) return false
   if (anchor.target && anchor.target !== '_self') return false
   if (anchor.hasAttribute('download')) return false
+  // File/API downloads must use the browser — React Router would 404 them.
+  if (href.startsWith('/api/') || href.includes('/api/')) return false
   try {
     const url = new URL(href, window.location.href)
+    if (url.pathname.startsWith('/api/')) return false
     return url.origin === window.location.origin
   } catch {
     return false

@@ -196,12 +196,23 @@ export function AdminRequests() {
                   <p className="mt-1 whitespace-pre-wrap text-xs text-amber-700">{req.slice_error}</p>
                 ) : null}
                 {req.uploaded_file && (
-                  <a
-                    href={`/api/admin/uploads/${encodeURIComponent(req.uploaded_file)}`}
+                  <button
+                    type="button"
                     className="mt-1 inline-block text-xs font-medium text-electric hover:underline"
+                    disabled={busyId === req.id}
+                    onClick={() => {
+                      setBusyId(req.id)
+                      setError('')
+                      void api.admin.requests
+                        .downloadSource(req.uploaded_file!)
+                        .catch((e) =>
+                          setError(e instanceof Error ? e.message : 'Source download failed'),
+                        )
+                        .finally(() => setBusyId(null))
+                    }}
                   >
                     Download source model
-                  </a>
+                  </button>
                 )}
                 <p className="mt-2 text-xs text-muted">Submitted {new Date(req.created_at).toLocaleString()}</p>
               </div>

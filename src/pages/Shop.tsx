@@ -1,11 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Search } from 'lucide-react'
 import { api } from '../lib/api'
 import type { CatalogColor, PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 import { CartLink } from '../components/CartLink'
 import { StlViewer } from '../components/StlViewer'
+
+function designMatchesQuery(design: PublicCatalogDesign, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  const haystack = [design.name, design.description, design.category, design.skuBase]
+    .join(' ')
+    .toLowerCase()
+  return q.split(/\s+/).every((term) => haystack.includes(term))
+}
 
 function ShopCard({ design }: { design: PublicCatalogDesign }) {
   const [previewColor, setPreviewColor] = useState<CatalogColor | undefined>(
@@ -80,6 +90,7 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
 
 export function Shop() {
   const [designs, setDesigns] = useState<PublicCatalogDesign[]>([])
+  const [query, setQuery] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -88,6 +99,8 @@ export function Shop() {
       .then((d) => setDesigns(d.designs))
       .catch((e) => setError(e instanceof Error ? e.message : 'Could not load catalog'))
   }, [])
+
+  const filtered = designs.filter((d) => designMatchesQuery(d, query))
 
   return (
     <div className="min-h-screen bg-surface">
@@ -101,16 +114,36 @@ export function Shop() {
           <CartLink primary />
         </div>
 
+        <label className="relative mt-8 block max-w-xl">
+          <span className="sr-only">Search catalog</span>
+          <Search
+            size={18}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+            aria-hidden
+          />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name, category, or SKU…"
+            autoComplete="off"
+            className="field-input w-full !py-3 pl-10 pr-4"
+          />
+        </label>
+
         {error && <p className="mt-6 text-sm text-red-600">{error}</p>}
 
-        <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {designs.map((d) => (
+        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((d) => (
             <ShopCard key={d.id} design={d} />
           ))}
         </div>
 
         {designs.length === 0 && !error && (
           <p className="mt-10 text-sm text-muted">No designs yet.</p>
+        )}
+        {designs.length > 0 && filtered.length === 0 && !error && (
+          <p className="mt-10 text-sm text-muted">No designs match “{query.trim()}”.</p>
         )}
       </main>
       <Footer />
