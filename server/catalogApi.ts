@@ -735,6 +735,7 @@ export async function handleCatalogApi(
       cancel_url: cancelUrl,
       client_reference_id: orderId,
       metadata: { orderId },
+      // Ad-hoc price_data only — catalog lives in Supabase, never Stripe Products.
       line_items: lineItems.map((i) => ({
         quantity: i.qty,
         price_data: {

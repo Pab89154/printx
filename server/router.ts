@@ -645,6 +645,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         line_items: [
           {
             quantity: 1,
+            // Ad-hoc price_data — custom quotes live in Supabase, not Stripe Products.
             price_data: {
               currency: 'usd',
               unit_amount: Math.round(price * 100),

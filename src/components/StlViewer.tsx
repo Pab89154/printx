@@ -6,7 +6,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 type Props = {
   url: string
   className?: string
-  height?: number
+  height?: number | '100%'
   /** Admin STL routes need cookies; public catalog does not. */
   credentials?: RequestCredentials
   /** Orbit controls — off for catalog “screenshot” tiles. */
@@ -48,6 +48,12 @@ export function StlViewer({
   eager = true,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const materialRef = useRef<THREE.MeshStandardMaterial | null>(null)
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
+  const sceneRef = useRef<THREE.Scene | null>(null)
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
+  const colorHexRef = useRef(colorHex)
+  colorHexRef.current = colorHex
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [activeUrl, setActiveUrl] = useState(eager ? url : '')
@@ -67,11 +73,25 @@ export function StlViewer({
           io.disconnect()
         }
       },
-      { rootMargin: '120px', threshold: 0.01 },
+      { rootMargin: '160px', threshold: 0.01 },
     )
     io.observe(host)
     return () => io.disconnect()
   }, [url, eager])
+
+  // Update mesh tint without re-fetching the STL.
+  useEffect(() => {
+    const mat = materialRef.current
+    const renderer = rendererRef.current
+    const scene = sceneRef.current
+    const camera = cameraRef.current
+    if (!mat) return
+    mat.color.setHex(parseHex(colorHex, 0x12b5d4))
+    mat.needsUpdate = true
+    if (!interactive && renderer && scene && camera) {
+      renderer.render(scene, camera)
+    }
+  }, [colorHex, interactive])
 
   useEffect(() => {
     const host = hostRef.current
@@ -83,18 +103,22 @@ export function StlViewer({
     let controls: OrbitControls | null = null
     let renderer: THREE.WebGLRenderer | null = null
     const loader = new STLLoader()
-    const meshColor = parseHex(colorHex, 0x12b5d4)
+    const meshColor = parseHex(colorHexRef.current, 0x12b5d4)
 
     setError('')
     setLoading(true)
 
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0xf1f5f9)
+    sceneRef.current = scene
+    // Slightly darker than white filament so light colors stay visible.
+    scene.background = new THREE.Color(0xe2e8f0)
 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000)
     camera.position.set(80, 60, 100)
+    cameraRef.current = camera
 
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' })
+    rendererRef.current = renderer
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     host.replaceChildren(renderer.domElement)
     renderer.domElement.style.display = 'block'
@@ -104,9 +128,9 @@ export function StlViewer({
       renderer.domElement.style.pointerEvents = 'none'
     }
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xcbd5e1, 1.1)
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xcbd5e1, 1.15)
     scene.add(hemi)
-    const dir = new THREE.DirectionalLight(0xffffff, 0.85)
+    const dir = new THREE.DirectionalLight(0xffffff, 0.9)
     dir.position.set(40, 80, 30)
     scene.add(dir)
 
@@ -118,7 +142,10 @@ export function StlViewer({
     const syncSize = () => {
       if (!renderer || !hostRef.current) return
       const w = Math.max(hostRef.current.clientWidth || 0, 120)
-      const h = Math.max(hostRef.current.clientHeight || height, 120)
+      const h = Math.max(
+        hostRef.current.clientHeight || (typeof height === 'number' ? height : 120),
+        120,
+      )
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h, false)
@@ -164,10 +191,11 @@ export function StlViewer({
         geometry.computeBoundingSphere()
 
         const material = new THREE.MeshStandardMaterial({
-          color: meshColor,
-          metalness: 0.12,
-          roughness: 0.48,
+          color: parseHex(colorHexRef.current, meshColor),
+          metalness: 0.08,
+          roughness: 0.52,
         })
+        materialRef.current = material
         mesh = new THREE.Mesh(geometry, material)
         scene.add(mesh)
 
@@ -197,6 +225,10 @@ export function StlViewer({
       cancelAnimationFrame(frame)
       ro.disconnect()
       controls?.dispose()
+      materialRef.current = null
+      if (rendererRef.current === renderer) rendererRef.current = null
+      if (sceneRef.current === scene) sceneRef.current = null
+      if (cameraRef.current === camera) cameraRef.current = null
       if (mesh) {
         mesh.geometry.dispose()
         ;(mesh.material as THREE.Material).dispose()
@@ -205,14 +237,19 @@ export function StlViewer({
       renderer = null
       host.replaceChildren()
     }
-  }, [activeUrl, height, credentials, interactive, colorHex])
+  }, [activeUrl, height, credentials, interactive])
+
+  const fillParent = height === '100%'
+  const hostStyle = fillParent ? ({ height: '100%', minHeight: 0 } as const) : { height }
 
   return (
-    <div className={`relative ${className}`.trim()}>
+    <div className={`relative h-full w-full ${className}`.trim()}>
       <div
         ref={hostRef}
-        className="h-full min-h-[12rem] w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
-        style={{ height }}
+        className={`h-full w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-100 ${
+          fillParent ? 'min-h-0' : 'min-h-[12rem]'
+        }`}
+        style={hostStyle}
       />
       {loading && !error ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-100/70 text-xs font-medium text-muted">
