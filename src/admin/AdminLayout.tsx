@@ -11,6 +11,7 @@ import {
   Settings,
   ShoppingBag,
   Sparkles,
+  Wallet,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -31,6 +32,7 @@ const links: {
   { section: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, perm: 'dashboard' },
   { section: 'messages', label: 'Inbox', icon: Inbox, perm: 'messages' },
   { section: 'mail', label: 'Mail', icon: Mail, perm: 'mail' },
+  { section: 'money', label: 'Money', icon: Wallet, perm: 'orders' },
   { section: 'stands', label: 'Stands', icon: MapPin, perm: 'stands' },
   { section: 'designs', label: 'Designs', icon: Printer3d as LucideIcon, perm: 'products' },
   { section: 'approvals', label: 'Approvals & Pricing', icon: ClipboardCheck, perm: 'main_only' },

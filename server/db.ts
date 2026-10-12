@@ -245,6 +245,32 @@ async function migrate(database: DbApi) {
       note TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS printer_settlements (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      year_month TEXT NOT NULL,
+      amount_usd REAL NOT NULL DEFAULT 0,
+      marked_paid_at TEXT NOT NULL,
+      marked_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      note TEXT NOT NULL DEFAULT '',
+      UNIQUE (user_id, year_month)
+    );
+  `)
+}
+
+async function migratePrinterSettlements(database: DbApi) {
+  await database.exec(`
+    CREATE TABLE IF NOT EXISTS printer_settlements (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      year_month TEXT NOT NULL,
+      amount_usd REAL NOT NULL DEFAULT 0,
+      marked_paid_at TEXT NOT NULL,
+      marked_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      note TEXT NOT NULL DEFAULT '',
+      UNIQUE (user_id, year_month)
+    );
   `)
 }
 
@@ -815,6 +841,7 @@ async function initDb(): Promise<DbApi> {
   await migrateContactEmail(database)
   await migrateBrandGradients(database)
   await migrateDfwAreaCopy(database)
+  await migratePrinterSettlements(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
   const { seedCatalogDefaults } = await import('./catalog.ts')

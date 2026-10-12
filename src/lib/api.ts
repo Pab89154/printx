@@ -165,6 +165,25 @@ export const api = {
           { method: 'POST', body: '{}' },
         ),
     },
+    money: {
+      get: (month?: string) => {
+        const q = month && /^\d{4}-\d{2}$/.test(month) ? `?month=${encodeURIComponent(month)}` : ''
+        return request<import('../types/catalog.ts').MoneySummaryDto>(`/api/admin/money${q}`)
+      },
+      settle: (body: { userId: string; yearMonth: string; note?: string }) =>
+        request<{
+          ok: true
+          id: string
+          userId: string
+          yearMonth: string
+          amountUsd: number
+          markedPaidAt: string
+          note: string
+        }>('/api/admin/money/settle', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+    },
     stats: () =>
       request<{ pendingApprovals: number; unclaimedItems: number }>('/api/admin/catalog-stats'),
   },

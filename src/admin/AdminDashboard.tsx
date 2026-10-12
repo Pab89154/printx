@@ -2,17 +2,42 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { DashboardStats } from '../types/api'
+import type { MoneySummaryDto } from '../types/catalog'
 import { adminPath } from '../lib/portal'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { SandboxIcon } from '../lib/sandboxIcon'
 
+function currentUtcMonth(): string {
+  const now = new Date()
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
+function monthLabel(ym: string): string {
+  const [y, m] = ym.split('-').map(Number)
+  if (!y || !m) return ym
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleString(undefined, {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+}
+
 export function AdminDashboard() {
   const { can } = useAdminAuth()
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [money, setMoney] = useState<MoneySummaryDto | null>(null)
 
   useEffect(() => {
     if (!can('dashboard')) return
     api.admin.stats().then(setStats).catch(console.error)
+  }, [can])
+
+  useEffect(() => {
+    if (!can('orders')) return
+    api.catalog.money
+      .get(currentUtcMonth())
+      .then(setMoney)
+      .catch(console.error)
   }, [can])
 
   const online = stats?.websiteOnline !== false
@@ -102,12 +127,69 @@ export function AdminDashboard() {
       <h1 className="text-2xl font-bold text-navy">Welcome to PrintX</h1>
       <p className="mt-1 text-muted">Here&apos;s what&apos;s happening with your business.</p>
 
+      {can('orders') && (
+        <Link
+          to={adminPath('money')}
+          className="mt-8 block rounded-3xl border-2 border-electric/25 bg-gradient-to-br from-navy to-[#132038] p-6 text-white shadow-lg transition hover:border-electric/50 hover:shadow-xl sm:p-8"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-bold uppercase tracking-[0.18em] text-electric">Money</p>
+              <p className="mt-1 text-base text-white/75">
+                {money ? monthLabel(money.month) : 'This month'} · tap for full breakdown
+              </p>
+            </div>
+            <span className="rounded-full bg-electric/20 px-3 py-1 text-xs font-semibold text-electric">
+              Open Money →
+            </span>
+          </div>
+          <div className="mt-6 grid gap-6 sm:grid-cols-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
+                From Stripe
+              </p>
+              <p className="mt-2 text-4xl font-extrabold tracking-tight tabular-nums sm:text-5xl">
+                {money ? `$${money.earnings.totalUsd.toFixed(2)}` : '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
+                Owed to printers
+              </p>
+              <p className="mt-2 text-4xl font-extrabold tracking-tight tabular-nums text-cyan sm:text-5xl">
+                {money ? `$${money.reimbursementsTotalUsd.toFixed(2)}` : '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
+                Business kept
+              </p>
+              <p className="mt-2 text-4xl font-extrabold tracking-tight tabular-nums text-electric sm:text-5xl">
+                {money ? `$${money.businessKeptUsd.toFixed(2)}` : '—'}
+              </p>
+            </div>
+          </div>
+          {money && money.owedByPerson.length > 0 ? (
+            <p className="mt-5 text-sm text-white/70">
+              {money.owedByPerson
+                .map(
+                  (p) =>
+                    `${p.displayName?.trim() || p.email.split('@')[0] || 'Printer'} $${p.totalOwedUsd.toFixed(2)}`,
+                )
+                .join(' · ')}
+            </p>
+          ) : null}
+        </Link>
+      )}
+
       {cards.length > 0 ? (
         <div className="mt-8 grid items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-4">{cards}</div>
       ) : (
-        <p className="mt-8 rounded-xl border border-dashed bg-white p-8 text-center text-muted">
-          No dashboard widgets are available for your account.
-        </p>
+        !can('orders') && (
+          <p className="mt-8 rounded-xl border border-dashed bg-white p-8 text-center text-muted">
+            No dashboard widgets are available for your account.
+          </p>
+        )
       )}
 
       {actions.length > 0 && (

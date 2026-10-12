@@ -483,7 +483,7 @@ async function settleOrderItem(
     itemId,
   )
 
-  // Printer reimbursement
+  // Printer reimbursement only — profit stays with PrintX in Stripe (no partner split).
   await database.run(
     `INSERT INTO profit_ledger (id, order_item_id, user_id, entry_type, amount_usd, note, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -495,23 +495,6 @@ async function settleOrderItem(
     'Worst-case manufacturing reimbursement',
     now,
   )
-
-  const partners = await database.all<{ id: string }>('SELECT id FROM users WHERE role = ?', 'admin')
-  const n = Math.max(1, partners.length)
-  const share = roundMoney(profit / n)
-  for (const p of partners) {
-    await database.run(
-      `INSERT INTO profit_ledger (id, order_item_id, user_id, entry_type, amount_usd, note, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      randomUUID(),
-      itemId,
-      p.id,
-      'profit_share',
-      share,
-      `Equal profit split (${n} partners)`,
-      now,
-    )
-  }
 
   // Roll up order status
   const orderId = item.order_id as string
@@ -1390,6 +1373,282 @@ export async function handleCatalogApi(
        ORDER BY l.created_at DESC LIMIT 300`,
     )
     send(res, 200, rows)
+    return true
+  }
+
+  if (urlPath === '/api/admin/money' && method === 'GET') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const qs = (req.url ?? '').split('?')[1] ?? ''
+    const monthParam = new URLSearchParams(qs).get('month')?.trim() || ''
+    const now = new Date()
+    const yearMonth =
+      /^\d{4}-\d{2}$/.test(monthParam)
+        ? monthParam
+        : `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+    const [yStr, mStr] = yearMonth.split('-')
+    const y = Number(yStr)
+    const m = Number(mStr)
+    const rangeStart = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0)).toISOString()
+    const rangeEnd = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0)).toISOString()
+
+    const shopOrders = await db.all<Record<string, unknown>>(
+      `SELECT id, customer_name, customer_email, total_usd, status, paid_at, stripe_session_id
+       FROM orders
+       WHERE paid_at IS NOT NULL
+         AND paid_at >= ? AND paid_at < ?
+         AND status IN ('paid', 'in_production', 'ready', 'fulfilled')
+       ORDER BY paid_at DESC`,
+      rangeStart,
+      rangeEnd,
+    )
+    const customPaid = await db.all<Record<string, unknown>>(
+      `SELECT id, name, email, catalog_price_usd, status, paid_at, stripe_session_id
+       FROM custom_requests
+       WHERE paid_at IS NOT NULL
+         AND paid_at >= ? AND paid_at < ?
+         AND catalog_price_usd IS NOT NULL
+       ORDER BY paid_at DESC`,
+      rangeStart,
+      rangeEnd,
+    )
+
+    const shopEarnings = roundMoney(
+      shopOrders.reduce((sum, o) => sum + (Number(o.total_usd) || 0), 0),
+    )
+    const customEarnings = roundMoney(
+      customPaid.reduce((sum, o) => sum + (Number(o.catalog_price_usd) || 0), 0),
+    )
+    const earningsTotalUsd = roundMoney(shopEarnings + customEarnings)
+
+    const ledgerRows = await db.all<Record<string, unknown>>(
+      `SELECT l.id, l.user_id, l.amount_usd, l.note, l.created_at, l.order_item_id,
+              u.email as user_email, u.display_name as user_display_name,
+              oi.qty, oi.sku, oi.color_name, oi.order_id,
+              d.name as design_name
+       FROM profit_ledger l
+       JOIN users u ON u.id = l.user_id
+       LEFT JOIN order_items oi ON oi.id = l.order_item_id
+       LEFT JOIN designs d ON d.id = oi.design_id
+       WHERE l.entry_type = 'reimburse'
+         AND l.created_at >= ? AND l.created_at < ?
+       ORDER BY l.created_at DESC`,
+      rangeStart,
+      rangeEnd,
+    )
+
+    const byUser = new Map<
+      string,
+      {
+        userId: string
+        email: string
+        displayName: string | null
+        totalOwedUsd: number
+        lines: {
+          id: string
+          amountUsd: number
+          note: string
+          createdAt: string
+          orderId: string | null
+          designName: string | null
+          sku: string | null
+          colorName: string | null
+          qty: number | null
+        }[]
+      }
+    >()
+    for (const row of ledgerRows) {
+      const userId = String(row.user_id)
+      let bucket = byUser.get(userId)
+      if (!bucket) {
+        bucket = {
+          userId,
+          email: String(row.user_email ?? ''),
+          displayName:
+            typeof row.user_display_name === 'string' && row.user_display_name.trim()
+              ? row.user_display_name.trim()
+              : null,
+          totalOwedUsd: 0,
+          lines: [],
+        }
+        byUser.set(userId, bucket)
+      }
+      const amount = Number(row.amount_usd) || 0
+      bucket.totalOwedUsd = roundMoney(bucket.totalOwedUsd + amount)
+      bucket.lines.push({
+        id: String(row.id),
+        amountUsd: roundMoney(amount),
+        note: String(row.note ?? ''),
+        createdAt: String(row.created_at ?? ''),
+        orderId: row.order_id != null ? String(row.order_id) : null,
+        designName: row.design_name != null ? String(row.design_name) : null,
+        sku: row.sku != null ? String(row.sku) : null,
+        colorName: row.color_name != null ? String(row.color_name) : null,
+        qty: row.qty != null ? Number(row.qty) || null : null,
+      })
+    }
+
+    const settlements = await db.all<Record<string, unknown>>(
+      `SELECT s.*, u.email as user_email, u.display_name as user_display_name
+       FROM printer_settlements s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.year_month = ?`,
+      yearMonth,
+    )
+    const settledByUser = new Map(
+      settlements.map((s) => [
+        String(s.user_id),
+        {
+          id: String(s.id),
+          amountUsd: roundMoney(Number(s.amount_usd) || 0),
+          markedPaidAt: String(s.marked_paid_at ?? ''),
+          note: String(s.note ?? ''),
+        },
+      ]),
+    )
+
+    const owedByPerson = [...byUser.values()]
+      .map((p) => ({
+        ...p,
+        settlement: settledByUser.get(p.userId) ?? null,
+      }))
+      .sort((a, b) => b.totalOwedUsd - a.totalOwedUsd)
+
+    const reimbursementsTotalUsd = roundMoney(
+      owedByPerson.reduce((sum, p) => sum + p.totalOwedUsd, 0),
+    )
+
+    send(res, 200, {
+      month: yearMonth,
+      earnings: {
+        totalUsd: earningsTotalUsd,
+        shopUsd: shopEarnings,
+        customUsd: customEarnings,
+        shopOrders: shopOrders.map((o) => ({
+          id: String(o.id),
+          kind: 'shop' as const,
+          label: String(o.customer_name || o.customer_email || 'Customer'),
+          email: String(o.customer_email ?? ''),
+          amountUsd: roundMoney(Number(o.total_usd) || 0),
+          status: String(o.status ?? ''),
+          paidAt: o.paid_at != null ? String(o.paid_at) : null,
+          stripeSessionId: o.stripe_session_id != null ? String(o.stripe_session_id) : null,
+        })),
+        customOrders: customPaid.map((o) => ({
+          id: String(o.id),
+          kind: 'custom' as const,
+          label: String(o.name || o.email || 'Custom print'),
+          email: String(o.email ?? ''),
+          amountUsd: roundMoney(Number(o.catalog_price_usd) || 0),
+          status: String(o.status ?? ''),
+          paidAt: o.paid_at != null ? String(o.paid_at) : null,
+          stripeSessionId: o.stripe_session_id != null ? String(o.stripe_session_id) : null,
+        })),
+      },
+      owedByPerson,
+      reimbursementsTotalUsd,
+      businessKeptUsd: roundMoney(earningsTotalUsd - reimbursementsTotalUsd),
+      canSettle: admin.isMainAdmin,
+    })
+    return true
+  }
+
+  if (urlPath === '/api/admin/money/settle' && method === 'POST') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    if (!admin.isMainAdmin) {
+      send(res, 403, { error: 'Only the main admin can mark settlements paid.' })
+      return true
+    }
+    const body = await readJson(req)
+    const userId = sanitizeText(String(body.userId ?? ''), 80)
+    const yearMonth = String(body.yearMonth ?? '').trim()
+    const note = sanitizeText(String(body.note ?? ''), 240)
+    if (!userId || !/^\d{4}-\d{2}$/.test(yearMonth)) {
+      send(res, 400, { error: 'userId and yearMonth (YYYY-MM) are required.' })
+      return true
+    }
+    const user = await db.get<{ id: string }>('SELECT id FROM users WHERE id = ?', userId)
+    if (!user) {
+      send(res, 404, { error: 'User not found.' })
+      return true
+    }
+    const [yStr, mStr] = yearMonth.split('-')
+    const y = Number(yStr)
+    const m = Number(mStr)
+    const rangeStart = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0)).toISOString()
+    const rangeEnd = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0)).toISOString()
+    const sumRow = await db.get<{ total: number | string | null }>(
+      `SELECT COALESCE(SUM(amount_usd), 0) as total
+       FROM profit_ledger
+       WHERE entry_type = 'reimburse'
+         AND user_id = ?
+         AND created_at >= ? AND created_at < ?`,
+      userId,
+      rangeStart,
+      rangeEnd,
+    )
+    const amountUsd = roundMoney(Number(sumRow?.total ?? 0))
+    if (amountUsd <= 0) {
+      send(res, 400, { error: 'Nothing owed to this person for that month.' })
+      return true
+    }
+    const now = new Date().toISOString()
+    const existing = await db.get<{ id: string }>(
+      'SELECT id FROM printer_settlements WHERE user_id = ? AND year_month = ?',
+      userId,
+      yearMonth,
+    )
+    if (existing) {
+      await db.run(
+        `UPDATE printer_settlements
+         SET amount_usd = ?, marked_paid_at = ?, marked_by = ?, note = ?
+         WHERE id = ?`,
+        amountUsd,
+        now,
+        admin.id,
+        note,
+        existing.id,
+      )
+      send(res, 200, {
+        ok: true,
+        id: existing.id,
+        userId,
+        yearMonth,
+        amountUsd,
+        markedPaidAt: now,
+        note,
+      })
+      return true
+    }
+    const id = randomUUID()
+    await db.run(
+      `INSERT INTO printer_settlements
+         (id, user_id, year_month, amount_usd, marked_paid_at, marked_by, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      userId,
+      yearMonth,
+      amountUsd,
+      now,
+      admin.id,
+      note,
+    )
+    send(res, 200, {
+      ok: true,
+      id,
+      userId,
+      yearMonth,
+      amountUsd,
+      markedPaidAt: now,
+      note,
+    })
     return true
   }
 

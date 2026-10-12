@@ -34,7 +34,8 @@ export function AdminOrders() {
       <div>
         <h1 className="text-2xl font-bold text-navy">Orders</h1>
         <p className="mt-1 text-sm text-muted">
-          Claim a paid item with your printer. When done, you get the worst-case cost; leftover profit splits equally among admins.
+          Claim a paid item with your printer. When done, you get the worst-case manufacturing cost
+          (tracked under Money). Leftover profit stays with PrintX in Stripe.
         </p>
       </div>
 
@@ -81,8 +82,10 @@ export function AdminOrders() {
                     </p>
                     {item.printStatus === 'done' && (
                       <p className="mt-1 text-xs text-electric">
-                        Reimburse ${item.reimburseUsd?.toFixed(2)} · profit pool $
-                        {item.profitUsd?.toFixed(2)}
+                        Owed to printer ${item.reimburseUsd?.toFixed(2)}
+                        {item.profitUsd != null
+                          ? ` · business kept $${item.profitUsd.toFixed(2)}`
+                          : ''}
                       </p>
                     )}
                   </div>

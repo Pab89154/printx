@@ -9,6 +9,7 @@ const SECTION_ORDER: { section: string; perm: PermissionKey }[] = [
   { section: 'dashboard', perm: 'dashboard' },
   { section: 'messages', perm: 'messages' },
   { section: 'mail', perm: 'mail' },
+  { section: 'money', perm: 'orders' },
   { section: 'stands', perm: 'stands' },
   { section: 'designs', perm: 'products' },
   { section: 'approvals', perm: 'products' },

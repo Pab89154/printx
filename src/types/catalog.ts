@@ -118,6 +118,58 @@ export type OrderDto = {
   items?: OrderItemDto[]
 }
 
+export type MoneyPaymentLineDto = {
+  id: string
+  kind: 'shop' | 'custom'
+  label: string
+  email: string
+  amountUsd: number
+  status: string
+  paidAt: string | null
+  stripeSessionId: string | null
+}
+
+export type MoneyOwedLineDto = {
+  id: string
+  amountUsd: number
+  note: string
+  createdAt: string
+  orderId: string | null
+  designName: string | null
+  sku: string | null
+  colorName: string | null
+  qty: number | null
+}
+
+export type MoneyOwedPersonDto = {
+  userId: string
+  email: string
+  displayName: string | null
+  totalOwedUsd: number
+  lines: MoneyOwedLineDto[]
+  settlement: {
+    id: string
+    amountUsd: number
+    markedPaidAt: string
+    note: string
+  } | null
+}
+
+export type MoneySummaryDto = {
+  month: string
+  earnings: {
+    totalUsd: number
+    shopUsd: number
+    customUsd: number
+    shopOrders: MoneyPaymentLineDto[]
+    customOrders: MoneyPaymentLineDto[]
+  }
+  owedByPerson: MoneyOwedPersonDto[]
+  reimbursementsTotalUsd: number
+  businessKeptUsd: number
+  canSettle: boolean
+}
+
 export type CartLine = {
   designId: string
   skuBase: string
