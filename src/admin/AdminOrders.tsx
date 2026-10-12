@@ -387,7 +387,16 @@ export function AdminOrders() {
                               .finally(() => setGcodeBusyId(null))
                           }}
                         >
-                          {gcodeBusyId === item.id ? 'Preparing…' : 'Download G-code'}
+                          {gcodeBusyId === item.id
+                            ? 'Preparing…'
+                            : `Download G-code${
+                                item.assignedPrinterId
+                                  ? ` · ${
+                                      printers.find((p) => p.id === item.assignedPrinterId)
+                                        ?.ownerLabel ?? item.assignedPrinterId
+                                    }`
+                                  : ''
+                              }`}
                         </button>
                         {item.printStatus === 'claimed' && (
                           <button

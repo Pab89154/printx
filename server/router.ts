@@ -1263,6 +1263,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
           catalog_price_usd: mapped.catalog_price_usd,
           quoted_at: mapped.quoted_at,
           has_gcode: Object.keys(mapped.quote_ids).length > 0,
+          quoted_printer_ids: Object.keys(mapped.quote_ids),
+          worst_printer_label:
+            mapped.worst_printer_id === 'pablo_p1s'
+              ? 'P1S'
+              : mapped.worst_printer_id === 'court_ender'
+                ? 'Ender 3v2'
+                : mapped.worst_printer_id === 'josh_kobra'
+                  ? 'Kobra X'
+                  : mapped.worst_printer_id,
           shipping_name: mapped.shipping_name,
           shipping_line1: mapped.shipping_line1,
           shipping_line2: mapped.shipping_line2,
@@ -1293,8 +1302,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       return true
     }
     const id = adminCustomGcodeMatch[1]!
+    const qs = (req.url ?? '').split('?')[1] ?? ''
+    const printerId = new URLSearchParams(qs).get('printerId')?.trim() || ''
     try {
-      const { buffer, filename } = await downloadCustomRequestGcode(db, id)
+      const { buffer, filename } = await downloadCustomRequestGcode(db, id, printerId || null)
       res.statusCode = 200
       res.setHeader('Content-Type', 'application/octet-stream')
       res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`)

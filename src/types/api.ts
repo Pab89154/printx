@@ -102,6 +102,8 @@ export type CustomRequest = {
   catalog_price_usd: number | null
   quoted_at: string | null
   has_gcode: boolean
+  quoted_printer_ids?: string[]
+  worst_printer_label?: string | null
   shipping_name: string
   shipping_line1: string
   shipping_line2: string

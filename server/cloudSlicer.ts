@@ -100,7 +100,7 @@ async function queueQuote(creds: CloudSlicerCreds, fileId: string): Promise<stri
   return quoteId
 }
 
-async function waitForQuote(
+export async function waitForQuote(
   creds: CloudSlicerCreds,
   quoteId: string,
   timeoutMs = 300_000,
@@ -124,6 +124,14 @@ async function waitForQuote(
     await new Promise((r) => setTimeout(r, 2000))
   }
   throw new Error('Cloud Slicer quote timed out.')
+}
+
+/** True when we should re-slice this printer instead of using the stored quote id. */
+export function isGcodeOutputMissing(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return /output file is not available|not available for this quote|g-code download failed \(404\)|poll failed \(404\)|quote(?: record)? not found/i.test(
+    msg,
+  )
 }
 
 function extractGramsHours(quote: Record<string, unknown>): { grams: number; hours: number } {
@@ -154,8 +162,7 @@ export async function quoteStlForPrinter(
   return { grams, hours, quoteId, fileId }
 }
 
-/** Download sliced G-code for a successful quote. */
-export async function downloadQuoteGcode(
+async function downloadQuoteGcodeOnce(
   creds: CloudSlicerCreds,
   quoteId: string,
 ): Promise<{ buffer: Buffer; filename: string }> {
@@ -178,6 +185,44 @@ export async function downloadQuoteGcode(
   const buffer = Buffer.from(await res.arrayBuffer())
   if (!buffer.length) throw new Error('Cloud Slicer returned an empty G-code file.')
   return { buffer, filename: filename.endsWith('.gcode') ? filename : `${filename}.gcode` }
+}
+
+/** Download sliced G-code for one quote (waits for success; brief retries if output lags). */
+export async function downloadQuoteGcode(
+  creds: CloudSlicerCreds,
+  quoteId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const id = quoteId.trim()
+  if (!id) throw new Error('Missing Cloud Slicer quote id.')
+  await waitForQuote(creds, id)
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      return await downloadQuoteGcodeOnce(creds, id)
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err))
+      if (!isGcodeOutputMissing(lastErr) || attempt === 5) throw lastErr
+      await new Promise((r) => setTimeout(r, 2000))
+    }
+  }
+  throw lastErr ?? new Error('G-code download failed')
+}
+
+/** Fresh slice for one printer, then download that quote’s G-code immediately. */
+export async function quoteAndDownloadGcode(
+  creds: CloudSlicerCreds,
+  localPath: string,
+): Promise<{ buffer: Buffer; filename: string; quoteId: string; fileId: string; grams: number; hours: number }> {
+  const quoted = await quoteStlForPrinter(creds, localPath)
+  const { buffer, filename } = await downloadQuoteGcode(creds, quoted.quoteId)
+  return {
+    buffer,
+    filename,
+    quoteId: quoted.quoteId,
+    fileId: quoted.fileId,
+    grams: quoted.grams,
+    hours: quoted.hours,
+  }
 }
 
 /** Delete a quote record and its G-code on Cloud Slicer. */

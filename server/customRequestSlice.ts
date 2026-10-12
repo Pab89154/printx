@@ -9,6 +9,8 @@ import {
   deleteCloudSlicerFile,
   deleteQuote,
   downloadQuoteGcode,
+  isGcodeOutputMissing,
+  quoteAndDownloadGcode,
   quoteStlForPrinter,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
@@ -375,10 +377,22 @@ export async function clearCustomRequestSliceArtifacts(
   )
 }
 
-/** Download G-code for the worst-cost (or specified) printer quote. */
+function printersWithQuoteOrGrams(row: Record<string, unknown>, quoteIds: Record<string, string>) {
+  return PRINTER_IDS.filter((id) => {
+    if (quoteIds[id]) return true
+    const grams = row[GRAMS_COL[id]!]
+    return grams != null && Number.isFinite(Number(grams))
+  })
+}
+
+/**
+ * Download G-code for one chosen printer only (not all printers).
+ * Re-slices that printer if the stored quote’s output was cleaned up.
+ */
 export async function downloadCustomRequestGcode(
   db: DbApi,
   requestId: string,
+  printerIdInput?: string | null,
 ): Promise<{ buffer: Buffer; filename: string }> {
   const row = await db.get<Record<string, unknown>>(
     'SELECT * FROM custom_requests WHERE id = ?',
@@ -386,17 +400,65 @@ export async function downloadCustomRequestGcode(
   )
   if (!row) throw new Error('Request not found.')
   const quoteIds = parseIdMap(row.quote_ids_json)
-  const worst = String(row.worst_printer_id || '')
-  const printerId =
-    (worst && quoteIds[worst] ? worst : null) ||
-    PRINTER_IDS.find((id) => quoteIds[id]) ||
-    null
-  if (!printerId || !quoteIds[printerId]) {
+  const fileIds = parseIdMap(row.file_ids_json)
+  const available = printersWithQuoteOrGrams(row, quoteIds)
+  if (available.length === 0) {
     throw new Error('No sliced G-code available. Quote may have been cleared after decline.')
   }
+
+  const requested = String(printerIdInput || '').trim()
+  const worst = String(row.worst_printer_id || '')
+  const avail = available as string[]
+  if (requested && !avail.includes(requested)) {
+    throw new Error(
+      `Pick a printer that was quoted for this request (${available.map((id) => PRINTER_LABEL[id] ?? id).join(', ')}).`,
+    )
+  }
+  const printerId =
+    (requested && avail.includes(requested) ? requested : null) ||
+    (worst && avail.includes(worst) ? worst : null) ||
+    available[0]!
+
   const creds = await credsForPrinter(db, printerId)
-  if (!creds) throw new Error('Cloud Slicer credentials missing for the quoted printer.')
-  const { buffer, filename } = await downloadQuoteGcode(creds, quoteIds[printerId]!)
+  if (!creds) throw new Error('Cloud Slicer credentials missing for the selected printer.')
+
   const safeName = `printx-custom-${requestId.slice(0, 8)}-${printerId}.gcode`
-  return { buffer, filename: filename || safeName }
+  const quoteId = quoteIds[printerId] || ''
+
+  if (quoteId) {
+    try {
+      const { buffer, filename } = await downloadQuoteGcode(creds, quoteId)
+      return { buffer, filename: filename || safeName }
+    } catch (err) {
+      if (!isGcodeOutputMissing(err)) throw err
+    }
+  }
+
+  const fileName = String(row.uploaded_file || '').trim()
+  if (!fileName) throw new Error('Source model missing — cannot re-slice for download.')
+  const resolved = await resolveStoredFile(fileName)
+  if (!resolved) throw new Error('Source model missing on server — cannot re-slice for download.')
+  try {
+    const result = await quoteAndDownloadGcode(creds, resolved.path)
+    quoteIds[printerId] = result.quoteId
+    fileIds[printerId] = result.fileId
+    const gramsCol = GRAMS_COL[printerId]
+    const hoursCol = HOURS_COL[printerId]
+    await db.run(
+      `UPDATE custom_requests SET
+         quote_ids_json = ?, file_ids_json = ?,
+         ${gramsCol} = ?, ${hoursCol} = ?,
+         updated_at = ?
+       WHERE id = ?`,
+      JSON.stringify(quoteIds),
+      JSON.stringify(fileIds),
+      result.grams,
+      result.hours,
+      new Date().toISOString(),
+      requestId,
+    )
+    return { buffer: result.buffer, filename: result.filename || safeName }
+  } finally {
+    resolved.cleanup?.()
+  }
 }

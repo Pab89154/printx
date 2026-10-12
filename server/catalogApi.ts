@@ -56,6 +56,8 @@ import {
 import {
   cloudSlicerConfigured,
   downloadQuoteGcode,
+  isGcodeOutputMissing,
+  quoteAndDownloadGcode,
   quoteStlForPrinter,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
@@ -375,7 +377,63 @@ async function sliceDesignWithCloudSlicer(
   }
 }
 
-/** Download G-code for a claimed order item's assigned printer (re-slice if quote id missing). */
+/** Persist one printer’s Cloud Slicer ids on a design after a fresh slice. */
+async function saveDesignPrinterQuote(
+  db: Awaited<ReturnType<typeof getDb>>,
+  designId: string,
+  designRow: Record<string, unknown>,
+  printerId: string,
+  result: { quoteId: string; fileId: string; grams: number; hours: number },
+) {
+  const quoteIds = { ...parseDesignIdMap(designRow.quote_ids_json), [printerId]: result.quoteId }
+  const fileIds = { ...parseDesignIdMap(designRow.file_ids_json), [printerId]: result.fileId }
+  const gramsCol =
+    printerId === 'pablo_p1s'
+      ? 'grams_pablo_p1s'
+      : printerId === 'court_ender'
+        ? 'grams_court_ender'
+        : printerId === 'josh_kobra'
+          ? 'grams_josh_kobra'
+          : null
+  const hoursCol =
+    printerId === 'pablo_p1s'
+      ? 'hours_pablo_p1s'
+      : printerId === 'court_ender'
+        ? 'hours_court_ender'
+        : printerId === 'josh_kobra'
+          ? 'hours_josh_kobra'
+          : null
+  if (gramsCol && hoursCol) {
+    await db.run(
+      `UPDATE designs SET
+         quote_ids_json = ?, file_ids_json = ?,
+         ${gramsCol} = ?, ${hoursCol} = ?,
+         updated_at = ?
+       WHERE id = ?`,
+      JSON.stringify(quoteIds),
+      JSON.stringify(fileIds),
+      result.grams,
+      result.hours,
+      new Date().toISOString(),
+      designId,
+    )
+  } else {
+    await db.run(
+      `UPDATE designs SET quote_ids_json = ?, file_ids_json = ?, updated_at = ? WHERE id = ?`,
+      JSON.stringify(quoteIds),
+      JSON.stringify(fileIds),
+      new Date().toISOString(),
+      designId,
+    )
+  }
+  designRow.quote_ids_json = JSON.stringify(quoteIds)
+  designRow.file_ids_json = JSON.stringify(fileIds)
+}
+
+/**
+ * Download G-code for the claimed printer only (never all printers).
+ * Re-slices that printer if the stored quote’s output was cleaned up.
+ */
 async function downloadOrderItemGcode(
   db: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
@@ -389,8 +447,8 @@ async function downloadOrderItemGcode(
   const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
   if (!designRow) throw new Error('Design not found for this order item.')
 
-  let quoteIds = parseDesignIdMap(designRow.quote_ids_json)
-  let quoteId = quoteIds[printerId] || ''
+  const quoteIds = parseDesignIdMap(designRow.quote_ids_json)
+  const quoteId = quoteIds[printerId] || ''
 
   const owners = await loadPrinterOwnerCreds(db)
   const owner = owners.find((o) => o.printer_id === printerId)
@@ -403,65 +461,30 @@ async function downloadOrderItemGcode(
     throw new Error('Cloud Slicer is not set up for this printer. Add API keys under Settings.')
   }
 
-  if (!quoteId) {
-    const stlPath = String(designRow.stl_path || '')
-    if (!stlPath) throw new Error('Design has no model file to slice.')
-    const resolved = await resolveStoredFile(stlPath)
-    if (!resolved) throw new Error('Model file missing on server. Re-upload the design.')
+  const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
+  const safeName = `printx-${sku}-${printerId}.gcode`
+
+  if (quoteId) {
     try {
-      const result = await quoteStlForPrinter(creds, resolved.path)
-      const fileIds = parseDesignIdMap(designRow.file_ids_json)
-      quoteIds = { ...quoteIds, [printerId]: result.quoteId }
-      fileIds[printerId] = result.fileId
-      const gramsCol =
-        printerId === 'pablo_p1s'
-          ? 'grams_pablo_p1s'
-          : printerId === 'court_ender'
-            ? 'grams_court_ender'
-            : printerId === 'josh_kobra'
-              ? 'grams_josh_kobra'
-              : null
-      const hoursCol =
-        printerId === 'pablo_p1s'
-          ? 'hours_pablo_p1s'
-          : printerId === 'court_ender'
-            ? 'hours_court_ender'
-            : printerId === 'josh_kobra'
-              ? 'hours_josh_kobra'
-              : null
-      if (gramsCol && hoursCol) {
-        await db.run(
-          `UPDATE designs SET
-             quote_ids_json = ?, file_ids_json = ?,
-             ${gramsCol} = ?, ${hoursCol} = ?,
-             updated_at = ?
-           WHERE id = ?`,
-          JSON.stringify(quoteIds),
-          JSON.stringify(fileIds),
-          result.grams,
-          result.hours,
-          new Date().toISOString(),
-          designId,
-        )
-      } else {
-        await db.run(
-          `UPDATE designs SET quote_ids_json = ?, file_ids_json = ?, updated_at = ? WHERE id = ?`,
-          JSON.stringify(quoteIds),
-          JSON.stringify(fileIds),
-          new Date().toISOString(),
-          designId,
-        )
-      }
-      quoteId = result.quoteId
-    } finally {
-      resolved.cleanup?.()
+      const { buffer, filename } = await downloadQuoteGcode(creds, quoteId)
+      return { buffer, filename: filename || safeName }
+    } catch (err) {
+      if (!isGcodeOutputMissing(err)) throw err
+      // Stored quote expired / gcode not saved — re-slice only this claimed printer.
     }
   }
 
-  const { buffer, filename } = await downloadQuoteGcode(creds, quoteId)
-  const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
-  const safeName = `printx-${sku}-${printerId}.gcode`
-  return { buffer, filename: filename || safeName }
+  const stlPath = String(designRow.stl_path || '')
+  if (!stlPath) throw new Error('Design has no model file to slice.')
+  const resolved = await resolveStoredFile(stlPath)
+  if (!resolved) throw new Error('Model file missing on server. Re-upload the design.')
+  try {
+    const result = await quoteAndDownloadGcode(creds, resolved.path)
+    await saveDesignPrinterQuote(db, designId, designRow, printerId, result)
+    return { buffer: result.buffer, filename: result.filename || safeName }
+  } finally {
+    resolved.cleanup?.()
+  }
 }
 
 const GRAMS_COLUMN: Record<string, string> = {

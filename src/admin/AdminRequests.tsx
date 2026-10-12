@@ -11,12 +11,31 @@ const PRINTER_LABEL: Record<string, string> = {
   josh_kobra: 'Kobra X',
 }
 
+const PRINTER_IDS = ['pablo_p1s', 'court_ender', 'josh_kobra'] as const
+
+function printersForRequest(req: CustomRequest): string[] {
+  const fromApi = (req.quoted_printer_ids ?? []).filter(Boolean)
+  if (fromApi.length) return fromApi
+  return PRINTER_IDS.filter((id) => {
+    if (id === 'pablo_p1s') return req.grams_pablo_p1s != null
+    if (id === 'court_ender') return req.grams_court_ender != null
+    return req.grams_josh_kobra != null
+  })
+}
+
+function defaultPrinterFor(req: CustomRequest): string {
+  const available = printersForRequest(req)
+  if (req.worst_printer_id && available.includes(req.worst_printer_id)) return req.worst_printer_id
+  return available[0] || ''
+}
+
 export function AdminRequests() {
   const { isMainAdmin } = useAdminAuth()
   const [requests, setRequests] = useState<CustomRequest[]>([])
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [shipTracking, setShipTracking] = useState<Record<string, string>>({})
+  const [gcodePrinter, setGcodePrinter] = useState<Record<string, string>>({})
 
   async function load() {
     setRequests(await api.admin.requests.list())
@@ -25,6 +44,10 @@ export function AdminRequests() {
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : 'Load failed'))
   }, [])
+
+  function printerFor(req: CustomRequest) {
+    return gcodePrinter[req.id] || defaultPrinterFor(req)
+  }
 
   async function setStatus(id: string, status: RequestStatus) {
     setBusyId(id)
@@ -39,12 +62,17 @@ export function AdminRequests() {
     }
   }
 
-  async function accept(id: string) {
-    setBusyId(id)
+  async function accept(req: CustomRequest) {
+    const printerId = printerFor(req)
+    if (!printerId) {
+      setError('Pick which printer’s G-code to download.')
+      return
+    }
+    setBusyId(req.id)
     setError('')
     try {
-      await api.admin.requests.updateStatus(id, 'approved')
-      await api.admin.requests.downloadGcode(id)
+      await api.admin.requests.updateStatus(req.id, 'approved')
+      await api.admin.requests.downloadGcode(req.id, printerId)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Accept / download failed')
@@ -218,14 +246,41 @@ export function AdminRequests() {
               </div>
 
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
+                {isMainAdmin && req.has_gcode && printersForRequest(req).length > 0 && (
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+                    <label className="sr-only" htmlFor={`gcode-printer-${req.id}`}>
+                      Printer for G-code
+                    </label>
+                    <select
+                      id={`gcode-printer-${req.id}`}
+                      className="h-9 rounded-lg border border-slate-200 px-2 text-sm"
+                      value={printerFor(req)}
+                      disabled={busyId === req.id}
+                      onChange={(e) =>
+                        setGcodePrinter((m) => ({ ...m, [req.id]: e.target.value }))
+                      }
+                    >
+                      {printersForRequest(req).map((id) => (
+                        <option key={id} value={id}>
+                          {PRINTER_LABEL[id] ?? id}
+                          {req.worst_printer_id === id ? ' (pricing)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {isMainAdmin && (req.status === 'new' || req.status === 'reviewing') && (
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       className="btn btn-primary btn-compact"
-                      disabled={busyId === req.id || !req.has_gcode}
-                      title={!req.has_gcode ? 'G-code not available yet (or cleared after decline)' : undefined}
-                      onClick={() => void accept(req.id)}
+                      disabled={busyId === req.id || !req.has_gcode || !printerFor(req)}
+                      title={
+                        !req.has_gcode
+                          ? 'G-code not available yet (or cleared after decline)'
+                          : `Download G-code for ${PRINTER_LABEL[printerFor(req)] ?? printerFor(req)} only`
+                      }
+                      onClick={() => void accept(req)}
                     >
                       Accept & download G-code
                     </button>
@@ -243,16 +298,18 @@ export function AdminRequests() {
                   <button
                     type="button"
                     className="btn btn-secondary btn-compact"
-                    disabled={busyId === req.id}
+                    disabled={busyId === req.id || !printerFor(req)}
                     onClick={() => {
+                      const printerId = printerFor(req)
                       setBusyId(req.id)
+                      setError('')
                       void api.admin.requests
-                        .downloadGcode(req.id)
+                        .downloadGcode(req.id, printerId)
                         .catch((e) => setError(e instanceof Error ? e.message : 'Download failed'))
                         .finally(() => setBusyId(null))
                     }}
                   >
-                    Download G-code again
+                    Download G-code ({PRINTER_LABEL[printerFor(req)] ?? 'printer'})
                   </button>
                 )}
                 {isMainAdmin ? (

@@ -434,12 +434,14 @@ export const api = {
       updateStatus: (id: string, status: string) =>
         request(`/api/admin/custom-requests/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
       delete: (id: string) => request(`/api/admin/custom-requests/${id}`, { method: 'DELETE' }),
-      downloadGcode: (id: string) =>
-        downloadAuthFile(
-          `/api/admin/custom-requests/${encodeURIComponent(id)}/gcode`,
-          `printx-custom-${id.slice(0, 8)}.gcode`,
+      downloadGcode: (id: string, printerId?: string) => {
+        const q = printerId ? `?printerId=${encodeURIComponent(printerId)}` : ''
+        return downloadAuthFile(
+          `/api/admin/custom-requests/${encodeURIComponent(id)}/gcode${q}`,
+          `printx-custom-${id.slice(0, 8)}${printerId ? `-${printerId}` : ''}.gcode`,
           'G-code download failed',
-        ),
+        )
+      },
       downloadSource: (fileName: string) =>
         downloadAuthFile(
           `/api/admin/uploads/${encodeURIComponent(fileName)}`,
