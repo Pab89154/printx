@@ -98,6 +98,7 @@ async function migrate(database: DbApi) {
       hours_josh_kobra REAL,
       quote_ids_json TEXT NOT NULL DEFAULT '{}',
       file_ids_json TEXT NOT NULL DEFAULT '{}',
+      gcode_paths_json TEXT NOT NULL DEFAULT '{}',
       worst_printer_id TEXT,
       worst_cost_usd REAL,
       catalog_price_usd REAL,
@@ -274,11 +275,12 @@ async function migratePrinterSettlements(database: DbApi) {
   `)
 }
 
-/** Persist Cloud Slicer quote/file ids on catalog designs for G-code download. */
+/** Persist Cloud Slicer quote/file ids + captured G-code paths on catalog designs. */
 async function migrateDesignQuoteIds(database: DbApi) {
   for (const [name, def] of [
     ['quote_ids_json', `TEXT NOT NULL DEFAULT '{}'`],
     ['file_ids_json', `TEXT NOT NULL DEFAULT '{}'`],
+    ['gcode_paths_json', `TEXT NOT NULL DEFAULT '{}'`],
   ] as const) {
     try {
       await database.exec(`ALTER TABLE designs ADD COLUMN ${name} ${def}`)
@@ -627,6 +629,7 @@ async function migrateCustomRequestQuotes(database: DbApi) {
     ['hours_josh_kobra', 'REAL'],
     ['quote_ids_json', `TEXT NOT NULL DEFAULT '{}'`],
     ['file_ids_json', `TEXT NOT NULL DEFAULT '{}'`],
+    ['gcode_paths_json', `TEXT NOT NULL DEFAULT '{}'`],
     ['worst_printer_id', 'TEXT'],
     ['worst_cost_usd', 'REAL'],
     ['catalog_price_usd', 'REAL'],

@@ -55,13 +55,14 @@ import {
 } from './stripeShipping.ts'
 import {
   cloudSlicerConfigured,
-  downloadQuoteGcode,
+  GCODE_SAVE_HINT,
   isGcodeOutputMissing,
   quoteAndDownloadGcode,
   quoteStlForPrinter,
   requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
+import { loadStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
 import {
   objectStorageConfigured,
   objectStorageRequired,
@@ -258,6 +259,7 @@ async function sliceDesignWithCloudSlicer(
     const existing = rowToDesign(existingRow)
     const quoteIds = parseDesignIdMap(existingRow.quote_ids_json)
     const fileIds = parseDesignIdMap(existingRow.file_ids_json)
+    const gcodePaths = parseDesignIdMap(existingRow.gcode_paths_json)
 
     const owners = await loadPrinterOwnerCreds(db)
     const setupGaps: string[] = []
@@ -320,6 +322,18 @@ async function sliceDesignWithCloudSlicer(
           gramsHours[fields.hours] = result.hours
           quoteIds[item.printerId] = result.quoteId
           fileIds[item.printerId] = result.fileId
+          if (result.gcodeBuffer?.length) {
+            try {
+              gcodePaths[item.printerId] = await storeGcodeBuffer(result.gcodeBuffer, {
+                hint: `${designId.slice(0, 8)}-${item.printerId}`,
+              })
+            } catch (storeErr) {
+              console.warn(
+                '[gcode] store at quote time failed:',
+                storeErr instanceof Error ? storeErr.message : storeErr,
+              )
+            }
+          }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
           quoteErrors.push(`${item.label}: ${msg}`)
@@ -355,7 +369,7 @@ async function sliceDesignWithCloudSlicer(
       grams_pablo_p1s = ?, hours_pablo_p1s = ?,
       grams_court_ender = ?, hours_court_ender = ?,
       grams_josh_kobra = ?, hours_josh_kobra = ?,
-      quote_ids_json = ?, file_ids_json = ?,
+      quote_ids_json = ?, file_ids_json = ?, gcode_paths_json = ?,
       slice_status = ?, slice_error = ?, updated_at = ?
      WHERE id = ?`,
       gramsHours.gramsPabloP1s,
@@ -366,6 +380,7 @@ async function sliceDesignWithCloudSlicer(
       gramsHours.hoursJoshKobra,
       JSON.stringify(quoteIds),
       JSON.stringify(fileIds),
+      JSON.stringify(gcodePaths),
       sliceStatus,
       warning.slice(0, 2000),
       now,
@@ -378,16 +393,24 @@ async function sliceDesignWithCloudSlicer(
   }
 }
 
-/** Persist one printer’s Cloud Slicer ids on a design after a fresh slice. */
+/** Persist one printer’s Cloud Slicer ids + stored G-code path on a design. */
 async function saveDesignPrinterQuote(
   db: Awaited<ReturnType<typeof getDb>>,
   designId: string,
   designRow: Record<string, unknown>,
   printerId: string,
-  result: { quoteId: string; fileId: string; grams: number; hours: number },
+  result: {
+    quoteId: string
+    fileId: string
+    grams: number
+    hours: number
+    gcodePath?: string
+  },
 ) {
   const quoteIds = { ...parseDesignIdMap(designRow.quote_ids_json), [printerId]: result.quoteId }
   const fileIds = { ...parseDesignIdMap(designRow.file_ids_json), [printerId]: result.fileId }
+  const gcodePaths = { ...parseDesignIdMap(designRow.gcode_paths_json) }
+  if (result.gcodePath) gcodePaths[printerId] = result.gcodePath
   const gramsCol =
     printerId === 'pablo_p1s'
       ? 'grams_pablo_p1s'
@@ -407,12 +430,13 @@ async function saveDesignPrinterQuote(
   if (gramsCol && hoursCol) {
     await db.run(
       `UPDATE designs SET
-         quote_ids_json = ?, file_ids_json = ?,
+         quote_ids_json = ?, file_ids_json = ?, gcode_paths_json = ?,
          ${gramsCol} = ?, ${hoursCol} = ?,
          updated_at = ?
        WHERE id = ?`,
       JSON.stringify(quoteIds),
       JSON.stringify(fileIds),
+      JSON.stringify(gcodePaths),
       result.grams,
       result.hours,
       new Date().toISOString(),
@@ -420,15 +444,17 @@ async function saveDesignPrinterQuote(
     )
   } else {
     await db.run(
-      `UPDATE designs SET quote_ids_json = ?, file_ids_json = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE designs SET quote_ids_json = ?, file_ids_json = ?, gcode_paths_json = ?, updated_at = ? WHERE id = ?`,
       JSON.stringify(quoteIds),
       JSON.stringify(fileIds),
+      JSON.stringify(gcodePaths),
       new Date().toISOString(),
       designId,
     )
   }
   designRow.quote_ids_json = JSON.stringify(quoteIds)
   designRow.file_ids_json = JSON.stringify(fileIds)
+  designRow.gcode_paths_json = JSON.stringify(gcodePaths)
 }
 
 /**
@@ -448,10 +474,10 @@ async function downloadOrderItemGcode(
   const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
   if (!designRow) throw new Error('Design not found for this order item.')
 
-  const quoteIds = parseDesignIdMap(designRow.quote_ids_json)
   const fileIds = parseDesignIdMap(designRow.file_ids_json)
-  const quoteId = quoteIds[printerId] || ''
+  const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
   const fileId = fileIds[printerId] || ''
+  const storedGcode = gcodePaths[printerId] || ''
 
   const owners = await loadPrinterOwnerCreds(db)
   const owner = owners.find((o) => o.printer_id === printerId)
@@ -467,22 +493,39 @@ async function downloadOrderItemGcode(
   const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
   const safeName = `printx-${sku}-${printerId}.gcode`
 
-  if (quoteId) {
-    try {
-      const { buffer, filename } = await downloadQuoteGcode(creds, quoteId)
-      return { buffer, filename: filename || safeName }
-    } catch (err) {
-      if (!isGcodeOutputMissing(err)) throw err
-      // Stored quote expired / gcode not saved — re-slice only this claimed printer.
-    }
+  // Prefer G-code PrintX already captured (Cloud Slicer discards output by default).
+  if (storedGcode) {
+    const local = await loadStoredGcode(storedGcode)
+    if (local) return { buffer: local.buffer, filename: safeName }
   }
 
-  // Prefer re-quoting the existing Cloud Slicer file (no STL re-upload).
+  async function persistCaptured(result: {
+    buffer: Buffer
+    filename: string
+    quoteId: string
+    fileId: string
+    grams: number
+    hours: number
+  }) {
+    let gcodePath = ''
+    try {
+      gcodePath = await storeGcodeBuffer(result.buffer, {
+        hint: `${sku}-${printerId}`,
+      })
+    } catch (err) {
+      console.warn('[gcode] persist failed:', err instanceof Error ? err.message : err)
+    }
+    await saveDesignPrinterQuote(db, designId, designRow, printerId, {
+      ...result,
+      gcodePath: gcodePath || undefined,
+    })
+    return { buffer: result.buffer, filename: result.filename || safeName }
+  }
+
+  // Re-quote claimed printer only and capture G-code immediately.
   if (fileId) {
     try {
-      const result = await requoteFileAndDownloadGcode(creds, fileId)
-      await saveDesignPrinterQuote(db, designId, designRow, printerId, result)
-      return { buffer: result.buffer, filename: result.filename || safeName }
+      return await persistCaptured(await requoteFileAndDownloadGcode(creds, fileId))
     } catch (err) {
       if (!isGcodeOutputMissing(err)) {
         console.warn(
@@ -498,9 +541,10 @@ async function downloadOrderItemGcode(
   const resolved = await resolveStoredFile(stlPath)
   if (!resolved) throw new Error('Model file missing on server. Re-upload the design.')
   try {
-    const result = await quoteAndDownloadGcode(creds, resolved.path)
-    await saveDesignPrinterQuote(db, designId, designRow, printerId, result)
-    return { buffer: result.buffer, filename: result.filename || safeName }
+    return await persistCaptured(await quoteAndDownloadGcode(creds, resolved.path))
+  } catch (err) {
+    if (isGcodeOutputMissing(err)) throw new Error(GCODE_SAVE_HINT)
+    throw err
   } finally {
     resolved.cleanup?.()
   }

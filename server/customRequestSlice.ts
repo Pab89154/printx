@@ -8,13 +8,14 @@ import {
   cloudSlicerConfigured,
   deleteCloudSlicerFile,
   deleteQuote,
-  downloadQuoteGcode,
+  GCODE_SAVE_HINT,
   isGcodeOutputMissing,
   quoteAndDownloadGcode,
   quoteStlForPrinter,
   requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
+import { loadStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
 import { resolveStoredFile } from './objectStorage.ts'
 import { priceDesign, type PrinterCostInput } from './pricing.ts'
 import { SLICEABLE_EXTS } from '../shared/modelFormats.ts'
@@ -219,6 +220,7 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
     const quoteErrors: string[] = []
     const quoteIds: Record<string, string> = {}
     const fileIds: Record<string, string> = {}
+    const gcodePaths: Record<string, string> = {}
     const gramsHours: Record<string, number | null> = {
       grams_pablo_p1s: null,
       hours_pablo_p1s: null,
@@ -251,6 +253,18 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
         gramsHours[HOURS_COL[id]!] = result.hours
         quoteIds[id] = result.quoteId
         fileIds[id] = result.fileId
+        if (result.gcodeBuffer?.length) {
+          try {
+            gcodePaths[id] = await storeGcodeBuffer(result.gcodeBuffer, {
+              hint: `custom-${requestId.slice(0, 8)}-${id}`,
+            })
+          } catch (storeErr) {
+            console.warn(
+              '[gcode] custom store at quote time failed:',
+              storeErr instanceof Error ? storeErr.message : storeErr,
+            )
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
         quoteErrors.push(`${label}: ${msg}`)
@@ -279,7 +293,7 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
           grams_pablo_p1s = ?, hours_pablo_p1s = ?,
           grams_court_ender = ?, hours_court_ender = ?,
           grams_josh_kobra = ?, hours_josh_kobra = ?,
-          quote_ids_json = ?, file_ids_json = ?,
+          quote_ids_json = ?, file_ids_json = ?, gcode_paths_json = ?,
           worst_printer_id = NULL, worst_cost_usd = NULL, catalog_price_usd = NULL,
           slice_status = 'error', slice_error = ?, quoted_at = NULL, updated_at = ?
          WHERE id = ?`,
@@ -291,6 +305,7 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
         gramsHours.hours_josh_kobra,
         JSON.stringify(quoteIds),
         JSON.stringify(fileIds),
+        JSON.stringify(gcodePaths),
         (warningParts.join('\n\n') || 'No Cloud Slicer quotes available yet.').slice(0, 2000),
         now,
         requestId,
@@ -305,7 +320,7 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
         grams_pablo_p1s = ?, hours_pablo_p1s = ?,
         grams_court_ender = ?, hours_court_ender = ?,
         grams_josh_kobra = ?, hours_josh_kobra = ?,
-        quote_ids_json = ?, file_ids_json = ?,
+        quote_ids_json = ?, file_ids_json = ?, gcode_paths_json = ?,
         worst_printer_id = ?, worst_cost_usd = ?, catalog_price_usd = ?,
         slice_status = 'ready', slice_error = ?, quoted_at = ?, updated_at = ?
        WHERE id = ?`,
@@ -317,6 +332,7 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
       gramsHours.hours_josh_kobra,
       JSON.stringify(quoteIds),
       JSON.stringify(fileIds),
+      JSON.stringify(gcodePaths),
       priced.worstPrinterId,
       priced.worstCostUsd,
       priced.catalogPriceUsd,
@@ -370,7 +386,7 @@ export async function clearCustomRequestSliceArtifacts(
 
   await db.run(
     `UPDATE custom_requests SET
-      quote_ids_json = '{}', file_ids_json = '{}',
+      quote_ids_json = '{}', file_ids_json = '{}', gcode_paths_json = '{}',
       updated_at = ?
      WHERE id = ?`,
     new Date().toISOString(),
@@ -402,6 +418,7 @@ export async function downloadCustomRequestGcode(
   if (!row) throw new Error('Request not found.')
   const quoteIds = parseIdMap(row.quote_ids_json)
   const fileIds = parseIdMap(row.file_ids_json)
+  const gcodePaths = parseIdMap(row.gcode_paths_json)
   const available = printersWithQuoteOrGrams(row, quoteIds)
   if (available.length === 0) {
     throw new Error('No sliced G-code available. Quote may have been cleared after decline.')
@@ -424,7 +441,12 @@ export async function downloadCustomRequestGcode(
   if (!creds) throw new Error('Cloud Slicer credentials missing for the selected printer.')
 
   const safeName = `printx-custom-${requestId.slice(0, 8)}-${printerId}.gcode`
-  const quoteId = quoteIds[printerId] || ''
+
+  const stored = gcodePaths[printerId]
+  if (stored) {
+    const local = await loadStoredGcode(stored)
+    if (local) return { buffer: local.buffer, filename: safeName }
+  }
 
   async function persistAndReturn(result: {
     buffer: Buffer
@@ -436,31 +458,30 @@ export async function downloadCustomRequestGcode(
   }) {
     quoteIds[printerId] = result.quoteId
     fileIds[printerId] = result.fileId
+    try {
+      gcodePaths[printerId] = await storeGcodeBuffer(result.buffer, {
+        hint: `custom-${requestId.slice(0, 8)}-${printerId}`,
+      })
+    } catch (err) {
+      console.warn('[gcode] custom persist failed:', err instanceof Error ? err.message : err)
+    }
     const gramsCol = GRAMS_COL[printerId]
     const hoursCol = HOURS_COL[printerId]
     await db.run(
       `UPDATE custom_requests SET
-         quote_ids_json = ?, file_ids_json = ?,
+         quote_ids_json = ?, file_ids_json = ?, gcode_paths_json = ?,
          ${gramsCol} = ?, ${hoursCol} = ?,
          updated_at = ?
        WHERE id = ?`,
       JSON.stringify(quoteIds),
       JSON.stringify(fileIds),
+      JSON.stringify(gcodePaths),
       result.grams,
       result.hours,
       new Date().toISOString(),
       requestId,
     )
     return { buffer: result.buffer, filename: result.filename || safeName }
-  }
-
-  if (quoteId) {
-    try {
-      const { buffer, filename } = await downloadQuoteGcode(creds, quoteId)
-      return { buffer, filename: filename || safeName }
-    } catch (err) {
-      if (!isGcodeOutputMissing(err)) throw err
-    }
   }
 
   const existingFileId = fileIds[printerId] || ''
@@ -481,6 +502,9 @@ export async function downloadCustomRequestGcode(
   if (!resolved) throw new Error('Source model missing on server — cannot re-slice for download.')
   try {
     return await persistAndReturn(await quoteAndDownloadGcode(creds, resolved.path))
+  } catch (err) {
+    if (isGcodeOutputMissing(err)) throw new Error(GCODE_SAVE_HINT)
+    throw err
   } finally {
     resolved.cleanup?.()
   }

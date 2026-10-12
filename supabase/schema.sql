@@ -103,6 +103,7 @@ create table if not exists custom_requests (
   hours_josh_kobra double precision,
   quote_ids_json text not null default '{}',
   file_ids_json text not null default '{}',
+  gcode_paths_json text not null default '{}',
   worst_printer_id text,
   worst_cost_usd double precision,
   catalog_price_usd double precision,
