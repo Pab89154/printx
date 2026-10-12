@@ -12,6 +12,7 @@ import {
   isGcodeOutputMissing,
   quoteAndDownloadGcode,
   quoteStlForPrinter,
+  requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
 import { resolveStoredFile } from './objectStorage.ts'
@@ -425,21 +426,14 @@ export async function downloadCustomRequestGcode(
   const safeName = `printx-custom-${requestId.slice(0, 8)}-${printerId}.gcode`
   const quoteId = quoteIds[printerId] || ''
 
-  if (quoteId) {
-    try {
-      const { buffer, filename } = await downloadQuoteGcode(creds, quoteId)
-      return { buffer, filename: filename || safeName }
-    } catch (err) {
-      if (!isGcodeOutputMissing(err)) throw err
-    }
-  }
-
-  const fileName = String(row.uploaded_file || '').trim()
-  if (!fileName) throw new Error('Source model missing — cannot re-slice for download.')
-  const resolved = await resolveStoredFile(fileName)
-  if (!resolved) throw new Error('Source model missing on server — cannot re-slice for download.')
-  try {
-    const result = await quoteAndDownloadGcode(creds, resolved.path)
+  async function persistAndReturn(result: {
+    buffer: Buffer
+    filename: string
+    quoteId: string
+    fileId: string
+    grams: number
+    hours: number
+  }) {
     quoteIds[printerId] = result.quoteId
     fileIds[printerId] = result.fileId
     const gramsCol = GRAMS_COL[printerId]
@@ -458,6 +452,35 @@ export async function downloadCustomRequestGcode(
       requestId,
     )
     return { buffer: result.buffer, filename: result.filename || safeName }
+  }
+
+  if (quoteId) {
+    try {
+      const { buffer, filename } = await downloadQuoteGcode(creds, quoteId)
+      return { buffer, filename: filename || safeName }
+    } catch (err) {
+      if (!isGcodeOutputMissing(err)) throw err
+    }
+  }
+
+  const existingFileId = fileIds[printerId] || ''
+  if (existingFileId) {
+    try {
+      return await persistAndReturn(await requoteFileAndDownloadGcode(creds, existingFileId))
+    } catch (err) {
+      console.warn(
+        '[gcode] custom requote existing file failed, will re-upload:',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
+  const fileName = String(row.uploaded_file || '').trim()
+  if (!fileName) throw new Error('Source model missing — cannot re-slice for download.')
+  const resolved = await resolveStoredFile(fileName)
+  if (!resolved) throw new Error('Source model missing on server — cannot re-slice for download.')
+  try {
+    return await persistAndReturn(await quoteAndDownloadGcode(creds, resolved.path))
   } finally {
     resolved.cleanup?.()
   }

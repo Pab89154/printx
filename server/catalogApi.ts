@@ -59,6 +59,7 @@ import {
   isGcodeOutputMissing,
   quoteAndDownloadGcode,
   quoteStlForPrinter,
+  requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
 import {
@@ -448,7 +449,9 @@ async function downloadOrderItemGcode(
   if (!designRow) throw new Error('Design not found for this order item.')
 
   const quoteIds = parseDesignIdMap(designRow.quote_ids_json)
+  const fileIds = parseDesignIdMap(designRow.file_ids_json)
   const quoteId = quoteIds[printerId] || ''
+  const fileId = fileIds[printerId] || ''
 
   const owners = await loadPrinterOwnerCreds(db)
   const owner = owners.find((o) => o.printer_id === printerId)
@@ -471,6 +474,22 @@ async function downloadOrderItemGcode(
     } catch (err) {
       if (!isGcodeOutputMissing(err)) throw err
       // Stored quote expired / gcode not saved — re-slice only this claimed printer.
+    }
+  }
+
+  // Prefer re-quoting the existing Cloud Slicer file (no STL re-upload).
+  if (fileId) {
+    try {
+      const result = await requoteFileAndDownloadGcode(creds, fileId)
+      await saveDesignPrinterQuote(db, designId, designRow, printerId, result)
+      return { buffer: result.buffer, filename: result.filename || safeName }
+    } catch (err) {
+      if (!isGcodeOutputMissing(err)) {
+        console.warn(
+          '[gcode] requote existing file failed, will re-upload:',
+          err instanceof Error ? err.message : err,
+        )
+      }
     }
   }
 

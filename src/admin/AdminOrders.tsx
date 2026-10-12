@@ -378,9 +378,12 @@ export function AdminOrders() {
                           disabled={gcodeBusyId === item.id}
                           onClick={() => {
                             setGcodeBusyId(item.id)
-                            setError('')
+                            setError(
+                              'Preparing G-code for the claimed printer only. If Cloud Slicer must re-slice, this can take 1–2 minutes — leave this tab open.',
+                            )
                             void api.catalog.orders
                               .downloadGcode(item.id)
+                              .then(() => setError(''))
                               .catch((e) =>
                                 setError(e instanceof Error ? e.message : 'G-code download failed'),
                               )
@@ -388,7 +391,7 @@ export function AdminOrders() {
                           }}
                         >
                           {gcodeBusyId === item.id
-                            ? 'Preparing…'
+                            ? 'Slicing / downloading…'
                             : `Download G-code${
                                 item.assignedPrinterId
                                   ? ` · ${

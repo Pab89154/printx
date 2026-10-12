@@ -37,50 +37,53 @@ function filenameFromDisposition(disposition: string, fallback: string) {
   return plain?.[1]?.trim() || fallback
 }
 
-/** Authenticated file download that survives Safari/iOS (gesture + delayed revoke). */
+function triggerBlobSave(objectUrl: string, filename: string) {
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = filename
+  a.rel = 'noopener'
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+/** Authenticated file download that survives Safari/iOS (delayed revoke; no blank-tab freeze). */
 async function downloadAuthFile(url: string, fallbackFilename: string, errorLabel: string) {
-  // Open while still in the click call stack — iOS blocks blob saves after await otherwise.
-  const popup = isAppleTouchBrowser() ? window.open('about:blank', '_blank') : null
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), 240_000)
   try {
-    const res = await fetch(url, { credentials: 'include' })
+    const res = await fetch(url, { credentials: 'include', signal: controller.signal })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
-      popup?.close()
       throw new Error((data as { error?: string }).error ?? errorLabel)
     }
-    const blob = await res.blob()
-    if (!blob.size) {
-      popup?.close()
-      throw new Error(errorLabel)
+    const contentType = (res.headers.get('content-type') || '').toLowerCase()
+    if (contentType.includes('application/json')) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      throw new Error(data.error ?? errorLabel)
     }
+    const blob = await res.blob()
+    if (!blob.size) throw new Error(errorLabel)
     const filename = filenameFromDisposition(
       res.headers.get('content-disposition') || '',
       fallbackFilename,
     )
     const objectUrl = URL.createObjectURL(blob)
-
-    if (popup) {
-      popup.location.href = objectUrl
-    } else {
-      const a = document.createElement('a')
-      a.href = objectUrl
-      a.download = filename
-      a.rel = 'noopener'
-      a.style.display = 'none'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      // iOS often ignores <a download> after an async fetch; open the blob instead.
-      if (isAppleTouchBrowser()) {
-        const opened = window.open(objectUrl, '_blank')
-        if (!opened) window.location.assign(objectUrl)
-      }
+    triggerBlobSave(objectUrl, filename)
+    // iOS often ignores <a download> after an async fetch; open the blob as a fallback.
+    if (isAppleTouchBrowser()) {
+      const opened = window.open(objectUrl, '_blank')
+      if (!opened) window.location.assign(objectUrl)
     }
-    // Revoking immediately can cancel the download in Chromium.
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
   } catch (err) {
-    popup?.close()
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Download timed out. Try again — first slice can take a couple of minutes.')
+    }
     throw err
+  } finally {
+    window.clearTimeout(timeoutId)
   }
 }
 
