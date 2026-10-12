@@ -4,20 +4,37 @@ import type { CartLine } from '../types/catalog'
 type CartContextValue = {
   lines: CartLine[]
   add: (line: Omit<CartLine, 'qty'>, qty?: number) => void
-  setQty: (designId: string, colorId: string, qty: number) => void
-  remove: (designId: string, colorId: string) => void
+  setQty: (designId: string, colorId: string, qty: number, filamentColorIds?: string[]) => void
+  remove: (designId: string, colorId: string, filamentColorIds?: string[]) => void
   clear: () => void
   count: number
   subtotal: number
 }
 
 const CartContext = createContext<CartContextValue | null>(null)
-const STORAGE_KEY = 'printx_cart_v1'
+const STORAGE_KEY = 'printx_cart_v2'
+
+function filamentKey(ids: string[] | undefined): string {
+  return (ids ?? []).join('|')
+}
+
+function sameLine(
+  a: Pick<CartLine, 'designId' | 'colorId' | 'filamentColorIds'>,
+  designId: string,
+  colorId: string,
+  filamentColorIds?: string[],
+): boolean {
+  return (
+    a.designId === designId &&
+    a.colorId === colorId &&
+    filamentKey(a.filamentColorIds) === filamentKey(filamentColorIds)
+  )
+}
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
+      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('printx_cart_v1')
       if (!raw) return []
       const parsed = JSON.parse(raw) as CartLine[]
       return Array.isArray(parsed) ? parsed : []
@@ -35,8 +52,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
       lines,
       add: (line, qty = 1) => {
         setLines((prev) => {
-          const idx = prev.findIndex(
-            (l) => l.designId === line.designId && l.colorId === line.colorId,
+          const idx = prev.findIndex((l) =>
+            sameLine(l, line.designId, line.colorId, line.filamentColorIds),
           )
           if (idx >= 0) {
             const next = [...prev]
@@ -46,19 +63,21 @@ export function CartProvider({ children }: { children: ReactNode }) {
           return [...prev, { ...line, qty: Math.min(20, Math.max(1, qty)) }]
         })
       },
-      setQty: (designId, colorId, qty) => {
+      setQty: (designId, colorId, qty, filamentColorIds) => {
         setLines((prev) =>
           prev
             .map((l) =>
-              l.designId === designId && l.colorId === colorId
+              sameLine(l, designId, colorId, filamentColorIds)
                 ? { ...l, qty: Math.min(20, Math.max(0, Math.floor(qty))) }
                 : l,
             )
             .filter((l) => l.qty > 0),
         )
       },
-      remove: (designId, colorId) => {
-        setLines((prev) => prev.filter((l) => !(l.designId === designId && l.colorId === colorId)))
+      remove: (designId, colorId, filamentColorIds) => {
+        setLines((prev) =>
+          prev.filter((l) => !sameLine(l, designId, colorId, filamentColorIds)),
+        )
       },
       clear: () => setLines([]),
       count: lines.reduce((s, l) => s + l.qty, 0),

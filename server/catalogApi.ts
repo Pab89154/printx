@@ -36,7 +36,17 @@ import {
   suggestSkuBase,
   type Design,
 } from './catalog.ts'
-import { BUILTIN_COLORS, emptyCustomColorSlots, normalizeCustomSlots } from '../shared/colors.ts'
+import {
+  BUILTIN_COLORS,
+  clampMulticolorSlotCount,
+  emptyCustomColorSlots,
+  formatMulticolorSelection,
+  isMulticolorColorId,
+  MULTICOLOR_COLOR,
+  MULTICOLOR_COLOR_ID,
+  normalizeCustomSlots,
+  solidBuiltinColors,
+} from '../shared/colors.ts'
 import {
   isModelExt,
   MODEL_EXTS,
@@ -816,10 +826,15 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
   if (Array.isArray(body.availableColorIds)) {
     availableColorIds = body.availableColorIds.map((x) => String(x)).filter(Boolean).slice(0, 20)
   }
-  if (multicolorOnly) {
-    availableColorIds = ['multicolor']
-  } else {
-    availableColorIds = availableColorIds.filter((id) => id !== 'multicolor')
+  // Multicolor mode: availableColorIds = solid filaments customers may pick (not the MLT badge).
+  availableColorIds = availableColorIds.filter((id) => !isMulticolorColorId(id))
+  const multicolorSlotCount = clampMulticolorSlotCount(
+    body.multicolorSlotCount !== undefined
+      ? body.multicolorSlotCount
+      : existing?.multicolorSlotCount,
+  )
+  if (multicolorOnly && availableColorIds.length < multicolorSlotCount) {
+    availableColorIds = solidBuiltinColors().map((c) => c.id)
   }
   const num = (key: string, fallback: number | null) => {
     if (body[key] === undefined || body[key] === null || body[key] === '') return fallback
@@ -834,6 +849,7 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
     imageUrl,
     availableColorIds,
     multicolorOnly,
+    multicolorSlotCount,
     gramsPabloP1s: num('gramsPabloP1s', existing?.gramsPabloP1s ?? null),
     hoursPabloP1s: num('hoursPabloP1s', existing?.hoursPabloP1s ?? null),
     gramsCourtEnder: num('gramsCourtEnder', existing?.gramsCourtEnder ?? null),
@@ -1023,9 +1039,21 @@ export async function handleCatalogApi(
         modelUrl: d.hasStl && modelExt === '.stl' ? `/api/public/catalog/${d.id}/stl` : '',
         catalogPriceUsd: d.catalogPriceUsd,
         multicolorOnly: d.multicolorOnly,
-        availableColors: d.availableColorIds
-          .map((id) => colorById(id, settings.customColors))
-          .filter(Boolean),
+        multicolorSlotCount: d.multicolorSlotCount,
+        availableColors: (() => {
+          // Legacy rows stored only `multicolor` — fall back to every solid filament.
+          const solidIds = d.availableColorIds.filter((id) => !isMulticolorColorId(id))
+          const ids =
+            d.multicolorOnly && solidIds.length < d.multicolorSlotCount
+              ? [
+                  ...solidBuiltinColors().map((c) => c.id),
+                  ...settings.customColors.filter((c) => c.name.trim()).map((c) => c.id),
+                ]
+              : solidIds.length
+                ? solidIds
+                : d.availableColorIds
+          return ids.map((id) => colorById(id, settings.customColors)).filter(Boolean)
+        })(),
       }
     })
     send(res, 200, {
@@ -1105,6 +1133,7 @@ export async function handleCatalogApi(
       design: Design
       colorId: string
       colorName: string
+      filamentColorIds: string[]
       sku: string
       qty: number
       unit: number
@@ -1115,7 +1144,7 @@ export async function handleCatalogApi(
       if (!raw || typeof raw !== 'object') continue
       const row = raw as Record<string, unknown>
       const designId = String(row.designId ?? '')
-      const colorId = String(row.colorId ?? '')
+      let colorId = String(row.colorId ?? '')
       const qty = Math.min(20, Math.max(1, Math.floor(Number(row.qty) || 1)))
       const designRow = await db.get<Record<string, unknown>>(
         `SELECT * FROM designs WHERE id = ? AND status = 'approved'`,
@@ -1126,20 +1155,69 @@ export async function handleCatalogApi(
         return true
       }
       const design = rowToDesign(designRow)
-      if (!design.availableColorIds.includes(colorId) || design.catalogPriceUsd == null) {
-        send(res, 400, { error: `Color unavailable for ${design.name}.` })
+      if (design.catalogPriceUsd == null) {
+        send(res, 400, { error: `${design.name} is not priced yet.` })
         return true
       }
-      const color = colorById(colorId, settings.customColors)
-      if (!color) {
-        send(res, 400, { error: 'Invalid color.' })
-        return true
+
+      let filamentColorIds: string[] = []
+      let colorName = ''
+      let colorCode = ''
+
+      if (design.multicolorOnly) {
+        colorId = MULTICOLOR_COLOR_ID
+        const rawFilaments = Array.isArray(row.filamentColorIds) ? row.filamentColorIds : []
+        filamentColorIds = rawFilaments.map((x) => String(x)).filter(Boolean)
+        const slotCount = design.multicolorSlotCount
+        if (filamentColorIds.length !== slotCount) {
+          send(res, 400, {
+            error: `${design.name} needs ${slotCount} filament colors selected.`,
+          })
+          return true
+        }
+        const allowedSolids = design.availableColorIds.filter((id) => !isMulticolorColorId(id))
+        const pool =
+          allowedSolids.length >= slotCount
+            ? allowedSolids
+            : [
+                ...solidBuiltinColors().map((c) => c.id),
+                ...settings.customColors.filter((c) => c.name.trim()).map((c) => c.id),
+              ]
+        const names: string[] = []
+        for (const fid of filamentColorIds) {
+          if (!pool.includes(fid)) {
+            send(res, 400, { error: `Invalid filament color for ${design.name}.` })
+            return true
+          }
+          const fc = colorById(fid, settings.customColors)
+          if (!fc || isMulticolorColorId(fc.id)) {
+            send(res, 400, { error: `Invalid filament color for ${design.name}.` })
+            return true
+          }
+          names.push(fc.name)
+        }
+        colorName = formatMulticolorSelection(names)
+        colorCode = MULTICOLOR_COLOR.code
+      } else {
+        if (!design.availableColorIds.includes(colorId)) {
+          send(res, 400, { error: `Color unavailable for ${design.name}.` })
+          return true
+        }
+        const color = colorById(colorId, settings.customColors)
+        if (!color || isMulticolorColorId(color.id)) {
+          send(res, 400, { error: 'Invalid color.' })
+          return true
+        }
+        colorName = color.name
+        colorCode = color.code
       }
+
       lineItems.push({
         design,
         colorId,
-        colorName: color.name,
-        sku: buildSku(design.skuBase, color.code),
+        colorName,
+        filamentColorIds,
+        sku: buildSku(design.skuBase, colorCode),
         qty,
         unit: design.catalogPriceUsd,
         worst: design.worstCostUsd ?? 0,
@@ -1204,15 +1282,16 @@ export async function handleCatalogApi(
     for (const item of lineItems) {
       await db.run(
         `INSERT INTO order_items (
-          id, order_id, design_id, sku, color_id, color_name, qty,
+          id, order_id, design_id, sku, color_id, color_name, filament_color_ids, qty,
           unit_price_usd, worst_cost_unit_usd, line_total_usd, print_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unclaimed')`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unclaimed')`,
         randomUUID(),
         orderId,
         item.design.id,
         item.sku,
         item.colorId,
         item.colorName,
+        JSON.stringify(item.filamentColorIds),
         item.qty,
         item.unit,
         item.worst,
@@ -1565,10 +1644,10 @@ export async function handleCatalogApi(
           status, created_by,
           submitted_at, reviewed_by, reviewed_at, review_note,
           grams_pablo_p1s, hours_pablo_p1s, grams_court_ender, hours_court_ender,
-          grams_josh_kobra, hours_josh_kobra, available_color_ids, multicolor_only,
+          grams_josh_kobra, hours_josh_kobra, available_color_ids, multicolor_only, multicolor_slot_count,
           worst_cost_usd, catalog_price_usd, priced_at, pricing_inputs_json,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', '', 'draft', ?, NULL, NULL, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}', ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', '', 'draft', ?, NULL, NULL, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}', ?, ?)`,
         id,
         parsed.skuBase,
         parsed.name,
@@ -1585,6 +1664,7 @@ export async function handleCatalogApi(
         parsed.hoursJoshKobra,
         JSON.stringify(parsed.availableColorIds),
         parsed.multicolorOnly ? 1 : 0,
+        parsed.multicolorSlotCount,
         now,
         now,
       )
@@ -1681,6 +1761,7 @@ export async function handleCatalogApi(
             slice_error = ?,
             grams_pablo_p1s = ?, hours_pablo_p1s = ?, grams_court_ender = ?, hours_court_ender = ?,
             grams_josh_kobra = ?, hours_josh_kobra = ?, available_color_ids = ?, multicolor_only = ?,
+            multicolor_slot_count = ?,
             quote_ids_json = CASE WHEN ? THEN '{}' ELSE quote_ids_json END,
             file_ids_json = CASE WHEN ? THEN '{}' ELSE file_ids_json END,
             updated_at = ?
@@ -1701,6 +1782,7 @@ export async function handleCatalogApi(
           stlChanged ? null : parsed.hoursJoshKobra,
           JSON.stringify(parsed.availableColorIds),
           parsed.multicolorOnly ? 1 : 0,
+          parsed.multicolorSlotCount,
           stlChanged ? 1 : 0,
           stlChanged ? 1 : 0,
           now,

@@ -134,7 +134,7 @@ export function AdminApprovals() {
                         <p className="text-xs text-muted">
                           SKU {d.skuBase} ·{' '}
                           {d.multicolorOnly
-                            ? 'Multicolor only'
+                            ? `Multicolor · ${d.multicolorSlotCount ?? 2} filament picks · ${d.availableColorIds.filter((id) => id !== 'multicolor').join(', ') || 'all solids'}`
                             : `colors ${d.availableColorIds.join(', ') || '—'}`}
                         </p>
                         <p className="mt-1 text-xs text-muted">

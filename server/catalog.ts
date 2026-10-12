@@ -3,6 +3,7 @@ import { resolveImageUrl } from '../shared/imageUrl.ts'
 import {
   BUILTIN_COLORS,
   buildSku,
+  clampMulticolorSlotCount,
   colorById,
   emptyCustomColorSlots,
   normalizeCustomSlots,
@@ -48,6 +49,8 @@ export type Design = {
   hoursJoshKobra: number | null
   availableColorIds: string[]
   multicolorOnly: boolean
+  /** How many solid filaments the customer must pick (multicolor designs). */
+  multicolorSlotCount: number
   worstCostUsd: number | null
   catalogPriceUsd: number | null
   pricedAt: string | null
@@ -74,6 +77,8 @@ export type OrderItem = {
   sku: string
   colorId: string
   colorName: string
+  /** Solid filament ids chosen for multicolor prints (empty for single-color). */
+  filamentColorIds: string[]
   qty: number
   unitPriceUsd: number
   worstCostUnitUsd: number
@@ -162,6 +167,7 @@ export function rowToDesign(row: Record<string, unknown>): Design {
     hoursJoshKobra: numOrNull(row.hours_josh_kobra),
     availableColorIds: Array.isArray(colors) ? colors : [],
     multicolorOnly: Boolean(Number(row.multicolor_only ?? 0)),
+    multicolorSlotCount: clampMulticolorSlotCount(row.multicolor_slot_count),
     worstCostUsd: numOrNull(row.worst_cost_usd),
     catalogPriceUsd: numOrNull(row.catalog_price_usd),
     pricedAt: (row.priced_at as string | null) ?? null,
@@ -203,6 +209,15 @@ export function rowToOrder(row: Record<string, unknown>): Order {
 }
 
 export function rowToOrderItem(row: Record<string, unknown>): OrderItem {
+  let filamentColorIds: string[] = []
+  try {
+    const parsed = JSON.parse(String(row.filament_color_ids || '[]')) as unknown
+    if (Array.isArray(parsed)) {
+      filamentColorIds = parsed.map((x) => String(x)).filter(Boolean)
+    }
+  } catch {
+    filamentColorIds = []
+  }
   return {
     id: row.id as string,
     orderId: row.order_id as string,
@@ -210,6 +225,7 @@ export function rowToOrderItem(row: Record<string, unknown>): OrderItem {
     sku: row.sku as string,
     colorId: row.color_id as string,
     colorName: (row.color_name as string) || '',
+    filamentColorIds,
     qty: Number(row.qty) || 1,
     unitPriceUsd: Number(row.unit_price_usd) || 0,
     worstCostUnitUsd: Number(row.worst_cost_unit_usd) || 0,

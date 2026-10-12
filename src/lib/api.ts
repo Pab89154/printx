@@ -181,7 +181,12 @@ export const api = {
       customerName?: string
       customerEmail?: string
       promoCode?: string
-      items: { designId: string; colorId: string; qty: number }[]
+      items: {
+        designId: string
+        colorId: string
+        qty: number
+        filamentColorIds?: string[]
+      }[]
     }) =>
       request<{ url: string; orderId: string; sessionId: string }>('/api/public/checkout', {
         method: 'POST',

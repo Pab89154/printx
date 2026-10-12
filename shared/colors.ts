@@ -11,6 +11,17 @@ export type ColorDef = {
 /** Single shop option for multicolor-only designs (SKU suffix MLT). */
 export const MULTICOLOR_COLOR_ID = 'multicolor'
 
+/** How many filament colors the customer must pick for a multicolor print. */
+export const MULTICOLOR_SLOT_MIN = 2
+export const MULTICOLOR_SLOT_MAX = 4
+export const MULTICOLOR_SLOT_DEFAULT = 2
+
+export function clampMulticolorSlotCount(n: unknown): number {
+  const v = Math.floor(Number(n))
+  if (!Number.isFinite(v)) return MULTICOLOR_SLOT_DEFAULT
+  return Math.min(MULTICOLOR_SLOT_MAX, Math.max(MULTICOLOR_SLOT_MIN, v))
+}
+
 export const MULTICOLOR_COLOR: ColorDef = {
   id: MULTICOLOR_COLOR_ID,
   code: 'MLT',
@@ -18,6 +29,13 @@ export const MULTICOLOR_COLOR: ColorDef = {
   /** Solid tint for STL preview; UI swatches use a gradient instead. */
   hex: '#7C3AED',
   builtin: true,
+}
+
+/** Display label for chosen filaments, e.g. "Multicolor · Red + Blue". */
+export function formatMulticolorSelection(names: string[]): string {
+  const clean = names.map((n) => n.trim()).filter(Boolean)
+  if (!clean.length) return MULTICOLOR_COLOR.name
+  return `${MULTICOLOR_COLOR.name} · ${clean.join(' + ')}`
 }
 
 /** CSS background for multicolor swatches (one option that reads as multi). */

@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import { colorSwatchStyle, isMulticolorColorId } from '../../shared/colors'
+import {
+  MULTICOLOR_COLOR_ID,
+  MULTICOLOR_SLOT_DEFAULT,
+  clampMulticolorSlotCount,
+  colorSwatchStyle,
+  formatMulticolorSelection,
+  isMulticolorColorId,
+} from '../../shared/colors'
 import { useCart } from '../context/CartContext'
 import type { PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
@@ -13,6 +20,7 @@ export function ShopProduct() {
   const { skuBase = '' } = useParams()
   const [design, setDesign] = useState<PublicCatalogDesign | null>(null)
   const [colorId, setColorId] = useState('')
+  const [slotColorIds, setSlotColorIds] = useState<string[]>([])
   const [qty, setQty] = useState(1)
   const [error, setError] = useState('')
   const [added, setAdded] = useState(false)
@@ -26,15 +34,46 @@ export function ShopProduct() {
           d.designs.find((x) => x.skuBase.toLowerCase() === decodeURIComponent(skuBase).toLowerCase()) ??
           null
         setDesign(hit)
-        if (hit?.availableColors[0]) setColorId(hit.availableColors[0].id)
+        if (!hit) return
+        const multi =
+          Boolean(hit.multicolorOnly) ||
+          (hit.availableColors.length === 1 && isMulticolorColorId(hit.availableColors[0]?.id))
+        if (multi) {
+          const slots = clampMulticolorSlotCount(hit.multicolorSlotCount ?? MULTICOLOR_SLOT_DEFAULT)
+          setSlotColorIds(Array.from({ length: slots }, () => ''))
+          setColorId(MULTICOLOR_COLOR_ID)
+        } else if (hit.availableColors[0]) {
+          setColorId(hit.availableColors[0].id)
+          setSlotColorIds([])
+        }
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Load failed'))
   }, [skuBase])
 
-  const color = design?.availableColors.find((c) => c.id === colorId)
   const multicolorOnly =
     Boolean(design?.multicolorOnly) ||
     (design?.availableColors.length === 1 && isMulticolorColorId(design.availableColors[0]?.id))
+
+  const solidChoices = useMemo(
+    () => (design?.availableColors ?? []).filter((c) => !isMulticolorColorId(c.id)),
+    [design],
+  )
+
+  const slotColors = slotColorIds.map((id) => solidChoices.find((c) => c.id === id) ?? null)
+  const multicolorReady =
+    multicolorOnly &&
+    slotColorIds.length > 0 &&
+    slotColorIds.every((id) => Boolean(id)) &&
+    slotColors.every(Boolean)
+
+  const previewColor = multicolorOnly
+    ? slotColors.find(Boolean) ?? { id: MULTICOLOR_COLOR_ID, hex: '#7C3AED', name: 'Multicolor' }
+    : design?.availableColors.find((c) => c.id === colorId)
+
+  const singleColor = design?.availableColors.find((c) => c.id === colorId)
+  const canAdd = Boolean(
+    design?.catalogPriceUsd != null && (multicolorOnly ? multicolorReady : singleColor),
+  )
 
   return (
     <div className="min-h-screen bg-surface">
@@ -58,7 +97,7 @@ export function ShopProduct() {
                   credentials="same-origin"
                   interactive
                   eager
-                  colorHex={color?.hex}
+                  colorHex={previewColor?.hex}
                   height={420}
                   className="overflow-hidden rounded-2xl border bg-white [&_>div]:rounded-2xl [&_>div]:border-0"
                 />
@@ -76,33 +115,69 @@ export function ShopProduct() {
                 ${design.catalogPriceUsd?.toFixed(2) ?? '—'}
               </p>
 
-              <p className="mt-6 text-sm font-semibold text-navy">Color</p>
               {multicolorOnly ? (
-                <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-electric bg-electric/10 px-3 py-1.5 text-sm text-electric">
-                  <span
-                    className="h-3.5 w-3.5 rounded-full border"
-                    style={colorSwatchStyle(color ?? { id: 'multicolor', hex: '#7C3AED' })}
-                  />
-                  Multicolor
-                </div>
-              ) : (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {design.availableColors.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
-                        colorId === c.id
-                          ? 'border-electric bg-electric/10 text-electric'
-                          : 'border-slate-200'
-                      }`}
-                      onClick={() => setColorId(c.id)}
-                    >
-                      <span className="h-3.5 w-3.5 rounded-full border" style={colorSwatchStyle(c)} />
-                      {c.name}
-                    </button>
+                <div className="mt-6 space-y-4">
+                  <div>
+                    <p className="text-sm font-semibold text-navy">Filament colors</p>
+                    <p className="mt-1 text-xs text-muted">
+                      This is a multicolor print — pick each filament color before adding to cart.
+                    </p>
+                  </div>
+                  {slotColorIds.map((selectedId, index) => (
+                    <div key={`slot-${index}`}>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                        Color {index + 1}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {solidChoices.map((c) => (
+                          <button
+                            key={`${index}-${c.id}`}
+                            type="button"
+                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
+                              selectedId === c.id
+                                ? 'border-electric bg-electric/10 text-electric'
+                                : 'border-slate-200'
+                            }`}
+                            onClick={() =>
+                              setSlotColorIds((prev) => {
+                                const next = [...prev]
+                                next[index] = c.id
+                                return next
+                              })
+                            }
+                          >
+                            <span
+                              className="h-3.5 w-3.5 rounded-full border"
+                              style={colorSwatchStyle(c)}
+                            />
+                            {c.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
+              ) : (
+                <>
+                  <p className="mt-6 text-sm font-semibold text-navy">Color</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {design.availableColors.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
+                          colorId === c.id
+                            ? 'border-electric bg-electric/10 text-electric'
+                            : 'border-slate-200'
+                        }`}
+                        onClick={() => setColorId(c.id)}
+                      >
+                        <span className="h-3.5 w-3.5 rounded-full border" style={colorSwatchStyle(c)} />
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
 
               <label className="mt-6 flex items-center gap-4 text-sm font-semibold text-navy">
@@ -120,27 +195,50 @@ export function ShopProduct() {
               <button
                 type="button"
                 className="btn btn-primary mt-6"
-                disabled={!color || design.catalogPriceUsd == null}
+                disabled={!canAdd}
                 onClick={() => {
-                  if (!color || design.catalogPriceUsd == null) return
-                  add(
-                    {
-                      designId: design.id,
-                      skuBase: design.skuBase,
-                      name: design.name,
-                      imageUrl: '',
-                      colorId: color.id,
-                      colorName: color.name,
-                      colorHex: color.hex,
-                      unitPrice: design.catalogPriceUsd,
-                    },
-                    qty,
-                  )
+                  if (!design.catalogPriceUsd) return
+                  if (multicolorOnly) {
+                    if (!multicolorReady) return
+                    const names = slotColors.map((c) => c!.name)
+                    add(
+                      {
+                        designId: design.id,
+                        skuBase: design.skuBase,
+                        name: design.name,
+                        imageUrl: '',
+                        colorId: MULTICOLOR_COLOR_ID,
+                        colorName: formatMulticolorSelection(names),
+                        colorHex: slotColors[0]?.hex ?? '#7C3AED',
+                        filamentColorIds: [...slotColorIds],
+                        unitPrice: design.catalogPriceUsd,
+                      },
+                      qty,
+                    )
+                  } else {
+                    if (!singleColor) return
+                    add(
+                      {
+                        designId: design.id,
+                        skuBase: design.skuBase,
+                        name: design.name,
+                        imageUrl: '',
+                        colorId: singleColor.id,
+                        colorName: singleColor.name,
+                        colorHex: singleColor.hex,
+                        unitPrice: design.catalogPriceUsd,
+                      },
+                      qty,
+                    )
+                  }
                   setAdded(true)
                 }}
               >
                 Add to cart
               </button>
+              {multicolorOnly && !multicolorReady ? (
+                <p className="mt-2 text-xs text-amber-700">Select every filament color to continue.</p>
+              ) : null}
               {added && (
                 <p className="mt-3 text-sm text-electric">
                   Added.{' '}

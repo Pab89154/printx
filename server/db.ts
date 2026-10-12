@@ -195,6 +195,7 @@ async function migrate(database: DbApi) {
       hours_josh_kobra REAL,
       available_color_ids TEXT NOT NULL DEFAULT '[]',
       multicolor_only INTEGER NOT NULL DEFAULT 0,
+      multicolor_slot_count INTEGER NOT NULL DEFAULT 2,
       worst_cost_usd REAL,
       catalog_price_usd REAL,
       priced_at TEXT,
@@ -225,6 +226,7 @@ async function migrate(database: DbApi) {
       sku TEXT NOT NULL,
       color_id TEXT NOT NULL,
       color_name TEXT NOT NULL DEFAULT '',
+      filament_color_ids TEXT NOT NULL DEFAULT '[]',
       qty INTEGER NOT NULL DEFAULT 1,
       unit_price_usd REAL NOT NULL DEFAULT 0,
       worst_cost_unit_usd REAL NOT NULL DEFAULT 0,
@@ -312,6 +314,24 @@ async function migrateDesignMulticolorOnly(database: DbApi) {
   try {
     await database.exec(
       `ALTER TABLE designs ADD COLUMN multicolor_only INTEGER NOT NULL DEFAULT 0`,
+    )
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await database.exec(
+      `ALTER TABLE designs ADD COLUMN multicolor_slot_count INTEGER NOT NULL DEFAULT 2`,
+    )
+  } catch {
+    /* column already exists */
+  }
+}
+
+/** Customer-chosen filament colors for multicolor shop lines. */
+async function migrateOrderItemFilamentColors(database: DbApi) {
+  try {
+    await database.exec(
+      `ALTER TABLE order_items ADD COLUMN filament_color_ids TEXT NOT NULL DEFAULT '[]'`,
     )
   } catch {
     /* column already exists */
@@ -998,6 +1018,7 @@ async function initDb(): Promise<DbApi> {
   await migrateDesignQuoteIds(database)
   await migrateDiscountCustomerVisibility(database)
   await migrateDesignMulticolorOnly(database)
+  await migrateOrderItemFilamentColors(database)
   await migrateCustomerAccounts(database)
   await seed(database)
   await ensurePrimaryAdmin(database)

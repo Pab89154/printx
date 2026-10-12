@@ -24,6 +24,7 @@ export function Cart() {
           designId: l.designId,
           colorId: l.colorId,
           qty: l.qty,
+          ...(l.filamentColorIds?.length ? { filamentColorIds: l.filamentColorIds } : {}),
         })),
       })
       clear()
@@ -50,7 +51,7 @@ export function Cart() {
             <ul className="mt-8 space-y-4">
               {lines.map((l) => (
                 <li
-                  key={`${l.designId}-${l.colorId}`}
+                  key={`${l.designId}-${l.colorId}-${(l.filamentColorIds ?? []).join('|')}`}
                   className="flex flex-wrap items-center gap-4 rounded-2xl border bg-white p-4"
                 >
                   <div
@@ -78,12 +79,14 @@ export function Cart() {
                     max={20}
                     className="w-16 rounded-lg border px-2 py-1 text-sm"
                     value={l.qty}
-                    onChange={(e) => setQty(l.designId, l.colorId, Number(e.target.value))}
+                    onChange={(e) =>
+                      setQty(l.designId, l.colorId, Number(e.target.value), l.filamentColorIds)
+                    }
                   />
                   <button
                     type="button"
                     className="text-sm text-red-600"
-                    onClick={() => remove(l.designId, l.colorId)}
+                    onClick={() => remove(l.designId, l.colorId, l.filamentColorIds)}
                   >
                     Remove
                   </button>

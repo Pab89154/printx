@@ -3,6 +3,10 @@ import { Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import {
   MULTICOLOR_COLOR_ID,
+  MULTICOLOR_SLOT_DEFAULT,
+  MULTICOLOR_SLOT_MAX,
+  MULTICOLOR_SLOT_MIN,
+  clampMulticolorSlotCount,
   colorSwatchStyle,
   solidBuiltinColors,
 } from '../../shared/colors'
@@ -21,6 +25,7 @@ const emptyForm = {
   modelExt: '',
   availableColorIds: ['black', 'white'] as string[],
   multicolorOnly: false,
+  multicolorSlotCount: MULTICOLOR_SLOT_DEFAULT,
 }
 
 export function AdminDesigns() {
@@ -78,13 +83,15 @@ export function AdminDesigns() {
       // Only send when a new upload is pending — never send '' (that used to wipe stl_path).
       ...(form.stlPath ? { stlPath: form.stlPath } : {}),
       multicolorOnly: form.multicolorOnly,
-      availableColorIds: form.multicolorOnly ? [MULTICOLOR_COLOR_ID] : form.availableColorIds,
+      multicolorSlotCount: form.multicolorSlotCount,
+      availableColorIds: form.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID),
     }
   }
 
   function startEdit(d: Design) {
     clearLocalPreview()
     setEditingId(d.id)
+    const solids = d.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
     setForm({
       name: d.name,
       skuBase: d.skuBase,
@@ -94,10 +101,9 @@ export function AdminDesigns() {
       stlPath: '',
       hasStl: d.hasStl,
       modelExt: d.modelExt || '',
-      availableColorIds: d.multicolorOnly
-        ? ['black', 'white']
-        : d.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID),
+      availableColorIds: solids.length ? solids : ['black', 'white'],
       multicolorOnly: Boolean(d.multicolorOnly),
+      multicolorSlotCount: clampMulticolorSlotCount(d.multicolorSlotCount ?? MULTICOLOR_SLOT_DEFAULT),
     })
   }
 
@@ -297,56 +303,83 @@ export function AdminDesigns() {
               setForm((f) => ({
                 ...f,
                 multicolorOnly: on,
-                availableColorIds: on
-                  ? [MULTICOLOR_COLOR_ID]
-                  : f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID).length
-                    ? f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
-                    : ['black', 'white'],
+                availableColorIds: f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
+                  .length
+                  ? f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
+                  : ['black', 'white', 'red', 'blue'],
               }))
             }}
           />
           <span>
-            <span className="font-medium">Multicolor print (single option)</span>
+            <span className="font-medium">Multicolor print</span>
             <span className="mt-0.5 block text-xs text-muted">
-              Shop shows one Multicolor swatch — no solid color picker.
+              Shop asks the customer to pick each filament color (SKU stays MLT).
             </span>
           </span>
         </label>
+        {form.multicolorOnly ? (
+          <label className="mt-3 flex items-center gap-3 text-sm text-navy">
+            <span className="font-medium">Colors to pick</span>
+            <select
+              className="rounded-lg border px-2 py-1.5"
+              value={form.multicolorSlotCount}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  multicolorSlotCount: clampMulticolorSlotCount(e.target.value),
+                }))
+              }
+            >
+              {Array.from(
+                { length: MULTICOLOR_SLOT_MAX - MULTICOLOR_SLOT_MIN + 1 },
+                (_, i) => MULTICOLOR_SLOT_MIN + i,
+              ).map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <p className="mt-3 text-xs text-muted">
+          {form.multicolorOnly
+            ? 'Choose which solid filaments customers can use for this print.'
+            : 'Choose which single colors this design can be ordered in.'}
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {colorOptions.map((c) => {
+            const on = form.availableColorIds.includes(c.id)
+            return (
+              <button
+                key={c.id}
+                type="button"
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
+                  on ? 'border-electric bg-electric/10 text-electric' : 'border-slate-200'
+                }`}
+                onClick={() =>
+                  setForm((f) => ({
+                    ...f,
+                    availableColorIds: on
+                      ? f.availableColorIds.filter((x) => x !== c.id)
+                      : [...f.availableColorIds, c.id],
+                  }))
+                }
+              >
+                <span className="h-3 w-3 rounded-full border" style={{ background: c.hex }} />
+                {c.name}
+              </button>
+            )
+          })}
+        </div>
         {form.multicolorOnly ? (
           <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-electric bg-electric/10 px-3 py-1.5 text-xs font-medium text-electric">
             <span
               className="h-3 w-3 rounded-full border"
               style={colorSwatchStyle({ id: MULTICOLOR_COLOR_ID, hex: '#7C3AED' })}
             />
-            Multicolor
+            Shop badge: Multicolor · {form.multicolorSlotCount} picks
           </div>
-        ) : (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {colorOptions.map((c) => {
-              const on = form.availableColorIds.includes(c.id)
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
-                    on ? 'border-electric bg-electric/10 text-electric' : 'border-slate-200'
-                  }`}
-                  onClick={() =>
-                    setForm((f) => ({
-                      ...f,
-                      availableColorIds: on
-                        ? f.availableColorIds.filter((x) => x !== c.id)
-                        : [...f.availableColorIds, c.id],
-                    }))
-                  }
-                >
-                  <span className="h-3 w-3 rounded-full border" style={{ background: c.hex }} />
-                  {c.name}
-                </button>
-              )
-            })}
-          </div>
-        )}
+        ) : null}
 
         <div className="mt-6 flex flex-wrap gap-3">
           <button type="submit" className="btn btn-secondary" disabled={busy || uploadingStl}>

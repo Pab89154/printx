@@ -37,6 +37,7 @@ export type Design = {
   hoursJoshKobra: number | null
   availableColorIds: string[]
   multicolorOnly: boolean
+  multicolorSlotCount?: number
   worstCostUsd: number | null
   catalogPriceUsd: number | null
   pricedAt: string | null
@@ -58,6 +59,7 @@ export type PublicCatalogDesign = {
   modelUrl?: string
   catalogPriceUsd: number | null
   multicolorOnly?: boolean
+  multicolorSlotCount?: number
   availableColors: CatalogColor[]
 }
 
@@ -90,6 +92,7 @@ export type OrderItemDto = {
   sku: string
   colorId: string
   colorName: string
+  filamentColorIds?: string[]
   qty: number
   unitPriceUsd: number
   worstCostUnitUsd: number
@@ -226,6 +229,8 @@ export type CartLine = {
   colorId: string
   colorName: string
   colorHex: string
+  /** Solid filament picks for multicolor lines. */
+  filamentColorIds?: string[]
   unitPrice: number
   qty: number
 }
