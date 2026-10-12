@@ -288,33 +288,48 @@ export async function waitForQuoteAndDownloadGcode(
 }
 
 /**
- * Prefer local Bambu CLI for grams/hours (+ G-code). Fall back to Cloud Slicer when the
- * local slicer is not installed for that PrintX printer.
+ * Prefer local Bambu CLI for grams/hours (+ G-code). If local fails or is missing,
+ * fall back to Cloud Slicer when that printer has API credentials.
  */
 export async function quoteStlForPrintxPrinter(
   printxPrinterId: string,
   localPath: string,
   creds?: CloudSlicerCreds | null,
 ): Promise<CloudSlicerQuoteResult> {
+  const canCloud = Boolean(creds && cloudSlicerConfigured(creds))
+  let localError = ''
+
   if (localSlicerAvailable(printxPrinterId)) {
-    const local = await sliceStlLocally(localPath, printxPrinterId)
-    if (!(local.grams > 0) || !(local.hours > 0)) {
-      throw new Error(
-        `Local slicer returned incomplete metrics (grams=${local.grams}, hours=${local.hours}).`,
+    try {
+      const local = await sliceStlLocally(localPath, printxPrinterId)
+      if (!(local.grams > 0) || !(local.hours > 0)) {
+        throw new Error(
+          `Local slicer returned incomplete metrics (grams=${local.grams}, hours=${local.hours}).`,
+        )
+      }
+      return {
+        grams: local.grams,
+        hours: local.hours,
+        quoteId: `local-${Date.now().toString(36)}`,
+        fileId: '',
+        gcodeBuffer: local.buffer,
+        gcodeFilename: local.filename,
+      }
+    } catch (err) {
+      localError = err instanceof Error ? err.message : 'Local slicer failed'
+      if (!canCloud) throw err instanceof Error ? err : new Error(localError)
+      console.warn(
+        `[cloudslicer] local quote failed for ${printxPrinterId}; falling back to Cloud Slicer:`,
+        localError,
       )
     }
-    return {
-      grams: local.grams,
-      hours: local.hours,
-      quoteId: `local-${Date.now().toString(36)}`,
-      fileId: '',
-      gcodeBuffer: local.buffer,
-      gcodeFilename: local.filename,
-    }
   }
-  if (!creds || !cloudSlicerConfigured(creds)) {
+
+  if (!canCloud || !creds) {
     throw new Error(
-      'Local slicer unavailable and Cloud Slicer is not configured for this printer.',
+      localError
+        ? localError
+        : 'Local slicer unavailable and Cloud Slicer is not configured for this printer.',
     )
   }
   return quoteStlForPrinter(creds, localPath)

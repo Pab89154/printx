@@ -2097,19 +2097,24 @@ export async function handleCatalogApi(
       const modelExt = path.extname(design.stlPath).toLowerCase()
       if (!SLICEABLE_EXTS.has(modelExt)) {
         send(res, 400, {
-          error: 'Cloud Slicer needs .stl or .3mf to auto-quote.',
+          error: 'Auto-quote needs .stl or .3mf.',
         })
         return true
       }
-      // Fill only printers still missing quotes — never wipe ones that already succeeded.
-      const sliced = await sliceDesignWithCloudSlicer(db, designId, design.stlPath, {
-        fillMissingOnly: true,
+      // Do not await slicing here — local/CS quotes can take minutes and freeze Approvals.
+      await db.run(
+        `UPDATE designs SET slice_status = 'slicing', slice_error = '', updated_at = ? WHERE id = ?`,
+        new Date().toISOString(),
+        designId,
+      )
+      scheduleDesignSlice(designId, design.stlPath)
+      design = rowToDesign(
+        (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
+      )
+      send(res, 200, {
+        ...designDto(design),
+        sliceWarning: 'Quoting in the background — refresh this page in a minute.',
       })
-      if (!sliced.ok) {
-        send(res, 400, { error: sliced.error })
-        return true
-      }
-      send(res, 200, { ...designDto(sliced.design), sliceWarning: sliced.warning || undefined })
       return true
     }
 

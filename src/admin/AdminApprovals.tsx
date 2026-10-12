@@ -147,13 +147,14 @@ export function AdminApprovals() {
                         ) : null}
                         {!ready ? (
                           <p className="mt-2 text-xs text-amber-700">
-                            No printer quotes yet — link at least one admin Cloud Slicer account, then
-                            Re-quote missing. You can approve once any printer has grams/hours.
+                            {d.sliceStatus === 'slicing'
+                              ? 'Quoting in progress (local slicer and/or Cloud Slicer) — refresh in a minute.'
+                              : 'No printer quotes yet — click Re-quote missing (uses local slicer when available, otherwise your Cloud Slicer API key). Approve once any printer has grams/hours.'}
                           </p>
                         ) : !designHasAllThree(d) ? (
                           <p className="mt-2 text-xs text-muted">
                             Pricing uses the worst quoted printer so far. Missing printers can fill in
-                            later when their Cloud Slicer is set up.
+                            later when their slicer/API key is set up.
                           </p>
                         ) : null}
                         {d.description ? (
@@ -184,14 +185,13 @@ export function AdminApprovals() {
                           onClick={() => {
                             setBusyId(d.id)
                             setError('')
-                            setMessage('Re-quoting via Cloud Slicer…')
+                            setMessage('Queuing re-quote…')
                             void api.catalog.designs
                               .requote(d.id)
                               .then((res) => {
                                 setMessage(
-                                  res.sliceWarning
-                                    ? `Filled missing quotes. Note:\n${res.sliceWarning}`
-                                    : 'Missing quotes filled (existing printer quotes kept).',
+                                  res.sliceWarning ||
+                                    'Re-quote queued — refresh Approvals when grams/hours appear.',
                                 )
                                 return load()
                               })
