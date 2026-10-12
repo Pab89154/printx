@@ -4,14 +4,14 @@ import {
   Store,
   type LucideIcon,
 } from 'lucide-react'
-import { HomePrinterIcon } from '../lib/homePrinterIcon'
+import { Printer3d } from '../lib/printer3dIcon'
 
 const iconMap: Record<string, LucideIcon> = {
   'map-pin': MapPin,
   'graduation-cap': GraduationCap,
   store: Store,
-  'printer-3d': HomePrinterIcon as LucideIcon,
-  printer: HomePrinterIcon as LucideIcon,
+  'printer-3d': Printer3d as LucideIcon,
+  printer: Printer3d as LucideIcon,
 }
 
 type Props = {

@@ -10,7 +10,7 @@ import {
   Sparkles,
   type LucideIcon,
 } from 'lucide-react'
-import { HomePrinterIcon } from './homePrinterIcon'
+import { Printer3d } from './printer3dIcon'
 
 const ICONS: Record<string, LucideIcon> = {
   loader: Loader,
@@ -22,8 +22,8 @@ const ICONS: Record<string, LucideIcon> = {
   package: Package,
   pencil: Pencil,
   ruler: Ruler,
-  'printer-3d': HomePrinterIcon as LucideIcon,
-  printer: HomePrinterIcon as LucideIcon,
+  'printer-3d': Printer3d as LucideIcon,
+  printer: Printer3d as LucideIcon,
 }
 
 export const PRODUCT_ICON_OPTIONS = [
