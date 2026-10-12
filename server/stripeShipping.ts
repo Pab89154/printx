@@ -75,39 +75,80 @@ export type ParsedCheckoutShipping = {
   amountTotalUsd: number | null
 }
 
+type AddrLike = {
+  line1?: string | null
+  line2?: string | null
+  city?: string | null
+  state?: string | null
+  postal_code?: string | null
+  country?: string | null
+} | null
+
 type ShippingDetailsLike = {
   name?: string | null
-  address?: {
-    line1?: string | null
-    line2?: string | null
-    city?: string | null
-    state?: string | null
-    postal_code?: string | null
-    country?: string | null
-  } | null
+  address?: AddrLike
+} | null
+
+function trimStr(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : ''
 }
 
-/** Stripe 2025+ moved shipping_details under collected_information. */
-function sessionShippingDetails(session: Stripe.Checkout.Session): ShippingDetailsLike | null {
-  const raw = session as Stripe.Checkout.Session & {
-    collected_information?: { shipping_details?: ShippingDetailsLike | null } | null
+function addressHasStreet(addr: AddrLike): boolean {
+  return Boolean(trimStr(addr?.line1) || trimStr(addr?.city) || trimStr(addr?.postal_code))
+}
+
+/** Prefer the first address that includes a street/city/postal. */
+function pickAddress(...candidates: AddrLike[]): AddrLike {
+  for (const addr of candidates) {
+    if (addressHasStreet(addr)) return addr
   }
-  return (
-    raw.collected_information?.shipping_details ||
-    session.shipping_details ||
-    null
-  )
+  return candidates.find((a) => a) || null
+}
+
+/**
+ * Stripe API 2025+ stores ship-to under collected_information.shipping_details.
+ * Older payloads used top-level shipping_details. After pay, address is also copied
+ * onto PaymentIntent.shipping / Charge.shipping.
+ */
+function sessionShippingDetails(session: Stripe.Checkout.Session): ShippingDetailsLike {
+  const raw = session as Stripe.Checkout.Session & {
+    collected_information?: { shipping_details?: ShippingDetailsLike } | null
+    shipping_details?: ShippingDetailsLike
+  }
+  return raw.collected_information?.shipping_details || raw.shipping_details || null
 }
 
 /** Pull email, ship-to name/address, and chosen shipping rate from a completed Checkout Session. */
-export function parseCheckoutShipping(session: Stripe.Checkout.Session): ParsedCheckoutShipping {
+export function parseCheckoutShipping(
+  session: Stripe.Checkout.Session,
+  paymentIntent?: Stripe.PaymentIntent | null,
+): ParsedCheckoutShipping {
   const details = sessionShippingDetails(session)
-  const addr = details?.address
-  const shippingName = details?.name?.trim() || ''
+  const piShipping = paymentIntent?.shipping ?? null
+  const charge =
+    paymentIntent?.latest_charge && typeof paymentIntent.latest_charge === 'object'
+      ? paymentIntent.latest_charge
+      : null
+  const chargeShipping = charge && 'shipping' in charge ? (charge.shipping as ShippingDetailsLike) : null
+
+  const addr = pickAddress(
+    details?.address ?? null,
+    piShipping?.address ?? null,
+    chargeShipping?.address ?? null,
+    // Last resort: customer_details.address (often matches ship-to when shipping was collected).
+    session.customer_details?.address ?? null,
+  )
+
+  const shippingName =
+    trimStr(details?.name) ||
+    trimStr(piShipping?.name) ||
+    trimStr(chargeShipping?.name) ||
+    ''
+
   const customerEmail =
-    session.customer_details?.email?.trim() || session.customer_email?.trim() || ''
+    trimStr(session.customer_details?.email) || trimStr(session.customer_email) || ''
   const customerName =
-    shippingName || session.customer_details?.name?.trim() || ''
+    shippingName || trimStr(session.customer_details?.name) || ''
 
   const shippingUsd =
     session.shipping_cost?.amount_total != null
@@ -119,7 +160,6 @@ export function parseCheckoutShipping(session: Stripe.Checkout.Session): ParsedC
   if (rate && typeof rate === 'object' && 'display_name' in rate) {
     shippingMethod = String((rate as Stripe.ShippingRate).display_name || '')
   }
-  // Webhook payloads usually only include the rate id — match amount to display names.
   if (!shippingMethod) {
     const centsPaid = Math.round(shippingUsd * 100)
     if (centsPaid === cents(STANDARD_CENTS, 599)) shippingMethod = 'Standard'
@@ -133,12 +173,12 @@ export function parseCheckoutShipping(session: Stripe.Checkout.Session): ParsedC
 
   return {
     shippingName,
-    shippingLine1: addr?.line1?.trim() || '',
-    shippingLine2: addr?.line2?.trim() || '',
-    shippingCity: addr?.city?.trim() || '',
-    shippingState: addr?.state?.trim() || '',
-    shippingPostal: addr?.postal_code?.trim() || '',
-    shippingCountry: addr?.country?.trim() || '',
+    shippingLine1: trimStr(addr?.line1),
+    shippingLine2: trimStr(addr?.line2),
+    shippingCity: trimStr(addr?.city),
+    shippingState: trimStr(addr?.state),
+    shippingPostal: trimStr(addr?.postal_code),
+    shippingCountry: trimStr(addr?.country),
     shippingMethod,
     shippingUsd,
     customerName,
@@ -162,4 +202,23 @@ export async function resolveShippingMethodName(
   } catch {
     return fallback
   }
+}
+
+/** Retrieve session + PaymentIntent and parse ship-to from every Stripe location. */
+export async function loadCheckoutShipping(
+  stripe: Stripe,
+  sessionId: string,
+): Promise<{ ship: ParsedCheckoutShipping; session: Stripe.Checkout.Session }> {
+  const session = await stripe.checkout.sessions.retrieve(sessionId, {
+    expand: ['payment_intent', 'payment_intent.latest_charge'],
+  })
+  let paymentIntent: Stripe.PaymentIntent | null = null
+  if (session.payment_intent && typeof session.payment_intent === 'object') {
+    paymentIntent = session.payment_intent
+  } else if (typeof session.payment_intent === 'string' && session.payment_intent) {
+    paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent, {
+      expand: ['latest_charge'],
+    })
+  }
+  return { ship: parseCheckoutShipping(session, paymentIntent), session }
 }

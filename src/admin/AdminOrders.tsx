@@ -12,6 +12,7 @@ export function AdminOrders() {
   const [refundBusyId, setRefundBusyId] = useState<string | null>(null)
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null)
   const [gcodeBusyId, setGcodeBusyId] = useState<string | null>(null)
+  const [refreshBusy, setRefreshBusy] = useState(false)
 
   async function load() {
     const data = await api.catalog.orders.list()
@@ -31,6 +32,18 @@ export function AdminOrders() {
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load orders'))
   }, [])
+
+  async function refreshFromStripe() {
+    setRefreshBusy(true)
+    setError('')
+    try {
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to refresh from Stripe')
+    } finally {
+      setRefreshBusy(false)
+    }
+  }
 
   async function refundOrder(order: OrderDto) {
     const who = order.customerName || order.customerEmail || 'this customer'
@@ -74,13 +87,23 @@ export function AdminOrders() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-navy">Orders</h1>
-        <p className="mt-1 text-sm text-muted">
-          Claim a paid item with your printer. When done, you get the worst-case manufacturing cost
-          (tracked under Money). Leftover profit stays with PrintX in Stripe. Use Refund if the
-          customer cancels or you cannot print.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-navy">Orders</h1>
+          <p className="mt-1 text-sm text-muted">
+            Claim a paid item with your printer. When done, you get the worst-case manufacturing cost
+            (tracked under Money). Leftover profit stays with PrintX in Stripe. Use Refund if the
+            customer cancels or you cannot print.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost btn-compact"
+          disabled={refreshBusy}
+          onClick={() => void refreshFromStripe()}
+        >
+          {refreshBusy ? 'Refreshing…' : 'Refresh from Stripe'}
+        </button>
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -120,7 +143,10 @@ export function AdminOrders() {
                   )}
                   {order.shippingCountry ? <p>{order.shippingCountry}</p> : null}
                   {!order.shippingLine1 && !order.shippingCity && !order.shippingPostal ? (
-                    <p className="text-amber-700">Street address not saved yet — reopen Orders to refresh from Stripe.</p>
+                    <p className="text-amber-700">
+                      Street address not in Stripe yet — use Refresh from Stripe, or check the
+                      Checkout session in the Stripe Dashboard.
+                    </p>
                   ) : null}
                   {(order.shippingMethod || order.shippingUsd > 0) && (
                     <p className="mt-1 text-muted">

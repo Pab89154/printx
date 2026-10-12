@@ -39,6 +39,7 @@ import {
 } from '../shared/modelFormats.ts'
 import { roundMoney } from './pricing.ts'
 import {
+  loadCheckoutShipping,
   parseCheckoutShipping,
   resolveShippingMethodName,
   stripeCheckoutShippingFields,
@@ -883,11 +884,25 @@ export async function handleCatalogApi(
       return true
     }
     if (event.type === 'checkout.session.completed') {
-      const session = event.data.object as Stripe.Checkout.Session
+      let session = event.data.object as Stripe.Checkout.Session
       const now = new Date().toISOString()
       const paymentIntent =
         typeof session.payment_intent === 'string' ? session.payment_intent : null
-      const ship = parseCheckoutShipping(session)
+      // Webhook payload may omit nested ship-to; re-fetch session + PI for a durable address.
+      let ship = parseCheckoutShipping(session)
+      if (!ship.shippingLine1 && !ship.shippingCity && !ship.shippingPostal && session.id) {
+        try {
+          const loaded = await loadCheckoutShipping(stripe, session.id)
+          session = loaded.session
+          ship = loaded.ship
+        } catch (err) {
+          console.warn(
+            '[printx] Could not re-fetch Checkout shipping after webhook',
+            session.id,
+            err instanceof Error ? err.message : err,
+          )
+        }
+      }
       const shippingMethod = await resolveShippingMethodName(
         stripe,
         session,
@@ -951,6 +966,7 @@ export async function handleCatalogApi(
               shipping_method = ?,
               shipping_usd = ?,
               total_usd = COALESCE(?, total_usd),
+              stripe_session_id = COALESCE(stripe_session_id, ?),
               stripe_payment_intent = ?,
               paid_at = ?,
               updated_at = ?
@@ -969,6 +985,7 @@ export async function handleCatalogApi(
             shippingMethod,
             ship.shippingUsd,
             ship.amountTotalUsd,
+            session.id,
             paymentIntent,
             now,
             now,
@@ -1428,15 +1445,63 @@ export async function handleCatalogApi(
     row: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     if (String(row.shipping_line1 || '').trim()) return row
-    const sessionId = String(row.stripe_session_id || '').trim()
-    if (!sessionId) return row
+    let sessionId = String(row.stripe_session_id || '').trim()
+    const piId = String(row.stripe_payment_intent || '').trim()
     const stripe = stripeClient()
-    if (!stripe) return row
+    if (!stripe) {
+      console.warn('[printx] Shipping backfill skipped — STRIPE_SECRET_KEY not configured')
+      return row
+    }
     try {
-      const session = await stripe.checkout.sessions.retrieve(sessionId)
-      const ship = parseCheckoutShipping(session)
-      if (!ship.shippingLine1 && !ship.shippingCity && !ship.shippingPostal) return row
-      const shippingMethod = await resolveShippingMethodName(stripe, session, ship.shippingMethod)
+      if (!sessionId && piId) {
+        const listed = await stripe.checkout.sessions.list({
+          payment_intent: piId,
+          limit: 1,
+        })
+        sessionId = listed.data[0]?.id?.trim() || ''
+        if (sessionId) {
+          await db.run(
+            `UPDATE orders SET stripe_session_id = ?, updated_at = ? WHERE id = ?`,
+            sessionId,
+            new Date().toISOString(),
+            String(row.id),
+          )
+        }
+      }
+
+      let ship: ReturnType<typeof parseCheckoutShipping>
+      let session: Stripe.Checkout.Session | null = null
+      if (sessionId) {
+        const loaded = await loadCheckoutShipping(stripe, sessionId)
+        ship = loaded.ship
+        session = loaded.session
+      } else if (piId) {
+        const paymentIntent = await stripe.paymentIntents.retrieve(piId, {
+          expand: ['latest_charge'],
+        })
+        ship = parseCheckoutShipping(
+          { customer_details: null, shipping_cost: null } as Stripe.Checkout.Session,
+          paymentIntent,
+        )
+      } else {
+        return row
+      }
+
+      if (!ship.shippingLine1 && !ship.shippingCity && !ship.shippingPostal) {
+        console.warn('[printx] Stripe has no ship-to address for order', String(row.id), {
+          sessionId: sessionId || null,
+          piId: piId || null,
+          hasCollected: Boolean(
+            session &&
+              (session as { collected_information?: unknown }).collected_information,
+          ),
+          shippingCost: session?.shipping_cost?.amount_total ?? null,
+        })
+        return row
+      }
+      const shippingMethod = session
+        ? await resolveShippingMethodName(stripe, session, ship.shippingMethod)
+        : ship.shippingMethod
       const now = new Date().toISOString()
       await db.run(
         `UPDATE orders SET
@@ -1478,8 +1543,8 @@ export async function handleCatalogApi(
       )
     } catch (err) {
       console.warn(
-        '[printx] Could not backfill shipping from Stripe session',
-        sessionId,
+        '[printx] Could not backfill shipping from Stripe',
+        sessionId || piId || String(row.id),
         err instanceof Error ? err.message : err,
       )
       return row
