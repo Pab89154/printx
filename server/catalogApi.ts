@@ -45,6 +45,7 @@ import {
 } from './stripeShipping.ts'
 import {
   cloudSlicerConfigured,
+  downloadQuoteGcode,
   quoteStlForPrinter,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
@@ -202,6 +203,20 @@ function printerHasQuote(d: Design, printerId: string): boolean {
   return d[fields.grams] != null && d[fields.hours] != null
 }
 
+function parseDesignIdMap(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'string') return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string' && v.trim()) out[k] = v.trim()
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
 function missingPrinterWarning(label: string, detail: string): string {
   return `${label}: ${detail}`
 }
@@ -209,6 +224,7 @@ function missingPrinterWarning(label: string, detail: string): string {
 /**
  * Quote available Cloud Slicer printers. Missing admin/setup → warning only.
  * By default skips printers that already have grams/hours (fill-in later).
+ * Persists quote/file IDs so printers can download G-code from Orders.
  */
 async function sliceDesignWithCloudSlicer(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -227,6 +243,8 @@ async function sliceDesignWithCloudSlicer(
     const existingRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
     if (!existingRow) return { ok: false, error: 'Design not found.' }
     const existing = rowToDesign(existingRow)
+    const quoteIds = parseDesignIdMap(existingRow.quote_ids_json)
+    const fileIds = parseDesignIdMap(existingRow.file_ids_json)
 
     const owners = await loadPrinterOwnerCreds(db)
     const setupGaps: string[] = []
@@ -287,6 +305,8 @@ async function sliceDesignWithCloudSlicer(
           const fields = PRINTER_FIELD[item.printerId]!
           gramsHours[fields.grams] = result.grams
           gramsHours[fields.hours] = result.hours
+          quoteIds[item.printerId] = result.quoteId
+          fileIds[item.printerId] = result.fileId
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Cloud Slicer quoting failed'
           quoteErrors.push(`${item.label}: ${msg}`)
@@ -322,6 +342,7 @@ async function sliceDesignWithCloudSlicer(
       grams_pablo_p1s = ?, hours_pablo_p1s = ?,
       grams_court_ender = ?, hours_court_ender = ?,
       grams_josh_kobra = ?, hours_josh_kobra = ?,
+      quote_ids_json = ?, file_ids_json = ?,
       slice_status = ?, slice_error = ?, updated_at = ?
      WHERE id = ?`,
       gramsHours.gramsPabloP1s,
@@ -330,6 +351,8 @@ async function sliceDesignWithCloudSlicer(
       gramsHours.hoursCourtEnder,
       gramsHours.gramsJoshKobra,
       gramsHours.hoursJoshKobra,
+      JSON.stringify(quoteIds),
+      JSON.stringify(fileIds),
       sliceStatus,
       warning.slice(0, 2000),
       now,
@@ -340,6 +363,95 @@ async function sliceDesignWithCloudSlicer(
   } finally {
     resolved.cleanup?.()
   }
+}
+
+/** Download G-code for a claimed order item's assigned printer (re-slice if quote id missing). */
+async function downloadOrderItemGcode(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const item = await db.get<Record<string, unknown>>('SELECT * FROM order_items WHERE id = ?', itemId)
+  if (!item) throw new Error('Order item not found.')
+  const printerId = String(item.assigned_printer_id || '').trim()
+  if (!printerId) throw new Error('Claim this item with a printer before downloading G-code.')
+
+  const designId = String(item.design_id || '')
+  const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+  if (!designRow) throw new Error('Design not found for this order item.')
+
+  let quoteIds = parseDesignIdMap(designRow.quote_ids_json)
+  let quoteId = quoteIds[printerId] || ''
+
+  const owners = await loadPrinterOwnerCreds(db)
+  const owner = owners.find((o) => o.printer_id === printerId)
+  const creds: CloudSlicerCreds = {
+    token: String(owner?.cloud_slicer_token || ''),
+    printerId: String(owner?.cloud_slicer_printer_id || ''),
+    filamentId: String(owner?.cloud_slicer_filament_id || ''),
+  }
+  if (!cloudSlicerConfigured(creds)) {
+    throw new Error('Cloud Slicer is not set up for this printer. Add API keys under Settings.')
+  }
+
+  if (!quoteId) {
+    const stlPath = String(designRow.stl_path || '')
+    if (!stlPath) throw new Error('Design has no model file to slice.')
+    const resolved = await resolveStoredFile(stlPath)
+    if (!resolved) throw new Error('Model file missing on server. Re-upload the design.')
+    try {
+      const result = await quoteStlForPrinter(creds, resolved.path)
+      const fileIds = parseDesignIdMap(designRow.file_ids_json)
+      quoteIds = { ...quoteIds, [printerId]: result.quoteId }
+      fileIds[printerId] = result.fileId
+      const gramsCol =
+        printerId === 'pablo_p1s'
+          ? 'grams_pablo_p1s'
+          : printerId === 'court_ender'
+            ? 'grams_court_ender'
+            : printerId === 'josh_kobra'
+              ? 'grams_josh_kobra'
+              : null
+      const hoursCol =
+        printerId === 'pablo_p1s'
+          ? 'hours_pablo_p1s'
+          : printerId === 'court_ender'
+            ? 'hours_court_ender'
+            : printerId === 'josh_kobra'
+              ? 'hours_josh_kobra'
+              : null
+      if (gramsCol && hoursCol) {
+        await db.run(
+          `UPDATE designs SET
+             quote_ids_json = ?, file_ids_json = ?,
+             ${gramsCol} = ?, ${hoursCol} = ?,
+             updated_at = ?
+           WHERE id = ?`,
+          JSON.stringify(quoteIds),
+          JSON.stringify(fileIds),
+          result.grams,
+          result.hours,
+          new Date().toISOString(),
+          designId,
+        )
+      } else {
+        await db.run(
+          `UPDATE designs SET quote_ids_json = ?, file_ids_json = ?, updated_at = ? WHERE id = ?`,
+          JSON.stringify(quoteIds),
+          JSON.stringify(fileIds),
+          new Date().toISOString(),
+          designId,
+        )
+      }
+      quoteId = result.quoteId
+    } finally {
+      resolved.cleanup?.()
+    }
+  }
+
+  const { buffer, filename } = await downloadQuoteGcode(creds, quoteId)
+  const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
+  const safeName = `printx-${sku}-${printerId}.gcode`
+  return { buffer, filename: filename || safeName }
 }
 
 const GRAMS_COLUMN: Record<string, string> = {
@@ -1113,7 +1225,10 @@ export async function handleCatalogApi(
             slice_status = ?,
             slice_error = ?,
             grams_pablo_p1s = ?, hours_pablo_p1s = ?, grams_court_ender = ?, hours_court_ender = ?,
-            grams_josh_kobra = ?, hours_josh_kobra = ?, available_color_ids = ?, updated_at = ?
+            grams_josh_kobra = ?, hours_josh_kobra = ?, available_color_ids = ?,
+            quote_ids_json = CASE WHEN ? THEN '{}' ELSE quote_ids_json END,
+            file_ids_json = CASE WHEN ? THEN '{}' ELSE file_ids_json END,
+            updated_at = ?
            WHERE id = ?`,
           parsed.skuBase,
           parsed.name,
@@ -1130,6 +1245,8 @@ export async function handleCatalogApi(
           stlChanged ? null : parsed.gramsJoshKobra,
           stlChanged ? null : parsed.hoursJoshKobra,
           JSON.stringify(parsed.availableColorIds),
+          stlChanged ? 1 : 0,
+          stlChanged ? 1 : 0,
           now,
           designId,
         )
@@ -1314,7 +1431,7 @@ export async function handleCatalogApi(
       return true
     }
     const rows = await db.all<Record<string, unknown>>(
-      `SELECT * FROM orders WHERE status IN ('paid', 'in_production', 'ready', 'fulfilled')
+      `SELECT * FROM orders WHERE status IN ('paid', 'in_production', 'ready', 'fulfilled', 'refunded')
        ORDER BY COALESCE(paid_at, created_at) DESC LIMIT 200`,
     )
     const orders = []
@@ -1333,6 +1450,121 @@ export async function handleCatalogApi(
     }
     const printers = await listPrinters(db)
     send(res, 200, { orders, printers })
+    return true
+  }
+
+  const orderRefundMatch = /^\/api\/admin\/orders\/([^/]+)\/refund$/.exec(urlPath)
+  if (orderRefundMatch && method === 'POST') {
+    const orderId = orderRefundMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const stripe = stripeClient()
+    if (!stripe) {
+      send(res, 503, { error: 'Stripe is not configured (STRIPE_SECRET_KEY).' })
+      return true
+    }
+    const order = await db.get<Record<string, unknown>>('SELECT * FROM orders WHERE id = ?', orderId)
+    if (!order) {
+      send(res, 404, { error: 'Order not found' })
+      return true
+    }
+    const status = String(order.status || '')
+    if (status === 'refunded') {
+      send(res, 200, rowToOrder(order))
+      return true
+    }
+    if (!['paid', 'in_production', 'ready', 'fulfilled'].includes(status)) {
+      send(res, 400, { error: 'Only paid orders can be refunded.' })
+      return true
+    }
+
+    let paymentIntent =
+      typeof order.stripe_payment_intent === 'string' && order.stripe_payment_intent.trim()
+        ? order.stripe_payment_intent.trim()
+        : ''
+    if (!paymentIntent && typeof order.stripe_session_id === 'string' && order.stripe_session_id.trim()) {
+      try {
+        const session = await stripe.checkout.sessions.retrieve(order.stripe_session_id.trim())
+        if (typeof session.payment_intent === 'string') {
+          paymentIntent = session.payment_intent
+        } else if (session.payment_intent && typeof session.payment_intent === 'object') {
+          paymentIntent = session.payment_intent.id
+        }
+      } catch (err) {
+        send(res, 400, {
+          error: err instanceof Error ? err.message : 'Could not load Stripe session for refund.',
+        })
+        return true
+      }
+    }
+    if (!paymentIntent) {
+      send(res, 400, { error: 'No Stripe payment found for this order.' })
+      return true
+    }
+
+    try {
+      await stripe.refunds.create({
+        payment_intent: paymentIntent,
+        reason: 'requested_by_customer',
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Refund failed'
+      // Idempotent: if Stripe already refunded, still mark local order.
+      const already =
+        /already been refunded|has already been refunded|charge.*?refunded/i.test(msg)
+      if (!already) {
+        send(res, 400, { error: msg })
+        return true
+      }
+    }
+
+    const now = new Date().toISOString()
+    await db.run(
+      `UPDATE orders SET
+         status = 'refunded',
+         stripe_payment_intent = COALESCE(NULLIF(stripe_payment_intent, ''), ?),
+         updated_at = ?
+       WHERE id = ?`,
+      paymentIntent,
+      now,
+      orderId,
+    )
+    const updated = await db.get<Record<string, unknown>>('SELECT * FROM orders WHERE id = ?', orderId)
+    const result = rowToOrder(updated!)
+    const items = await db.all<Record<string, unknown>>(
+      `SELECT oi.*, d.name as design_name
+       FROM order_items oi
+       JOIN designs d ON d.id = oi.design_id
+       WHERE oi.order_id = ?
+       ORDER BY oi.sku ASC`,
+      orderId,
+    )
+    result.items = items.map(rowToOrderItem)
+    send(res, 200, result)
+    return true
+  }
+
+  const orderItemGcodeMatch = /^\/api\/admin\/order-items\/([^/]+)\/gcode$/.exec(urlPath)
+  if (orderItemGcodeMatch && method === 'GET') {
+    const itemId = orderItemGcodeMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    try {
+      const { buffer, filename } = await downloadOrderItemGcode(db, itemId)
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'application/octet-stream')
+      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`)
+      res.setHeader('Cache-Control', 'private, no-store')
+      res.end(buffer)
+    } catch (err) {
+      send(res, 400, { error: err instanceof Error ? err.message : 'G-code download failed' })
+    }
     return true
   }
 
@@ -1441,6 +1673,62 @@ export async function handleCatalogApi(
     const m = Number(mStr)
     const rangeStart = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0)).toISOString()
     const rangeEnd = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0)).toISOString()
+    const calendarYear = now.getUTCFullYear()
+    const yearStart = new Date(Date.UTC(calendarYear, 0, 1, 0, 0, 0, 0)).toISOString()
+    const yearEnd = new Date(Date.UTC(calendarYear + 1, 0, 1, 0, 0, 0, 0)).toISOString()
+
+    const sumStripeInRange = async (start: string | null, end: string | null) => {
+      const shopParams: unknown[] = []
+      let shopSql = `SELECT COALESCE(SUM(total_usd), 0) as total FROM orders
+        WHERE paid_at IS NOT NULL
+          AND status IN ('paid', 'in_production', 'ready', 'fulfilled')`
+      if (start) {
+        shopSql += ` AND paid_at >= ?`
+        shopParams.push(start)
+      }
+      if (end) {
+        shopSql += ` AND paid_at < ?`
+        shopParams.push(end)
+      }
+      const customParams: unknown[] = []
+      let customSql = `SELECT COALESCE(SUM(catalog_price_usd), 0) as total FROM custom_requests
+        WHERE paid_at IS NOT NULL AND catalog_price_usd IS NOT NULL`
+      if (start) {
+        customSql += ` AND paid_at >= ?`
+        customParams.push(start)
+      }
+      if (end) {
+        customSql += ` AND paid_at < ?`
+        customParams.push(end)
+      }
+      const shopRow = await db.get<{ total: number | string | null }>(shopSql, ...shopParams)
+      const customRow = await db.get<{ total: number | string | null }>(customSql, ...customParams)
+      return roundMoney((Number(shopRow?.total) || 0) + (Number(customRow?.total) || 0))
+    }
+
+    const sumReimburseInRange = async (
+      start: string | null,
+      end: string | null,
+      userId?: string,
+    ) => {
+      const params: unknown[] = []
+      let sql = `SELECT COALESCE(SUM(amount_usd), 0) as total FROM profit_ledger
+        WHERE entry_type = 'reimburse'`
+      if (userId) {
+        sql += ` AND user_id = ?`
+        params.push(userId)
+      }
+      if (start) {
+        sql += ` AND created_at >= ?`
+        params.push(start)
+      }
+      if (end) {
+        sql += ` AND created_at < ?`
+        params.push(end)
+      }
+      const row = await db.get<{ total: number | string | null }>(sql, ...params)
+      return roundMoney(Number(row?.total) || 0)
+    }
 
     const shopOrders = await db.all<Record<string, unknown>>(
       `SELECT id, customer_name, customer_email, total_usd, status, paid_at, stripe_session_id
@@ -1568,6 +1856,117 @@ export async function handleCatalogApi(
       owedByPerson.reduce((sum, p) => sum + p.totalOwedUsd, 0),
     )
 
+    const [
+      yearStripeUsd,
+      yearOwedToMeUsd,
+      yearReimbursementsUsd,
+      allTimeStripeUsd,
+      allTimeOwedToMeUsd,
+      allTimeReimbursementsUsd,
+    ] = await Promise.all([
+      sumStripeInRange(yearStart, yearEnd),
+      sumReimburseInRange(yearStart, yearEnd, admin.id),
+      sumReimburseInRange(yearStart, yearEnd),
+      sumStripeInRange(null, null),
+      sumReimburseInRange(null, null, admin.id),
+      sumReimburseInRange(null, null),
+    ])
+
+    // ISO timestamps → YYYY-MM via substr works on both SQLite and Postgres.
+    const shopByMonth = await db.all<{ ym: string; total: number | string | null }>(
+      `SELECT substr(paid_at, 1, 7) as ym, COALESCE(SUM(total_usd), 0) as total
+       FROM orders
+       WHERE paid_at IS NOT NULL
+         AND length(paid_at) >= 7
+         AND status IN ('paid', 'in_production', 'ready', 'fulfilled')
+       GROUP BY substr(paid_at, 1, 7)`,
+    )
+    const customByMonth = await db.all<{ ym: string; total: number | string | null }>(
+      `SELECT substr(paid_at, 1, 7) as ym, COALESCE(SUM(catalog_price_usd), 0) as total
+       FROM custom_requests
+       WHERE paid_at IS NOT NULL
+         AND catalog_price_usd IS NOT NULL
+         AND length(paid_at) >= 7
+       GROUP BY substr(paid_at, 1, 7)`,
+    )
+    const reimburseByMonth = await db.all<{ ym: string; total: number | string | null }>(
+      `SELECT substr(created_at, 1, 7) as ym, COALESCE(SUM(amount_usd), 0) as total
+       FROM profit_ledger
+       WHERE entry_type = 'reimburse' AND length(created_at) >= 7
+       GROUP BY substr(created_at, 1, 7)`,
+    )
+    const owedToMeByMonth = await db.all<{ ym: string; total: number | string | null }>(
+      `SELECT substr(created_at, 1, 7) as ym, COALESCE(SUM(amount_usd), 0) as total
+       FROM profit_ledger
+       WHERE entry_type = 'reimburse'
+         AND user_id = ?
+         AND length(created_at) >= 7
+       GROUP BY substr(created_at, 1, 7)`,
+      admin.id,
+    )
+    const mySettlements = await db.all<Record<string, unknown>>(
+      `SELECT year_month, amount_usd, marked_paid_at
+       FROM printer_settlements
+       WHERE user_id = ?`,
+      admin.id,
+    )
+
+    type HistBucket = {
+      month: string
+      stripeUsd: number
+      owedToMeUsd: number
+      reimbursementsUsd: number
+      mySettlement: { amountUsd: number; markedPaidAt: string } | null
+    }
+    const historyMap = new Map<string, HistBucket>()
+    const ensureMonth = (ym: string) => {
+      const key = String(ym || '').trim()
+      if (!/^\d{4}-\d{2}$/.test(key)) return null
+      let bucket = historyMap.get(key)
+      if (!bucket) {
+        bucket = {
+          month: key,
+          stripeUsd: 0,
+          owedToMeUsd: 0,
+          reimbursementsUsd: 0,
+          mySettlement: null,
+        }
+        historyMap.set(key, bucket)
+      }
+      return bucket
+    }
+    for (const row of shopByMonth) {
+      const bucket = ensureMonth(row.ym)
+      if (bucket) bucket.stripeUsd = roundMoney(bucket.stripeUsd + (Number(row.total) || 0))
+    }
+    for (const row of customByMonth) {
+      const bucket = ensureMonth(row.ym)
+      if (bucket) bucket.stripeUsd = roundMoney(bucket.stripeUsd + (Number(row.total) || 0))
+    }
+    for (const row of reimburseByMonth) {
+      const bucket = ensureMonth(row.ym)
+      if (bucket) {
+        bucket.reimbursementsUsd = roundMoney(bucket.reimbursementsUsd + (Number(row.total) || 0))
+      }
+    }
+    for (const row of owedToMeByMonth) {
+      const bucket = ensureMonth(row.ym)
+      if (bucket) bucket.owedToMeUsd = roundMoney(bucket.owedToMeUsd + (Number(row.total) || 0))
+    }
+    for (const row of mySettlements) {
+      const bucket = ensureMonth(String(row.year_month || ''))
+      if (bucket) {
+        bucket.mySettlement = {
+          amountUsd: roundMoney(Number(row.amount_usd) || 0),
+          markedPaidAt: String(row.marked_paid_at ?? ''),
+        }
+      }
+    }
+    // Always include the selected month even if empty so history feels continuous.
+    ensureMonth(yearMonth)
+
+    const monthHistory = [...historyMap.values()].sort((a, b) => b.month.localeCompare(a.month))
+
     send(res, 200, {
       month: yearMonth,
       earnings: {
@@ -1599,6 +1998,20 @@ export async function handleCatalogApi(
       reimbursementsTotalUsd,
       businessKeptUsd: roundMoney(earningsTotalUsd - reimbursementsTotalUsd),
       canSettle: admin.isMainAdmin,
+      totals: {
+        year: {
+          year: calendarYear,
+          stripeUsd: yearStripeUsd,
+          owedToMeUsd: yearOwedToMeUsd,
+          reimbursementsUsd: yearReimbursementsUsd,
+        },
+        allTime: {
+          stripeUsd: allTimeStripeUsd,
+          owedToMeUsd: allTimeOwedToMeUsd,
+          reimbursementsUsd: allTimeReimbursementsUsd,
+        },
+      },
+      monthHistory,
     })
     return true
   }

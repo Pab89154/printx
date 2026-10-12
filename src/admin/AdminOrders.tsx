@@ -4,11 +4,13 @@ import { api } from '../lib/api'
 import type { OrderDto, PrinterDto } from '../types/catalog'
 
 export function AdminOrders() {
-  const { email } = useAdminAuth()
+  const { label } = useAdminAuth()
   const [orders, setOrders] = useState<OrderDto[]>([])
   const [printers, setPrinters] = useState<PrinterDto[]>([])
   const [error, setError] = useState('')
   const [claimPrinter, setClaimPrinter] = useState<Record<string, string>>({})
+  const [refundBusyId, setRefundBusyId] = useState<string | null>(null)
+  const [gcodeBusyId, setGcodeBusyId] = useState<string | null>(null)
 
   async function load() {
     const data = await api.catalog.orders.list()
@@ -29,13 +31,35 @@ export function AdminOrders() {
     void load().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load orders'))
   }, [])
 
+  async function refundOrder(order: OrderDto) {
+    const label = order.customerName || order.customerEmail || 'this customer'
+    if (
+      !window.confirm(
+        `Refund $${order.totalUsd.toFixed(2)} to ${label}? Money returns through Stripe to their original payment method.`,
+      )
+    ) {
+      return
+    }
+    setRefundBusyId(order.id)
+    setError('')
+    try {
+      await api.catalog.orders.refund(order.id)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Refund failed')
+    } finally {
+      setRefundBusyId(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-navy">Orders</h1>
         <p className="mt-1 text-sm text-muted">
           Claim a paid item with your printer. When done, you get the worst-case manufacturing cost
-          (tracked under Money). Leftover profit stays with PrintX in Stripe.
+          (tracked under Money). Leftover profit stays with PrintX in Stripe. Use Refund if the
+          customer cancels or you cannot print.
         </p>
       </div>
 
@@ -81,6 +105,16 @@ export function AdminOrders() {
                 </div>
               )}
             </div>
+            {order.status !== 'refunded' && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-compact text-red-600"
+                disabled={refundBusyId === order.id}
+                onClick={() => void refundOrder(order)}
+              >
+                {refundBusyId === order.id ? 'Refunding…' : 'Refund'}
+              </button>
+            )}
           </div>
 
           <div className="mt-4 space-y-3">
@@ -114,7 +148,7 @@ export function AdminOrders() {
                     )}
                   </div>
 
-                  {item.printStatus === 'unclaimed' && (
+                  {order.status !== 'refunded' && item.printStatus === 'unclaimed' && (
                     <div className="flex flex-wrap items-center gap-2">
                       <select
                         className="rounded-lg border px-2 py-1.5 text-sm"
@@ -139,27 +173,49 @@ export function AdminOrders() {
                             .catch((e) => setError(e instanceof Error ? e.message : 'Claim failed'))
                         }
                       >
-                        Claim as {email?.split('@')[0]}
+                        Claim as {label}
                       </button>
                     </div>
                   )}
 
-                  {item.printStatus === 'claimed' && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-compact"
-                      onClick={() =>
-                        void api.catalog.orders
-                          .complete(item.id)
-                          .then(() => load())
-                          .catch((e) =>
-                            setError(e instanceof Error ? e.message : 'Complete failed'),
-                          )
-                      }
-                    >
-                      Mark printed / settle
-                    </button>
-                  )}
+                  {order.status !== 'refunded' &&
+                    (item.printStatus === 'claimed' || item.printStatus === 'done') && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-compact"
+                          disabled={gcodeBusyId === item.id}
+                          onClick={() => {
+                            setGcodeBusyId(item.id)
+                            setError('')
+                            void api.catalog.orders
+                              .downloadGcode(item.id)
+                              .catch((e) =>
+                                setError(e instanceof Error ? e.message : 'G-code download failed'),
+                              )
+                              .finally(() => setGcodeBusyId(null))
+                          }}
+                        >
+                          {gcodeBusyId === item.id ? 'Preparing…' : 'Download G-code'}
+                        </button>
+                        {item.printStatus === 'claimed' && (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-compact"
+                            onClick={() =>
+                              void api.catalog.orders
+                                .complete(item.id)
+                                .then(() => load())
+                                .catch((e) =>
+                                  setError(e instanceof Error ? e.message : 'Complete failed'),
+                                )
+                            }
+                          >
+                            Mark printed / settle
+                          </button>
+                        )}
+                      </div>
+                    )}
                 </div>
               </div>
             ))}

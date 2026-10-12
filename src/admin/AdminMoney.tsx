@@ -12,6 +12,16 @@ function personLabel(p: { displayName: string | null; email: string }): string {
   return p.displayName?.trim() || p.email.split('@')[0] || p.email || 'Printer'
 }
 
+function formatMonthLabel(ym: string): string {
+  const [y, m] = ym.split('-').map(Number)
+  if (!y || !m) return ym
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleString(undefined, {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+}
+
 export function AdminMoney() {
   const { email } = useAdminAuth()
   const [month, setMonth] = useState(currentUtcMonth)
@@ -63,8 +73,8 @@ export function AdminMoney() {
         <div>
           <h1 className="text-2xl font-bold text-navy">Money</h1>
           <p className="mt-1 text-sm text-muted">
-            Stripe earnings, what PrintX owes you for prints you finished, and everyone&apos;s
-            totals. Profit stays in Stripe — settle costs outside Stripe.
+            Stripe earnings and print costs (no profit share). Each month&apos;s owed resets for the
+            new month; older months stay in history.
           </p>
         </div>
         <label className="text-sm font-semibold text-navy">
@@ -101,7 +111,7 @@ export function AdminMoney() {
                 Owed to me
               </p>
               <p className="mt-2 text-2xl font-bold text-navy">${owedToMeUsd.toFixed(2)}</p>
-              <p className="mt-1 text-xs text-muted">Your worst-case cost · paid outside Stripe</p>
+              <p className="mt-1 text-xs text-muted">This month · worst-case cost</p>
             </div>
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -114,12 +124,109 @@ export function AdminMoney() {
             </div>
           </div>
 
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="rounded-2xl border bg-white p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                This year · Stripe
+              </p>
+              <p className="mt-2 text-2xl font-bold text-navy">
+                ${data.totals.year.stripeUsd.toFixed(2)}
+              </p>
+              <p className="mt-1 text-xs text-muted">{data.totals.year.year} UTC</p>
+            </div>
+            <div className="rounded-2xl border bg-white p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                All time · Stripe
+              </p>
+              <p className="mt-2 text-2xl font-bold text-navy">
+                ${data.totals.allTime.stripeUsd.toFixed(2)}
+              </p>
+              <p className="mt-1 text-xs text-muted">Every paid shop + custom order</p>
+            </div>
+            <div className="rounded-2xl border bg-white p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Owed to me · totals
+              </p>
+              <p className="mt-2 text-2xl font-bold text-navy">
+                ${data.totals.allTime.owedToMeUsd.toFixed(2)}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                Year ${data.totals.year.owedToMeUsd.toFixed(2)} · all time $
+                {data.totals.allTime.owedToMeUsd.toFixed(2)}
+              </p>
+            </div>
+          </div>
+
+          <section className="rounded-2xl border bg-white p-6">
+            <h2 className="text-lg font-bold text-navy">Month history</h2>
+            <p className="mt-1 text-sm text-muted">
+              Tap a month to open its breakdown. Settled months stay listed — they never disappear.
+            </p>
+            {data.monthHistory.length === 0 ? (
+              <p className="mt-4 text-sm text-muted">No months with earnings or owed costs yet.</p>
+            ) : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[36rem] text-left text-sm">
+                  <thead>
+                    <tr className="border-b text-xs uppercase tracking-wide text-muted">
+                      <th className="py-2 pr-3 font-semibold">Month</th>
+                      <th className="py-2 pr-3 font-semibold">Stripe</th>
+                      <th className="py-2 pr-3 font-semibold">Owed to me</th>
+                      <th className="py-2 pr-3 font-semibold">All printers</th>
+                      <th className="py-2 font-semibold">Settled</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.monthHistory.map((row) => {
+                      const selected = row.month === data.month
+                      return (
+                        <tr
+                          key={row.month}
+                          className={`cursor-pointer border-b border-slate-100 transition hover:bg-surface ${
+                            selected ? 'bg-electric/5' : ''
+                          }`}
+                          onClick={() => setMonth(row.month)}
+                        >
+                          <td className="py-3 pr-3 font-medium text-navy">
+                            {formatMonthLabel(row.month)}
+                            {selected ? (
+                              <span className="ml-2 text-[11px] font-semibold uppercase tracking-wide text-electric">
+                                Viewing
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="py-3 pr-3 tabular-nums">${row.stripeUsd.toFixed(2)}</td>
+                          <td className="py-3 pr-3 tabular-nums">${row.owedToMeUsd.toFixed(2)}</td>
+                          <td className="py-3 pr-3 tabular-nums">
+                            ${row.reimbursementsUsd.toFixed(2)}
+                          </td>
+                          <td className="py-3 text-xs">
+                            {row.mySettlement ? (
+                              <span className="text-emerald-700">
+                                ${row.mySettlement.amountUsd.toFixed(2)} ·{' '}
+                                {new Date(row.mySettlement.markedPaidAt).toLocaleDateString()}
+                              </span>
+                            ) : row.owedToMeUsd > 0 ? (
+                              <span className="text-amber-700">Not settled</span>
+                            ) : (
+                              <span className="text-muted">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
           <section className="rounded-2xl border bg-white p-6">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <h2 className="text-lg font-bold text-navy">Owed by person</h2>
                 <p className="mt-1 text-sm text-muted">
-                  Everyone who finished prints this month.
+                  Everyone who finished prints in {formatMonthLabel(data.month)}.
                 </p>
               </div>
               <p className="text-right">
@@ -194,7 +301,9 @@ export function AdminMoney() {
 
           <section className="rounded-2xl border bg-white p-6">
             <h2 className="text-lg font-bold text-navy">Stripe payments</h2>
-            <p className="mt-1 text-sm text-muted">Paid shop checkouts and custom prints this month.</p>
+            <p className="mt-1 text-sm text-muted">
+              Paid shop checkouts and custom prints in {formatMonthLabel(data.month)}.
+            </p>
 
             {paymentLines.length === 0 ? (
               <p className="mt-4 text-sm text-muted">No Stripe payments this month.</p>

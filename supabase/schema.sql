@@ -252,6 +252,17 @@ create table if not exists profit_ledger (
   created_at text not null
 );
 
+create table if not exists printer_settlements (
+  id text primary key,
+  user_id text not null references users(id) on delete cascade,
+  year_month text not null,
+  amount_usd double precision not null default 0,
+  marked_paid_at text not null,
+  marked_by text references users(id) on delete set null,
+  note text not null default '',
+  unique (user_id, year_month)
+);
+
 -- ---------------------------------------------------------------------------
 -- Security (required on Supabase)
 -- The Node server connects with DATABASE_URL (postgres role) and bypasses RLS.
@@ -275,6 +286,7 @@ alter table designs enable row level security;
 alter table orders enable row level security;
 alter table order_items enable row level security;
 alter table profit_ledger enable row level security;
+alter table printer_settlements enable row level security;
 
 revoke all on table users from anon, authenticated;
 revoke all on table sessions from anon, authenticated;
@@ -292,3 +304,4 @@ revoke all on table designs from anon, authenticated;
 revoke all on table orders from anon, authenticated;
 revoke all on table order_items from anon, authenticated;
 revoke all on table profit_ledger from anon, authenticated;
+revoke all on table printer_settlements from anon, authenticated;

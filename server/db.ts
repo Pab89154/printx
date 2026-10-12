@@ -274,6 +274,20 @@ async function migratePrinterSettlements(database: DbApi) {
   `)
 }
 
+/** Persist Cloud Slicer quote/file ids on catalog designs for G-code download. */
+async function migrateDesignQuoteIds(database: DbApi) {
+  for (const [name, def] of [
+    ['quote_ids_json', `TEXT NOT NULL DEFAULT '{}'`],
+    ['file_ids_json', `TEXT NOT NULL DEFAULT '{}'`],
+  ] as const) {
+    try {
+      await database.exec(`ALTER TABLE designs ADD COLUMN ${name} ${def}`)
+    } catch {
+      /* column already exists */
+    }
+  }
+}
+
 /** Ship-to address + flat rate chosen on Stripe Checkout (UPS counter later). */
 async function migrateCheckoutShipping(database: DbApi) {
   const cols: [string, string][] = [
@@ -867,6 +881,7 @@ async function initDb(): Promise<DbApi> {
   await migrateDfwAreaCopy(database)
   await migratePrinterSettlements(database)
   await migrateCheckoutShipping(database)
+  await migrateDesignQuoteIds(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
   const { seedCatalogDefaults } = await import('./catalog.ts')

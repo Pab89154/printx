@@ -164,6 +164,30 @@ export const api = {
           `/api/admin/order-items/${itemId}/complete`,
           { method: 'POST', body: '{}' },
         ),
+      refund: (orderId: string) =>
+        request<import('../types/catalog.ts').OrderDto>(`/api/admin/orders/${orderId}/refund`, {
+          method: 'POST',
+          body: '{}',
+        }),
+      downloadGcode: async (itemId: string) => {
+        const res = await fetch(`/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`, {
+          credentials: 'include',
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error((data as { error?: string }).error ?? 'G-code download failed')
+        }
+        const blob = await res.blob()
+        const disposition = res.headers.get('content-disposition') || ''
+        const match = /filename="?([^"]+)"?/i.exec(disposition)
+        const filename = match?.[1] || `printx-${itemId.slice(0, 8)}.gcode`
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = filename
+        a.click()
+        URL.revokeObjectURL(url)
+      },
     },
     money: {
       get: (month?: string) => {

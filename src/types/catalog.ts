@@ -164,6 +164,23 @@ export type MoneyOwedPersonDto = {
   } | null
 }
 
+export type MoneyPeriodTotalsDto = {
+  stripeUsd: number
+  owedToMeUsd: number
+  reimbursementsUsd: number
+}
+
+export type MoneyMonthHistoryDto = {
+  month: string
+  stripeUsd: number
+  owedToMeUsd: number
+  reimbursementsUsd: number
+  mySettlement: {
+    amountUsd: number
+    markedPaidAt: string
+  } | null
+}
+
 export type MoneySummaryDto = {
   month: string
   earnings: {
@@ -177,6 +194,11 @@ export type MoneySummaryDto = {
   reimbursementsTotalUsd: number
   businessKeptUsd: number
   canSettle: boolean
+  totals: {
+    year: MoneyPeriodTotalsDto & { year: number }
+    allTime: MoneyPeriodTotalsDto
+  }
+  monthHistory: MoneyMonthHistoryDto[]
 }
 
 export type CartLine = {

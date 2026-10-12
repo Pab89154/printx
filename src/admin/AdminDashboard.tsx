@@ -176,6 +176,12 @@ export function AdminDashboard() {
               </p>
             </div>
           </div>
+          {money?.totals && (
+            <p className="mt-5 text-sm text-white/60">
+              Year Stripe ${money.totals.year.stripeUsd.toFixed(2)} · All time $
+              {money.totals.allTime.stripeUsd.toFixed(2)}
+            </p>
+          )}
         </Link>
       )}
 
