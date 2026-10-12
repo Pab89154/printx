@@ -12,6 +12,26 @@ function cents(n: number, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : fallback
 }
 
+/**
+ * Save card on the Stripe Customer after a successful Checkout payment,
+ * and let Checkout show previously saved methods on the next buy.
+ */
+export function stripeAccountSavedPaymentFields(): Pick<
+  Stripe.Checkout.SessionCreateParams,
+  'payment_intent_data' | 'saved_payment_method_options'
+> {
+  return {
+    payment_intent_data: {
+      setup_future_usage: 'off_session',
+    },
+    saved_payment_method_options: {
+      payment_method_save: 'enabled',
+      payment_method_remove: 'enabled',
+      allow_redisplay_filters: ['always', 'limited', 'unspecified'],
+    },
+  }
+}
+
 /** Fields to merge into checkout.sessions.create for shipping + name collection. */
 export function stripeCheckoutShippingFields(): Pick<
   Stripe.Checkout.SessionCreateParams,

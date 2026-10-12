@@ -49,6 +49,7 @@ import {
   parseCheckoutShipping,
   probeCheckoutShippingSources,
   resolveShippingMethodName,
+  stripeAccountSavedPaymentFields,
   stripeCheckoutShippingFields,
   type ShippingSourceProbe,
 } from './stripeShipping.ts'
@@ -878,6 +879,7 @@ export async function handleCatalogApi(
       client_reference_id: orderId,
       metadata: { orderId, customerUserId: account.id },
       ...stripeCheckoutShippingFields(),
+      ...stripeAccountSavedPaymentFields(),
       line_items: lineItems.map((i) => ({
         quantity: i.qty,
         price_data: {
@@ -2144,7 +2146,8 @@ export async function handleCatalogApi(
         name: code,
       })
       const promo = await stripe.promotionCodes.create({
-        coupon: coupon.id,
+        // Stripe API 2025+: coupon is nested under `promotion`, not a top-level field.
+        promotion: { type: 'coupon', coupon: coupon.id },
         code,
         ...(maxRedemptions ? { max_redemptions: maxRedemptions } : {}),
       })

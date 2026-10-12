@@ -67,7 +67,10 @@ import {
   quoteCustomRequest,
 } from './customRequestSlice.ts'
 import { publicOrigin, stripeClient } from './catalogApi.ts'
-import { stripeCheckoutShippingFields } from './stripeShipping.ts'
+import {
+  stripeAccountSavedPaymentFields,
+  stripeCheckoutShippingFields,
+} from './stripeShipping.ts'
 import { roundMoney } from './pricing.ts'
 import {
   CUSTOMER_SESSION_COOKIE,
@@ -705,6 +708,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         client_reference_id: id,
         metadata: { customRequestId: id, customerUserId: account.id },
         ...stripeCheckoutShippingFields(),
+        ...stripeAccountSavedPaymentFields(),
         line_items: [
           {
             quantity: 1,
