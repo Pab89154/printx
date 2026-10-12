@@ -1523,34 +1523,30 @@ export async function handleCatalogApi(
         ? await resolveShippingMethodName(stripe, session, ship.shippingMethod)
         : ship.shippingMethod
       const now = new Date().toISOString()
+      // Avoid `CASE WHEN ? > 0` — Postgres infers integer and rejects shipping_usd like 5.99.
       await db.run(
         `UPDATE orders SET
-           shipping_name = CASE WHEN ? != '' THEN ? ELSE shipping_name END,
-           shipping_line1 = CASE WHEN ? != '' THEN ? ELSE shipping_line1 END,
-           shipping_line2 = CASE WHEN ? != '' THEN ? ELSE shipping_line2 END,
-           shipping_city = CASE WHEN ? != '' THEN ? ELSE shipping_city END,
-           shipping_state = CASE WHEN ? != '' THEN ? ELSE shipping_state END,
-           shipping_postal = CASE WHEN ? != '' THEN ? ELSE shipping_postal END,
-           shipping_country = CASE WHEN ? != '' THEN ? ELSE shipping_country END,
-           shipping_method = CASE WHEN ? != '' THEN ? ELSE shipping_method END,
-           shipping_usd = CASE WHEN ? > 0 THEN ? ELSE shipping_usd END,
+           shipping_name = COALESCE(NULLIF(?, ''), shipping_name),
+           shipping_line1 = COALESCE(NULLIF(?, ''), shipping_line1),
+           shipping_line2 = COALESCE(NULLIF(?, ''), shipping_line2),
+           shipping_city = COALESCE(NULLIF(?, ''), shipping_city),
+           shipping_state = COALESCE(NULLIF(?, ''), shipping_state),
+           shipping_postal = COALESCE(NULLIF(?, ''), shipping_postal),
+           shipping_country = COALESCE(NULLIF(?, ''), shipping_country),
+           shipping_method = COALESCE(NULLIF(?, ''), shipping_method),
+           shipping_usd = CASE
+             WHEN CAST(? AS DOUBLE PRECISION) > 0 THEN CAST(? AS DOUBLE PRECISION)
+             ELSE shipping_usd
+           END,
            updated_at = ?
          WHERE id = ?`,
         ship.shippingName,
-        ship.shippingName,
-        ship.shippingLine1,
         ship.shippingLine1,
         ship.shippingLine2,
-        ship.shippingLine2,
-        ship.shippingCity,
         ship.shippingCity,
         ship.shippingState,
-        ship.shippingState,
-        ship.shippingPostal,
         ship.shippingPostal,
         ship.shippingCountry,
-        ship.shippingCountry,
-        shippingMethod,
         shippingMethod,
         ship.shippingUsd,
         ship.shippingUsd,
