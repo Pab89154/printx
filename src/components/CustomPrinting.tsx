@@ -127,7 +127,12 @@ export function CustomPrinting() {
       if (!url) throw new Error('Checkout URL missing')
       window.location.href = url
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Checkout failed')
+      const msg = err instanceof Error ? err.message : 'Checkout failed'
+      if (/sign in/i.test(msg)) {
+        window.location.href = `/account/sign-in?next=${encodeURIComponent('/#custom')}`
+        return
+      }
+      setError(msg)
       setPayBusy(false)
     }
   }

@@ -31,18 +31,32 @@ function splitSqlStatements(sql: string): string[] {
 
 function isPoolExhaustedError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
-  return msg.includes('EMAXCONNSESSION') || msg.includes('max clients reached') || msg.includes('too many clients')
+  return (
+    msg.includes('EMAXCONNSESSION') ||
+    msg.includes('max clients reached') ||
+    msg.includes('too many clients') ||
+    msg.includes('Cannot use a pool after calling end')
+  )
 }
 
-async function poolQuery(pool: pg.Pool, sql: string, params: unknown[] = [], attempts = 8) {
+async function poolQuery(
+  pool: pg.Pool,
+  generation: number,
+  getGeneration: () => number,
+  sql: string,
+  params: unknown[] = [],
+  attempts = 8,
+) {
   let lastErr: unknown
   for (let i = 0; i < attempts; i++) {
+    if (getGeneration() !== generation) {
+      throw new Error('Database connection was restarted')
+    }
     try {
       return await pool.query(sql, params)
     } catch (err) {
       lastErr = err
       if (!isPoolExhaustedError(err) || i === attempts - 1) throw err
-      // Session pooler saturated (Vite restarts / rolling deploys) — wait for slots.
       const waitMs = Math.min(8_000, 400 * 2 ** i)
       console.warn(
         `[printx] Postgres session pool busy (attempt ${i + 1}/${attempts}); retry in ${waitMs}ms`,
@@ -53,23 +67,23 @@ async function poolQuery(pool: pg.Pool, sql: string, params: unknown[] = [], att
   throw lastErr
 }
 
-function createPostgresApi(pool: pg.Pool): DbApi {
+function createPostgresApi(pool: pg.Pool, generation: number, getGeneration: () => number): DbApi {
   return {
     async exec(sql: string) {
       for (const statement of splitSqlStatements(sql)) {
-        await poolQuery(pool, statement)
+        await poolQuery(pool, generation, getGeneration, statement)
       }
     },
     async run(sql: string, ...params: unknown[]) {
-      const result = await poolQuery(pool, toPgPlaceholders(sql), params)
+      const result = await poolQuery(pool, generation, getGeneration, toPgPlaceholders(sql), params)
       return { changes: result.rowCount ?? 0 }
     },
     async get<T = Record<string, unknown>>(sql: string, ...params: unknown[]) {
-      const result = await poolQuery(pool, toPgPlaceholders(sql), params)
+      const result = await poolQuery(pool, generation, getGeneration, toPgPlaceholders(sql), params)
       return result.rows[0] as T | undefined
     },
     async all<T = Record<string, unknown>>(sql: string, ...params: unknown[]) {
-      const result = await poolQuery(pool, toPgPlaceholders(sql), params)
+      const result = await poolQuery(pool, generation, getGeneration, toPgPlaceholders(sql), params)
       return result.rows as T[]
     },
   }
@@ -102,6 +116,9 @@ function createSqliteApi(database: {
 
 let api: DbApi | null = null
 let pool: pg.Pool | null = null
+let generation = 0
+let openPromise: Promise<DbApi> | null = null
+let closePromise: Promise<void> | null = null
 
 export function usingPostgres(): boolean {
   return Boolean(process.env.DATABASE_URL?.trim())
@@ -109,54 +126,78 @@ export function usingPostgres(): boolean {
 
 /** End Postgres pool (or drop SQLite handle) so Vite restarts don't leak session clients. */
 export async function closeDbApi(): Promise<void> {
-  const ending = pool
-  pool = null
-  api = null
-  if (ending) {
-    try {
-      await ending.end()
-    } catch (err) {
-      console.warn('[printx] pool end failed', err)
+  if (closePromise) return closePromise
+  closePromise = (async () => {
+    if (openPromise) {
+      try {
+        await openPromise
+      } catch {
+        /* ignore failed open */
+      }
     }
-  }
+    const ending = pool
+    generation += 1
+    pool = null
+    api = null
+    openPromise = null
+    if (ending) {
+      try {
+        await ending.end()
+      } catch (err) {
+        console.warn('[printx] pool end failed', err)
+      }
+    }
+  })().finally(() => {
+    closePromise = null
+  })
+  return closePromise
 }
 
 export async function getDbApi(): Promise<DbApi> {
   if (api) return api
+  if (closePromise) await closePromise
+  if (api) return api
+  if (openPromise) return openPromise
 
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+  openPromise = (async () => {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true })
 
-  const databaseUrl = process.env.DATABASE_URL?.trim()
-  if (databaseUrl) {
-    // Supabase session pooler is project-wide (~15). One client per process avoids
-    // EMAXCONNSESSION when Vite, Render, and rolling deploys share the pool.
-    const poolMax = Number(process.env.PRINTX_PG_POOL_MAX || 1)
-    pool = new pg.Pool({
-      connectionString: databaseUrl,
-      ssl: databaseUrl.includes('localhost') ? undefined : { rejectUnauthorized: false },
-      max: Number.isFinite(poolMax) && poolMax > 0 ? Math.min(poolMax, 3) : 1,
-      idleTimeoutMillis: 5_000,
-      connectionTimeoutMillis: 20_000,
-      allowExitOnIdle: true,
-    })
-    pool.on('error', (err) => {
-      console.error('[printx] idle Postgres client error', err)
-    })
-    api = createPostgresApi(pool)
-    console.log(
-      `[printx] Using Supabase/Postgres DATABASE_URL (pool max ${pool.options.max})`,
-    )
-  } else {
-    // Lazy-load node:sqlite so production with DATABASE_URL does not need --experimental-sqlite
-    const { DatabaseSync } = await import('node:sqlite')
-    fs.mkdirSync(DATA_DIR, { recursive: true })
-    const dbPath = path.join(DATA_DIR, 'printx.db')
-    const sqlite = new DatabaseSync(dbPath)
-    sqlite.exec('PRAGMA journal_mode = WAL')
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    api = createSqliteApi(sqlite)
-    console.log(`[printx] Using local SQLite at ${dbPath}`)
-  }
+    const databaseUrl = process.env.DATABASE_URL?.trim()
+    if (databaseUrl) {
+      const poolMax = Number(process.env.PRINTX_PG_POOL_MAX || 1)
+      const nextGen = generation + 1
+      generation = nextGen
+      const created = new pg.Pool({
+        connectionString: databaseUrl,
+        ssl: databaseUrl.includes('localhost') ? undefined : { rejectUnauthorized: false },
+        max: Number.isFinite(poolMax) && poolMax > 0 ? Math.min(poolMax, 3) : 1,
+        idleTimeoutMillis: 5_000,
+        connectionTimeoutMillis: 20_000,
+        allowExitOnIdle: true,
+      })
+      created.on('error', (err) => {
+        console.error('[printx] idle Postgres client error', err)
+      })
+      pool = created
+      api = createPostgresApi(created, nextGen, () => generation)
+      console.log(
+        `[printx] Using Supabase/Postgres DATABASE_URL (pool max ${created.options.max})`,
+      )
+    } else {
+      const { DatabaseSync } = await import('node:sqlite')
+      fs.mkdirSync(DATA_DIR, { recursive: true })
+      const dbPath = path.join(DATA_DIR, 'printx.db')
+      const sqlite = new DatabaseSync(dbPath)
+      sqlite.exec('PRAGMA journal_mode = WAL')
+      sqlite.exec('PRAGMA foreign_keys = ON')
+      api = createSqliteApi(sqlite)
+      console.log(`[printx] Using local SQLite at ${dbPath}`)
+    }
 
-  return api
+    return api!
+  })().finally(() => {
+    openPromise = null
+  })
+
+  return openPromise
 }

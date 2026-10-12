@@ -38,7 +38,6 @@ import {
   setWebsiteSetting,
 } from './db.ts'
 import { rowToDesign } from './catalog.ts'
-import { notifyContactMessage } from './mail.ts'
 import {
   getCachedBootstrap,
   invalidateBootstrapCache,
@@ -48,6 +47,14 @@ import { syncStandLifecycle } from './standLifecycle.ts'
 import type { PermissionKey } from '../shared/permissions.ts'
 import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
+import {
+  deletePushSubscription,
+  notifyAdminUsers,
+  notifyAdminsWithPermission,
+  pushConfigured,
+  upsertPushSubscription,
+  vapidPublicKey,
+} from './pushNotify.ts'
 import {
   objectStorageRequired,
   sendStoredFile,
@@ -62,6 +69,11 @@ import {
 import { publicOrigin, stripeClient } from './catalogApi.ts'
 import { stripeCheckoutShippingFields } from './stripeShipping.ts'
 import { roundMoney } from './pricing.ts'
+import {
+  CUSTOMER_SESSION_COOKIE,
+  getSessionCustomer,
+  setCustomerStripeId,
+} from './auth.ts'
 
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
 const CUSTOM_REQUEST_MODEL_EXT = new Set(['.stl', '.obj', '.3mf'])
@@ -246,9 +258,9 @@ function mailTrashCutoffIso() {
 /** Deliver any messages whose scheduled_at has passed. */
 export async function flushDueScheduledMail(db: Awaited<ReturnType<typeof getDb>>) {
   const now = new Date().toISOString()
-  const due = await db.all<{ id: string }>(
+  const due = await db.all<{ id: string; subject: string }>(
     `
-    SELECT id FROM mail_messages
+    SELECT id, subject FROM mail_messages
     WHERE scheduled_at IS NOT NULL AND scheduled_at <= ?
   `,
     now,
@@ -263,6 +275,19 @@ export async function flushDueScheduledMail(db: Awaited<ReturnType<typeof getDb>
       now,
       row.id,
     )
+    const recipients = await db.all<{ recipient_id: string }>(
+      'SELECT recipient_id FROM mail_recipients WHERE message_id = ?',
+      row.id,
+    )
+    void notifyAdminUsers(
+      db,
+      recipients.map((r) => r.recipient_id),
+      {
+        title: 'New PrintX mail',
+        body: row.subject || '(no subject)',
+        url: '/mail',
+      },
+    ).catch((err) => console.warn('[push] scheduled mail', err))
   }
   return due.length
 }
@@ -433,6 +458,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
+  // Public customer accounts (auth, my orders, refund requests)
+  const { handleCustomerApi } = await import('./customerApi.ts')
+  if (await handleCustomerApi(req, res, urlPath, method)) return true
+
   // Catalog / designs / orders / Stripe (keeps this file smaller)
   const { handleCatalogApi } = await import('./catalogApi.ts')
   if (await handleCatalogApi(req, res, urlPath, method)) return true
@@ -563,11 +592,20 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         now,
       )
       void (async () => {
+        const bg = await getDb()
         try {
-          const bg = await getDb()
           await quoteCustomRequest(bg, id)
         } catch (err) {
           console.error('[custom-request] background quote failed:', err)
+        }
+        try {
+          await notifyAdminsWithPermission(bg, 'requests', {
+            title: 'New custom print estimate',
+            body: 'A customer uploaded a model for pricing.',
+            url: '/requests',
+          })
+        } catch (err) {
+          console.warn('[push] custom estimate', err)
         }
       })()
       send(res, 201, { ok: true, id, sliceStatus: 'slicing' })
@@ -605,6 +643,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 503, { error: 'Stripe is not configured (STRIPE_SECRET_KEY).' })
       return true
     }
+    const cookies = parseCookies(req.headers.cookie)
+    const account = await getSessionCustomer(cookies[CUSTOMER_SESSION_COOKIE] ?? null)
+    if (!account) {
+      send(res, 401, { error: 'Sign in to checkout.' })
+      return true
+    }
     const id = publicCustomCheckoutMatch[1]!
     const row = await db.get<Record<string, unknown>>(
       'SELECT * FROM custom_requests WHERE id = ?',
@@ -627,7 +671,6 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 400, { error: 'Invalid estimate price.' })
       return true
     }
-    const email = sanitizeEmail(String(row.email || ''))
     const origin = publicOrigin(req)
     const successUrl =
       process.env.STRIPE_SUCCESS_URL?.trim() ||
@@ -635,19 +678,36 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const cancelUrl = `${origin}/#custom`
 
     try {
+      let stripeCustomerId = account.stripeCustomerId
+      if (stripeCustomerId) {
+        try {
+          const existing = await stripe.customers.retrieve(stripeCustomerId)
+          if ('deleted' in existing && existing.deleted) stripeCustomerId = null
+        } catch {
+          stripeCustomerId = null
+        }
+      }
+      if (!stripeCustomerId) {
+        const created = await stripe.customers.create({
+          email: account.email || undefined,
+          name: account.displayName || undefined,
+          metadata: { printxUserId: account.id },
+        })
+        stripeCustomerId = created.id
+        await setCustomerStripeId(account.id, created.id)
+      }
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
-        // Stripe Checkout collects name + email + shipping.
-        ...(email ? { customer_email: email } : {}),
+        customer: stripeCustomerId,
+        allow_promotion_codes: true,
         success_url: successUrl,
         cancel_url: cancelUrl,
         client_reference_id: id,
-        metadata: { customRequestId: id },
+        metadata: { customRequestId: id, customerUserId: account.id },
         ...stripeCheckoutShippingFields(),
         line_items: [
           {
             quantity: 1,
-            // Ad-hoc price_data — custom quotes live in Supabase, not Stripe Products.
             price_data: {
               currency: 'usd',
               unit_amount: Math.round(price * 100),
@@ -660,8 +720,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         ],
       })
       await db.run(
-        `UPDATE custom_requests SET stripe_session_id = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE custom_requests SET stripe_session_id = ?, user_id = ?, updated_at = ? WHERE id = ?`,
         session.id,
+        account.id,
         new Date().toISOString(),
         id,
       )
@@ -721,7 +782,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       message,
       new Date().toISOString(),
     )
-    void notifyContactMessage({ name, email, inquiryType, message })
+    // Portal Inbox only — do not send real email to hello@ or the visitor's mail app.
+    void notifyAdminsWithPermission(db, 'messages', {
+      title: 'New contact message',
+      body: `${name || 'Someone'}: ${inquiryType || 'Message'}`,
+      url: '/messages',
+    }).catch((err) => console.warn('[push] contact', err))
     send(res, 201, { ok: true })
     return true
   }
@@ -796,6 +862,66 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       isMainAdmin: user.isMainAdmin,
       permissions: user.permissions,
     })
+    return true
+  }
+
+  if (urlPath === '/api/admin/push/vapid-public-key' && method === 'GET') {
+    const user = await requireAdmin(req)
+    if (!user) {
+      send(res, 401, { error: 'Unauthorized' })
+      return true
+    }
+    const key = vapidPublicKey()
+    if (!key) {
+      send(res, 503, { error: 'Push notifications are not configured (missing VAPID keys).' })
+      return true
+    }
+    send(res, 200, { publicKey: key, configured: pushConfigured() })
+    return true
+  }
+
+  if (urlPath === '/api/admin/push/subscribe' && method === 'POST') {
+    const user = await requireAdmin(req)
+    if (!user) {
+      send(res, 401, { error: 'Unauthorized' })
+      return true
+    }
+    if (!pushConfigured()) {
+      send(res, 503, { error: 'Push notifications are not configured.' })
+      return true
+    }
+    const body = await readJson(req)
+    const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : ''
+    const keys = body.keys && typeof body.keys === 'object' ? (body.keys as Record<string, unknown>) : {}
+    const p256dh = typeof keys.p256dh === 'string' ? keys.p256dh.trim() : ''
+    const auth = typeof keys.auth === 'string' ? keys.auth.trim() : ''
+    const userAgent =
+      typeof body.userAgent === 'string'
+        ? body.userAgent.slice(0, 300)
+        : String(req.headers['user-agent'] || '').slice(0, 300)
+    if (!endpoint || !p256dh || !auth) {
+      send(res, 400, { error: 'Invalid push subscription.' })
+      return true
+    }
+    await upsertPushSubscription(db, user.id, { endpoint, p256dh, auth, userAgent })
+    send(res, 200, { ok: true })
+    return true
+  }
+
+  if (urlPath === '/api/admin/push/subscribe' && method === 'DELETE') {
+    const user = await requireAdmin(req)
+    if (!user) {
+      send(res, 401, { error: 'Unauthorized' })
+      return true
+    }
+    const body = await readJson(req)
+    const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : ''
+    if (!endpoint) {
+      send(res, 400, { error: 'endpoint required' })
+      return true
+    }
+    await deletePushSubscription(db, user.id, endpoint)
+    send(res, 200, { ok: true })
     return true
   }
 
@@ -1142,6 +1268,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
           shipping_country: mapped.shipping_country,
           shipping_method: mapped.shipping_method,
           shipping_usd: mapped.shipping_usd,
+          tracking_number: mapped.tracking_number,
+          tracking_carrier: mapped.tracking_carrier,
+          tracking_url: mapped.tracking_url,
+          shipped_at: mapped.shipped_at,
+          paid_at: mapped.paid_at,
           created_at: mapped.created_at,
           updated_at: mapped.updated_at,
         }
@@ -1471,6 +1602,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         null,
       )
     }
+    if (!scheduledAt) {
+      void notifyAdminUsers(
+        db,
+        validRecipients.map((r) => r.id),
+        {
+          title: 'New PrintX mail',
+          body: subject || '(no subject)',
+          url: '/mail',
+        },
+      ).catch((err) => console.warn('[push] mail', err))
+    }
     const created = await loadMailMessage(db, messageId, admin.id, false)
     send(res, 201, created)
     return true
@@ -1597,6 +1739,22 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         messageId,
         admin.id,
       )
+      const recipients = await db.all<{ recipient_id: string; subject: string }>(
+        `SELECT r.recipient_id, m.subject
+         FROM mail_recipients r
+         JOIN mail_messages m ON m.id = r.message_id
+         WHERE r.message_id = ?`,
+        messageId,
+      )
+      void notifyAdminUsers(
+        db,
+        recipients.map((r) => r.recipient_id),
+        {
+          title: 'New PrintX mail',
+          body: recipients[0]?.subject || '(no subject)',
+          url: '/mail',
+        },
+      ).catch((err) => console.warn('[push] send-now', err))
       const full = await loadMailMessage(db, messageId, admin.id, false)
       if (!full) {
         send(res, 404, { error: 'Message not found' })

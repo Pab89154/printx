@@ -24,7 +24,10 @@ const apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
   }
 }
 
-async function attachApi(server: { middlewares: Connect.Server; httpServer?: { once: (e: string, fn: () => void) => void } | null }) {
+async function attachApi(server: {
+  middlewares: Connect.Server
+  httpServer?: { once: (e: string, fn: () => void) => void } | null
+}) {
   await ensureDbReady()
   logObjectStorageStatus()
   await ensureModelBucket()
@@ -40,15 +43,15 @@ export function printxApiPlugin(): Plugin {
     name: 'printx-api',
     async configureServer(server) {
       await attachApi(server)
-      // Called when Vite restarts the server (config/HMR) — close the old pool first.
-      return () => {
-        void closeDb()
+      // Vite HMR restart — must finish closing before the next server opens a pool.
+      return async () => {
+        await closeDb()
       }
     },
     async configurePreviewServer(server) {
       await attachApi(server)
-      return () => {
-        void closeDb()
+      return async () => {
+        await closeDb()
       }
     },
   }

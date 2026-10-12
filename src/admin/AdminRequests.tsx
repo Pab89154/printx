@@ -16,6 +16,7 @@ export function AdminRequests() {
   const [requests, setRequests] = useState<CustomRequest[]>([])
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [shipTracking, setShipTracking] = useState<Record<string, string>>({})
 
   async function load() {
     setRequests(await api.admin.requests.list())
@@ -134,8 +135,54 @@ export function AdminRequests() {
                         {req.shipping_usd > 0 ? ` · $${req.shipping_usd.toFixed(2)}` : ''}
                       </p>
                     )}
+                    {req.tracking_number || req.shipped_at ? (
+                      <p className="mt-1 font-medium text-electric">
+                        Shipped
+                        {req.tracking_number
+                          ? ` · ${req.tracking_carrier || 'UPS'} ${req.tracking_number}`
+                          : ''}
+                      </p>
+                    ) : null}
                   </div>
                 )}
+                {req.paid_at && !req.shipped_at && !req.tracking_number && (
+                    <div className="mt-3 flex flex-wrap items-end gap-2">
+                      <label className="text-xs text-muted">
+                        UPS tracking
+                        <input
+                          className="mt-1 block rounded-lg border px-2 py-1.5 text-sm text-navy"
+                          placeholder="1Z…"
+                          value={shipTracking[req.id] || ''}
+                          onChange={(e) =>
+                            setShipTracking((m) => ({ ...m, [req.id]: e.target.value }))
+                          }
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-compact"
+                        disabled={busyId === req.id}
+                        onClick={() => {
+                          const trackingNumber = (shipTracking[req.id] || '').trim()
+                          if (!trackingNumber) {
+                            setError('Enter a UPS tracking number.')
+                            return
+                          }
+                          setBusyId(req.id)
+                          setError('')
+                          void api.catalog.orders
+                            .shipCustom(req.id, { trackingNumber, carrier: 'UPS' })
+                            .then(() => load())
+                            .catch((e) =>
+                              setError(e instanceof Error ? e.message : 'Ship update failed'),
+                            )
+                            .finally(() => setBusyId(null))
+                        }}
+                      >
+                        Mark shipped
+                      </button>
+                    </div>
+                  )}
                 {(req.grams_pablo_p1s != null ||
                   req.grams_court_ender != null ||
                   req.grams_josh_kobra != null) && (

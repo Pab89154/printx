@@ -1,16 +1,23 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useCart } from '../context/CartContext'
+import { useCustomerAuth } from '../context/CustomerAuthContext'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 
 export function Cart() {
   const { lines, setQty, remove, subtotal, clear } = useCart()
+  const { customer, loading } = useCustomerAuth()
+  const navigate = useNavigate()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
   async function checkout() {
+    if (!customer) {
+      navigate('/account/sign-in?next=/cart')
+      return
+    }
     setBusy(true)
     setError('')
     try {
@@ -91,7 +98,9 @@ export function Cart() {
             </p>
 
             <p className="mt-4 text-sm text-muted">
-              Name and email are collected securely on the Checkout page.
+              {customer
+                ? 'Shipping address and payment are collected securely on Checkout. Promo codes work there too.'
+                : 'Sign in to checkout so you can track your order and shipping.'}
             </p>
 
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
@@ -99,10 +108,14 @@ export function Cart() {
             <button
               type="button"
               className="btn btn-primary mt-6 w-full"
-              disabled={busy}
+              disabled={busy || loading}
               onClick={() => void checkout()}
             >
-              {busy ? 'Redirecting…' : 'Checkout'}
+              {busy
+                ? 'Redirecting…'
+                : customer
+                  ? 'Checkout'
+                  : 'Sign in to checkout'}
             </button>
           </>
         )}

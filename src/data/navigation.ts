@@ -19,5 +19,5 @@ export const FOOTER_LINKS = [
 export const SOCIAL_LINKS = [
   { label: 'Instagram', href: 'https://instagram.com' },
   { label: 'WhatsApp', href: '' },
-  { label: 'Email', href: 'mailto:hello@printx.pw?subject=Hello%20PrintX' },
+  { label: 'Message', href: '#contact' },
 ] as const

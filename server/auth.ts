@@ -13,6 +13,7 @@ import {
 } from '../shared/permissions.ts'
 
 const SESSION_COOKIE = 'printx_session'
+const CUSTOMER_SESSION_COOKIE = 'printx_customer_session'
 const SESSION_DAYS = 7
 
 function hashToken(token: string): string {
@@ -114,7 +115,7 @@ export async function getSessionUser(token: string | null): Promise<SessionAdmin
       SELECT u.id, u.role, u.email, u.display_name, u.permissions, s.expires_at
       FROM sessions s
       JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = ?
+      WHERE s.token_hash = ? AND u.role = 'admin'
     `,
       tokenHash,
     )
@@ -125,7 +126,7 @@ export async function getSessionUser(token: string | null): Promise<SessionAdmin
       SELECT u.id, u.role, u.email, s.expires_at
       FROM sessions s
       JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = ?
+      WHERE s.token_hash = ? AND u.role = 'admin'
     `,
       tokenHash,
     )
@@ -137,6 +138,146 @@ export async function getSessionUser(token: string | null): Promise<SessionAdmin
     return null
   }
   return toSessionAdmin(row)
+}
+
+export type SessionCustomer = {
+  id: string
+  email: string
+  displayName: string | null
+  stripeCustomerId: string | null
+}
+
+export async function getSessionCustomer(token: string | null): Promise<SessionCustomer | null> {
+  if (!token) return null
+  const db = await getDb()
+  const tokenHash = hashToken(token)
+  let row: {
+    id: string
+    email: string
+    display_name?: string | null
+    stripe_customer_id?: string | null
+    expires_at: string
+  } | null = null
+  try {
+    row = await db.get(
+      `
+      SELECT u.id, u.email, u.display_name, u.stripe_customer_id, s.expires_at
+      FROM sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ? AND u.role = 'customer'
+    `,
+      tokenHash,
+    )
+  } catch {
+    row = await db.get(
+      `
+      SELECT u.id, u.email, u.display_name, s.expires_at
+      FROM sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ? AND u.role = 'customer'
+    `,
+      tokenHash,
+    )
+  }
+  if (!row) return null
+  if (new Date(row.expires_at) < new Date()) {
+    await db.run('DELETE FROM sessions WHERE token_hash = ?', tokenHash)
+    return null
+  }
+  return {
+    id: row.id,
+    email: row.email ?? '',
+    displayName: cleanDisplayName(row.display_name),
+    stripeCustomerId:
+      typeof row.stripe_customer_id === 'string' && row.stripe_customer_id.trim()
+        ? row.stripe_customer_id.trim()
+        : null,
+  }
+}
+
+export async function registerCustomer(
+  name: unknown,
+  email: unknown,
+  password: unknown,
+): Promise<{ ok: true; customer: SessionCustomer } | { ok: false; error: string }> {
+  const displayName = sanitizeText(String(name ?? ''), 80)
+  if (!displayName) return { ok: false, error: 'Name is required.' }
+  const normalized = normalizeLoginEmail(email)
+  if (!normalized) return { ok: false, error: 'Enter a valid email address.' }
+  const pwd = typeof password === 'string' ? password : ''
+  if (pwd.length < 8) return { ok: false, error: 'Password must be at least 8 characters.' }
+
+  const db = await getDb()
+  const taken = await db.get<{ id: string }>(
+    'SELECT id FROM users WHERE LOWER(email) = ?',
+    normalized,
+  )
+  if (taken) return { ok: false, error: 'That email is already in use.' }
+
+  const id = randomUUID()
+  const hash = bcrypt.hashSync(pwd, 12)
+  const now = new Date().toISOString()
+  await db.run(
+    `INSERT INTO users (id, email, password_hash, role, email_verified, permissions, display_name, created_at)
+     VALUES (?, ?, ?, 'customer', 0, NULL, ?, ?)`,
+    id,
+    normalized,
+    hash,
+    displayName,
+    now,
+  )
+  return {
+    ok: true,
+    customer: { id, email: normalized, displayName, stripeCustomerId: null },
+  }
+}
+
+export async function verifyCustomerLogin(
+  email: string,
+  password: string,
+): Promise<SessionCustomer | null> {
+  const normalized = normalizeLoginEmail(email)
+  if (!normalized) return null
+  const db = await getDb()
+  let user: {
+    id: string
+    password_hash: string
+    email: string
+    display_name?: string | null
+    stripe_customer_id?: string | null
+  } | null = null
+  try {
+    user = await db.get(
+      `SELECT id, password_hash, email, display_name, stripe_customer_id
+       FROM users WHERE role = 'customer' AND LOWER(email) = ?`,
+      normalized,
+    )
+  } catch {
+    user = await db.get(
+      `SELECT id, password_hash, email, display_name
+       FROM users WHERE role = 'customer' AND LOWER(email) = ?`,
+      normalized,
+    )
+  }
+  if (!user || !bcrypt.compareSync(password, user.password_hash)) return null
+  return {
+    id: user.id,
+    email: user.email ?? '',
+    displayName: cleanDisplayName(user.display_name),
+    stripeCustomerId:
+      typeof user.stripe_customer_id === 'string' && user.stripe_customer_id.trim()
+        ? user.stripe_customer_id.trim()
+        : null,
+  }
+}
+
+export async function setCustomerStripeId(userId: string, stripeCustomerId: string): Promise<void> {
+  const db = await getDb()
+  try {
+    await db.run('UPDATE users SET stripe_customer_id = ? WHERE id = ? AND role = ?', stripeCustomerId, userId, 'customer')
+  } catch {
+    /* column may be missing on very old DBs */
+  }
 }
 
 export async function verifyAdminLogin(
@@ -572,7 +713,36 @@ export function clearSessionCookieHeader(secure = false, domain?: string): strin
   return parts.join('; ')
 }
 
-export { SESSION_COOKIE }
+/** Host-only customer cookie (public site) — not shared with portal. */
+export function customerSessionCookieHeader(
+  token: string,
+  options?: { maxAgeSeconds?: number; secure?: boolean },
+): string {
+  const maxAgeSeconds = options?.maxAgeSeconds ?? SESSION_DAYS * 86400
+  const parts = [
+    `${CUSTOMER_SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${maxAgeSeconds}`,
+  ]
+  if (options?.secure) parts.push('Secure')
+  return parts.join('; ')
+}
+
+export function clearCustomerSessionCookieHeader(secure = false): string {
+  const parts = [
+    `${CUSTOMER_SESSION_COOKIE}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ]
+  if (secure) parts.push('Secure')
+  return parts.join('; ')
+}
+
+export { SESSION_COOKIE, CUSTOMER_SESSION_COOKIE }
 
 export function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a)

@@ -27,7 +27,7 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
               eager={false}
               height="100%"
               colorHex={previewColor?.hex}
-              className="absolute inset-0 [&_>div]:h-full [&_>div]:min-h-0 [&_>div]:rounded-none [&_>div]:border-0"
+              className="absolute inset-0 [&_>div]:h-full [&_>div]:min-h-0 [&_>div]:rounded-none [&_>div]:border-0 [&_>div]:border-transparent"
             />
           ) : (
             <div className="flex h-full min-h-[12rem] items-center justify-center text-sm text-muted">

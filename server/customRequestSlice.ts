@@ -138,6 +138,11 @@ export function mapCustomRequestRow(row: Record<string, unknown>) {
     shipping_country: String(row.shipping_country || ''),
     shipping_method: String(row.shipping_method || ''),
     shipping_usd: Number(row.shipping_usd) || 0,
+    tracking_number: String(row.tracking_number || ''),
+    tracking_carrier: String(row.tracking_carrier || ''),
+    tracking_url: String(row.tracking_url || ''),
+    shipped_at: (row.shipped_at as string | null) ?? null,
+    paid_at: (row.paid_at as string | null) ?? null,
     created_at: String(row.created_at || ''),
     updated_at: String(row.updated_at || ''),
   }

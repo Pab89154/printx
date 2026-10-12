@@ -6,13 +6,19 @@ import formidable from 'formidable'
 import Stripe from 'stripe'
 import {
   adminCan,
+  CUSTOMER_SESSION_COOKIE,
+  getSessionCustomer,
   getSessionUser,
   parseCookies,
   sanitizeEmail,
   sanitizeText,
+  setCustomerStripeId,
   SESSION_COOKIE,
   type SessionAdmin,
+  type SessionCustomer,
 } from './auth.ts'
+import { upsTrackUrl } from './shippingUrls.ts'
+import { notifyAdminsWithPermission } from './pushNotify.ts'
 import { getDb, getUploadsDir } from './db.ts'
 import { invalidateBootstrapCache } from './bootstrapCache.ts'
 import {
@@ -523,6 +529,33 @@ async function requireAdmin(req: IncomingMessage): Promise<SessionAdmin | null> 
   return getSessionUser(cookies[SESSION_COOKIE] ?? null)
 }
 
+async function requireCustomer(req: IncomingMessage): Promise<SessionCustomer | null> {
+  const cookies = parseCookies(req.headers.cookie)
+  return getSessionCustomer(cookies[CUSTOMER_SESSION_COOKIE] ?? null)
+}
+
+async function ensureStripeCustomer(
+  stripe: Stripe,
+  customer: SessionCustomer,
+): Promise<string> {
+  if (customer.stripeCustomerId) {
+    try {
+      const existing = await stripe.customers.retrieve(customer.stripeCustomerId)
+      if (!('deleted' in existing && existing.deleted)) return customer.stripeCustomerId
+    } catch {
+      /* recreate below */
+    }
+  }
+  const created = await stripe.customers.create({
+    email: customer.email || undefined,
+    name: customer.displayName || undefined,
+    metadata: { printxUserId: customer.id },
+  })
+  await setCustomerStripeId(customer.id, created.id)
+  customer.stripeCustomerId = created.id
+  return created.id
+}
+
 export function stripeClient(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY?.trim()
   if (!key) return null
@@ -729,10 +762,14 @@ export async function handleCatalogApi(
       send(res, 503, { error: 'Stripe is not configured (STRIPE_SECRET_KEY).' })
       return true
     }
+    const account = await requireCustomer(req)
+    if (!account) {
+      send(res, 401, { error: 'Sign in to checkout.' })
+      return true
+    }
     const body = await readJson(req)
-    // Name/email are collected by Stripe Checkout — optional if the client still sends them.
-    const customerName = sanitizeText(String(body.customerName ?? ''), 120)
-    const customerEmail = sanitizeEmail(String(body.customerEmail ?? ''))
+    const customerName = account.displayName || sanitizeText(String(body.customerName ?? ''), 120)
+    const customerEmail = account.email || sanitizeEmail(String(body.customerEmail ?? ''))
     const itemsIn = Array.isArray(body.items) ? body.items : []
     if (itemsIn.length === 0) {
       send(res, 400, { error: 'At least one item is required.' })
@@ -794,8 +831,8 @@ export async function handleCatalogApi(
     await db.run(
       `INSERT INTO orders (
         id, customer_name, customer_email, status, stripe_session_id, stripe_payment_intent,
-        subtotal_usd, total_usd, currency, created_at, updated_at, paid_at
-      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 'usd', ?, ?, NULL)`,
+        subtotal_usd, total_usd, currency, created_at, updated_at, paid_at, user_id
+      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 'usd', ?, ?, NULL, ?)`,
       orderId,
       customerName || 'Customer',
       customerEmail || '',
@@ -804,6 +841,7 @@ export async function handleCatalogApi(
       subtotal,
       now,
       now,
+      account.id,
     )
     for (const item of lineItems) {
       await db.run(
@@ -830,16 +868,16 @@ export async function handleCatalogApi(
       `${origin}/order/success?session_id={CHECKOUT_SESSION_ID}`
     const cancelUrl = process.env.STRIPE_CANCEL_URL?.trim() || `${origin}/cart`
 
+    const stripeCustomerId = await ensureStripeCustomer(stripe, account)
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      // Let Stripe collect name/email on the Checkout page.
-      ...(customerEmail ? { customer_email: customerEmail } : {}),
+      customer: stripeCustomerId,
+      allow_promotion_codes: true,
       success_url: successUrl,
       cancel_url: cancelUrl,
       client_reference_id: orderId,
-      metadata: { orderId },
+      metadata: { orderId, customerUserId: account.id },
       ...stripeCheckoutShippingFields(),
-      // Ad-hoc price_data only — catalog lives in Supabase, never Stripe Products.
       line_items: lineItems.map((i) => ({
         quantity: i.qty,
         price_data: {
@@ -912,6 +950,7 @@ export async function handleCatalogApi(
       )
       const stripeEmail = ship.customerEmail
       const stripeName = ship.customerName
+      const customerUserId = session.metadata?.customerUserId?.trim() || ''
       const customRequestId = session.metadata?.customRequestId?.trim()
       if (customRequestId) {
         await db.run(
@@ -930,7 +969,8 @@ export async function handleCatalogApi(
             shipping_usd = ?,
             stripe_session_id = ?,
             paid_at = ?,
-            updated_at = ?
+            updated_at = ?,
+            user_id = COALESCE(user_id, NULLIF(?, ''))
            WHERE id = ? AND status = 'awaiting_payment'`,
           stripeName,
           stripeName,
@@ -948,8 +988,14 @@ export async function handleCatalogApi(
           session.id,
           now,
           now,
+          customerUserId,
           customRequestId,
         )
+        void notifyAdminsWithPermission(db, 'requests', {
+          title: 'Custom print paid',
+          body: `${stripeName || stripeEmail || 'Customer'} paid for a custom print`,
+          url: '/requests',
+        }).catch((err) => console.warn('[push] custom paid', err))
       } else {
         const orderId = session.metadata?.orderId || session.client_reference_id
         if (orderId) {
@@ -971,7 +1017,8 @@ export async function handleCatalogApi(
               stripe_session_id = COALESCE(stripe_session_id, ?),
               stripe_payment_intent = ?,
               paid_at = ?,
-              updated_at = ?
+              updated_at = ?,
+              user_id = COALESCE(user_id, NULLIF(?, ''))
              WHERE id = ? AND status = 'pending_payment'`,
             stripeName,
             stripeName,
@@ -991,8 +1038,14 @@ export async function handleCatalogApi(
             paymentIntent,
             now,
             now,
+            customerUserId,
             orderId,
           )
+          void notifyAdminsWithPermission(db, 'orders', {
+            title: 'New shop order',
+            body: `${stripeName || stripeEmail || 'Customer'} placed a paid order`,
+            url: '/orders',
+          }).catch((err) => console.warn('[push] order paid', err))
         }
       }
     }
@@ -1567,21 +1620,24 @@ export async function handleCatalogApi(
     }
   }
 
-  if (urlPath === '/api/admin/orders' && method === 'GET') {
-    const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
-      send(res, 403, { error: 'Forbidden' })
-      return true
-    }
+  async function loadAdminOrdersPayload(opts?: { backfillMissingShipping?: boolean }) {
     const rows = await db.all<Record<string, unknown>>(
       `SELECT * FROM orders WHERE status IN ('paid', 'in_production', 'ready', 'fulfilled', 'refunded')
        ORDER BY COALESCE(paid_at, created_at) DESC LIMIT 200`,
     )
     const orders = []
     for (const raw of rows) {
-      const { row, probe } = await backfillOrderShippingFromStripe(raw)
+      let row = raw
+      let probe: ShippingSourceProbe | null = null
+      const missingStreet = !String(raw.shipping_line1 || '').trim()
+      if (opts?.backfillMissingShipping && missingStreet) {
+        const result = await backfillOrderShippingFromStripe(raw)
+        row = result.row
+        probe = result.probe
+      }
       const order = rowToOrder(row) as ReturnType<typeof rowToOrder> & {
         shippingStripeProbe?: ShippingSourceProbe
+        pendingRefundRequest?: { id: string; reason: string; createdAt: string } | null
       }
       const items = await db.all<Record<string, unknown>>(
         `SELECT oi.*, d.name as design_name
@@ -1595,10 +1651,45 @@ export async function handleCatalogApi(
       if (!order.shippingLine1 && !order.shippingCity && !order.shippingPostal && probe) {
         order.shippingStripeProbe = probe
       }
+      try {
+        const pendingRefund = await db.get<{ id: string; reason: string; created_at: string }>(
+          `SELECT id, reason, created_at FROM refund_requests
+           WHERE order_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1`,
+          order.id,
+        )
+        order.pendingRefundRequest = pendingRefund
+          ? {
+              id: pendingRefund.id,
+              reason: pendingRefund.reason,
+              createdAt: pendingRefund.created_at,
+            }
+          : null
+      } catch {
+        order.pendingRefundRequest = null
+      }
       orders.push(order)
     }
     const printers = await listPrinters(db)
-    send(res, 200, { orders, printers })
+    return { orders, printers }
+  }
+
+  if (urlPath === '/api/admin/orders' && method === 'GET') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    send(res, 200, await loadAdminOrdersPayload())
+    return true
+  }
+
+  if (urlPath === '/api/admin/orders/refresh-shipping' && method === 'POST') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    send(res, 200, await loadAdminOrdersPayload({ backfillMissingShipping: true }))
     return true
   }
 
@@ -1776,6 +1867,410 @@ export async function handleCatalogApi(
     return true
   }
 
+  const orderShipMatch = /^\/api\/admin\/orders\/([^/]+)\/ship$/.exec(urlPath)
+  if (orderShipMatch && method === 'POST') {
+    const orderId = orderShipMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const body = await readJson(req)
+    const trackingNumber = sanitizeText(String(body.trackingNumber ?? ''), 80)
+    if (!trackingNumber) {
+      send(res, 400, { error: 'Tracking number is required.' })
+      return true
+    }
+    const carrier = sanitizeText(String(body.carrier ?? 'UPS'), 40) || 'UPS'
+    const trackingUrl =
+      sanitizeText(String(body.trackingUrl ?? ''), 500) ||
+      (carrier.toUpperCase() === 'UPS' ? upsTrackUrl(trackingNumber) : '')
+    const order = await db.get<{ id: string; status: string }>(
+      'SELECT id, status FROM orders WHERE id = ?',
+      orderId,
+    )
+    if (!order) {
+      send(res, 404, { error: 'Order not found' })
+      return true
+    }
+    if (!['paid', 'in_production', 'ready', 'fulfilled'].includes(order.status)) {
+      send(res, 400, { error: 'Only paid orders can be marked shipped.' })
+      return true
+    }
+    const now = new Date().toISOString()
+    await db.run(
+      `UPDATE orders SET
+         tracking_number = ?,
+         tracking_carrier = ?,
+         tracking_url = ?,
+         shipped_at = ?,
+         status = 'fulfilled',
+         updated_at = ?
+       WHERE id = ?`,
+      trackingNumber,
+      carrier,
+      trackingUrl,
+      now,
+      now,
+      orderId,
+    )
+    const updated = await db.get<Record<string, unknown>>('SELECT * FROM orders WHERE id = ?', orderId)
+    const result = rowToOrder(updated!)
+    const items = await db.all<Record<string, unknown>>(
+      `SELECT oi.*, d.name as design_name FROM order_items oi
+       JOIN designs d ON d.id = oi.design_id WHERE oi.order_id = ? ORDER BY oi.sku ASC`,
+      orderId,
+    )
+    result.items = items.map(rowToOrderItem)
+    send(res, 200, {
+      ...result,
+      trackingNumber,
+      trackingCarrier: carrier,
+      trackingUrl,
+      shippedAt: now,
+    })
+    return true
+  }
+
+  if (urlPath === '/api/admin/refund-requests' && method === 'GET') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const rows = await db.all<Record<string, unknown>>(
+      `SELECT r.*, u.email as customer_email, u.display_name as customer_name,
+              o.status as order_status, o.total_usd as order_total,
+              c.status as custom_status, c.catalog_price_usd as custom_total
+       FROM refund_requests r
+       JOIN users u ON u.id = r.user_id
+       LEFT JOIN orders o ON o.id = r.order_id
+       LEFT JOIN custom_requests c ON c.id = r.custom_request_id
+       WHERE r.status = 'pending'
+       ORDER BY r.created_at ASC
+       LIMIT 100`,
+    )
+    send(res, 200, {
+      requests: rows.map((r) => ({
+        id: String(r.id),
+        orderId: r.order_id != null ? String(r.order_id) : null,
+        customRequestId: r.custom_request_id != null ? String(r.custom_request_id) : null,
+        userId: String(r.user_id),
+        customerEmail: String(r.customer_email || ''),
+        customerName: String(r.customer_name || ''),
+        reason: String(r.reason || ''),
+        status: String(r.status || ''),
+        createdAt: String(r.created_at || ''),
+        orderStatus: r.order_status != null ? String(r.order_status) : null,
+        amountUsd: roundMoney(
+          Number(r.order_total ?? r.custom_total) || 0,
+        ),
+      })),
+    })
+    return true
+  }
+
+  const refundReqAction = /^\/api\/admin\/refund-requests\/([^/]+)\/(approve|decline)$/.exec(urlPath)
+  if (refundReqAction && method === 'POST') {
+    const reqId = refundReqAction[1]!
+    const action = refundReqAction[2]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const body = await readJson(req)
+    const adminNote = sanitizeText(String(body.adminNote ?? ''), 1000)
+    const row = await db.get<Record<string, unknown>>(
+      'SELECT * FROM refund_requests WHERE id = ?',
+      reqId,
+    )
+    if (!row) {
+      send(res, 404, { error: 'Refund request not found' })
+      return true
+    }
+    if (String(row.status) !== 'pending') {
+      send(res, 400, { error: 'This request was already reviewed.' })
+      return true
+    }
+    const now = new Date().toISOString()
+    if (action === 'decline') {
+      await db.run(
+        `UPDATE refund_requests SET status = 'declined', admin_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?`,
+        adminNote || 'Declined',
+        admin.id,
+        now,
+        reqId,
+      )
+      send(res, 200, { ok: true, status: 'declined' })
+      return true
+    }
+
+    // Approve: run Stripe refund for shop order (custom refunds mark status only if no PI).
+    const orderId = row.order_id != null ? String(row.order_id) : ''
+    const customId = row.custom_request_id != null ? String(row.custom_request_id) : ''
+    if (orderId) {
+      // Reuse refund endpoint logic via internal fetch of order + stripe
+      const stripe = stripeClient()
+      if (!stripe) {
+        send(res, 503, { error: 'Stripe is not configured.' })
+        return true
+      }
+      const order = await db.get<Record<string, unknown>>('SELECT * FROM orders WHERE id = ?', orderId)
+      if (!order) {
+        send(res, 404, { error: 'Order not found' })
+        return true
+      }
+      if (String(order.status) !== 'refunded') {
+        let paymentIntent =
+          typeof order.stripe_payment_intent === 'string' ? order.stripe_payment_intent.trim() : ''
+        const sessionId =
+          typeof order.stripe_session_id === 'string' ? order.stripe_session_id.trim() : ''
+        if (sessionId) {
+          try {
+            const session = await stripe.checkout.sessions.retrieve(sessionId)
+            if (typeof session.payment_intent === 'string') paymentIntent = session.payment_intent
+          } catch {
+            /* use stored */
+          }
+        }
+        if (!paymentIntent) {
+          send(res, 400, { error: 'No Stripe payment found for this order.' })
+          return true
+        }
+        try {
+          await stripe.refunds.create({
+            payment_intent: paymentIntent,
+            reason: 'requested_by_customer',
+          })
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          if (!/already been refunded|charge_already_refunded/i.test(msg)) {
+            send(res, 400, { error: msg || 'Refund failed' })
+            return true
+          }
+        }
+        await db.run(
+          `UPDATE orders SET status = 'refunded', stripe_payment_intent = ?, updated_at = ? WHERE id = ?`,
+          paymentIntent,
+          now,
+          orderId,
+        )
+      }
+    } else if (customId) {
+      await db.run(
+        `UPDATE custom_requests SET status = 'refunded', updated_at = ? WHERE id = ?`,
+        now,
+        customId,
+      )
+    }
+    await db.run(
+      `UPDATE refund_requests SET status = 'approved', admin_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?`,
+      adminNote || 'Approved',
+      admin.id,
+      now,
+      reqId,
+    )
+    send(res, 200, { ok: true, status: 'approved' })
+    return true
+  }
+
+  if (urlPath === '/api/admin/discounts' && method === 'GET') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const rows = await db.all<Record<string, unknown>>(
+      `SELECT * FROM discounts ORDER BY created_at DESC LIMIT 100`,
+    )
+    send(res, 200, {
+      discounts: rows.map((d) => ({
+        id: String(d.id),
+        code: String(d.code || ''),
+        kind: String(d.kind || 'percent'),
+        percentOff: d.percent_off != null ? Number(d.percent_off) : null,
+        amountOffCents: d.amount_off_cents != null ? Number(d.amount_off_cents) : null,
+        currency: String(d.currency || 'usd'),
+        maxRedemptions: d.max_redemptions != null ? Number(d.max_redemptions) : null,
+        stripeCouponId: String(d.stripe_coupon_id || ''),
+        stripePromotionCodeId: String(d.stripe_promotion_code_id || ''),
+        active: Boolean(Number(d.active)),
+        createdAt: String(d.created_at || ''),
+      })),
+    })
+    return true
+  }
+
+  if (urlPath === '/api/admin/discounts' && method === 'POST') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const stripe = stripeClient()
+    if (!stripe) {
+      send(res, 503, { error: 'Stripe is not configured.' })
+      return true
+    }
+    const body = await readJson(req)
+    const code = sanitizeText(String(body.code ?? ''), 40).toUpperCase().replace(/\s+/g, '')
+    if (!code || code.length < 3) {
+      send(res, 400, { error: 'Enter a promo code (at least 3 characters).' })
+      return true
+    }
+    const kind = String(body.kind ?? 'percent') === 'amount' ? 'amount' : 'percent'
+    const percentOff = Number(body.percentOff)
+    const amountOffCents = Math.round(Number(body.amountOffCents) || 0)
+    const maxRedemptions =
+      body.maxRedemptions != null && body.maxRedemptions !== ''
+        ? Math.max(1, Math.floor(Number(body.maxRedemptions)))
+        : null
+    if (kind === 'percent') {
+      if (!(percentOff > 0 && percentOff <= 100)) {
+        send(res, 400, { error: 'Percent off must be between 1 and 100.' })
+        return true
+      }
+    } else if (!(amountOffCents > 0)) {
+      send(res, 400, { error: 'Amount off must be greater than zero.' })
+      return true
+    }
+    try {
+      const coupon = await stripe.coupons.create({
+        ...(kind === 'percent'
+          ? { percent_off: percentOff }
+          : { amount_off: amountOffCents, currency: 'usd' }),
+        duration: 'once',
+        name: code,
+      })
+      const promo = await stripe.promotionCodes.create({
+        coupon: coupon.id,
+        code,
+        ...(maxRedemptions ? { max_redemptions: maxRedemptions } : {}),
+      })
+      const id = randomUUID()
+      const now = new Date().toISOString()
+      await db.run(
+        `INSERT INTO discounts (
+          id, code, kind, percent_off, amount_off_cents, currency, max_redemptions,
+          stripe_coupon_id, stripe_promotion_code_id, active, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'usd', ?, ?, ?, 1, ?, ?, ?)`,
+        id,
+        code,
+        kind,
+        kind === 'percent' ? percentOff : null,
+        kind === 'amount' ? amountOffCents : null,
+        maxRedemptions,
+        coupon.id,
+        promo.id,
+        admin.id,
+        now,
+        now,
+      )
+      send(res, 200, {
+        discount: {
+          id,
+          code,
+          kind,
+          percentOff: kind === 'percent' ? percentOff : null,
+          amountOffCents: kind === 'amount' ? amountOffCents : null,
+          active: true,
+          stripePromotionCodeId: promo.id,
+        },
+      })
+    } catch (err) {
+      send(res, 400, { error: err instanceof Error ? err.message : 'Could not create discount' })
+    }
+    return true
+  }
+
+  const discountDeactivate = /^\/api\/admin\/discounts\/([^/]+)\/deactivate$/.exec(urlPath)
+  if (discountDeactivate && method === 'POST') {
+    const discountId = discountDeactivate[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const stripe = stripeClient()
+    const row = await db.get<{ stripe_promotion_code_id: string; active: number | string }>(
+      'SELECT stripe_promotion_code_id, active FROM discounts WHERE id = ?',
+      discountId,
+    )
+    if (!row) {
+      send(res, 404, { error: 'Discount not found' })
+      return true
+    }
+    if (stripe && row.stripe_promotion_code_id) {
+      try {
+        await stripe.promotionCodes.update(row.stripe_promotion_code_id, { active: false })
+      } catch (err) {
+        console.warn('[printx] Could not deactivate Stripe promotion code', err)
+      }
+    }
+    const now = new Date().toISOString()
+    await db.run(
+      `UPDATE discounts SET active = 0, updated_at = ? WHERE id = ?`,
+      now,
+      discountId,
+    )
+    send(res, 200, { ok: true })
+    return true
+  }
+
+  const customShipMatch = /^\/api\/admin\/custom-requests\/([^/]+)\/ship$/.exec(urlPath)
+  if (customShipMatch && method === 'POST') {
+    const customId = customShipMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || (!adminCan(admin, 'orders') && !adminCan(admin, 'requests'))) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const body = await readJson(req)
+    const trackingNumber = sanitizeText(String(body.trackingNumber ?? ''), 80)
+    if (!trackingNumber) {
+      send(res, 400, { error: 'Tracking number is required.' })
+      return true
+    }
+    const carrier = sanitizeText(String(body.carrier ?? 'UPS'), 40) || 'UPS'
+    const trackingUrl =
+      sanitizeText(String(body.trackingUrl ?? ''), 500) ||
+      (carrier.toUpperCase() === 'UPS' ? upsTrackUrl(trackingNumber) : '')
+    const row = await db.get<{ id: string; paid_at: string | null }>(
+      'SELECT id, paid_at FROM custom_requests WHERE id = ?',
+      customId,
+    )
+    if (!row || !row.paid_at) {
+      send(res, 404, { error: 'Paid custom request not found' })
+      return true
+    }
+    const now = new Date().toISOString()
+    await db.run(
+      `UPDATE custom_requests SET
+         tracking_number = ?,
+         tracking_carrier = ?,
+         tracking_url = ?,
+         shipped_at = ?,
+         status = 'shipped',
+         updated_at = ?
+       WHERE id = ?`,
+      trackingNumber,
+      carrier,
+      trackingUrl,
+      now,
+      now,
+      customId,
+    )
+    send(res, 200, {
+      ok: true,
+      trackingNumber,
+      trackingCarrier: carrier,
+      trackingUrl,
+      shippedAt: now,
+    })
+    return true
+  }
+
   const orderItemGcodeMatch = /^\/api\/admin\/order-items\/([^/]+)\/gcode$/.exec(urlPath)
   if (orderItemGcodeMatch && method === 'GET') {
     const itemId = orderItemGcodeMatch[1]!
@@ -1906,9 +2401,15 @@ export async function handleCatalogApi(
     const yearStart = new Date(Date.UTC(calendarYear, 0, 1, 0, 0, 0, 0)).toISOString()
     const yearEnd = new Date(Date.UTC(calendarYear + 1, 0, 1, 0, 0, 0, 0)).toISOString()
 
+    // Item revenue only — shipping is pass-through to UPS and must not count as earnings.
+    const shopItemEarningsSql = `CASE
+      WHEN COALESCE(subtotal_usd, 0) > 0 THEN subtotal_usd
+      ELSE GREATEST(0, COALESCE(total_usd, 0) - COALESCE(shipping_usd, 0))
+    END`
+
     const sumStripeInRange = async (start: string | null, end: string | null) => {
       const shopParams: unknown[] = []
-      let shopSql = `SELECT COALESCE(SUM(total_usd), 0) as total FROM orders
+      let shopSql = `SELECT COALESCE(SUM(${shopItemEarningsSql}), 0) as total FROM orders
         WHERE paid_at IS NOT NULL
           AND status IN ('paid', 'in_production', 'ready', 'fulfilled')`
       if (start) {
@@ -1920,6 +2421,7 @@ export async function handleCatalogApi(
         shopParams.push(end)
       }
       const customParams: unknown[] = []
+      // catalog_price_usd is the print quote; shipping_usd is stored separately.
       let customSql = `SELECT COALESCE(SUM(catalog_price_usd), 0) as total FROM custom_requests
         WHERE paid_at IS NOT NULL AND catalog_price_usd IS NOT NULL`
       if (start) {
@@ -1960,7 +2462,9 @@ export async function handleCatalogApi(
     }
 
     const shopOrders = await db.all<Record<string, unknown>>(
-      `SELECT id, customer_name, customer_email, total_usd, status, paid_at, stripe_session_id
+      `SELECT id, customer_name, customer_email, total_usd, subtotal_usd, shipping_usd,
+              status, paid_at, stripe_session_id,
+              ${shopItemEarningsSql} as item_earnings_usd
        FROM orders
        WHERE paid_at IS NOT NULL
          AND paid_at >= ? AND paid_at < ?
@@ -1981,7 +2485,7 @@ export async function handleCatalogApi(
     )
 
     const shopEarnings = roundMoney(
-      shopOrders.reduce((sum, o) => sum + (Number(o.total_usd) || 0), 0),
+      shopOrders.reduce((sum, o) => sum + (Number(o.item_earnings_usd) || 0), 0),
     )
     const customEarnings = roundMoney(
       customPaid.reduce((sum, o) => sum + (Number(o.catalog_price_usd) || 0), 0),
@@ -2095,7 +2599,7 @@ export async function handleCatalogApi(
 
     // ISO timestamps → YYYY-MM via substr works on both SQLite and Postgres.
     const shopByMonth = await db.all<{ ym: string; total: number | string | null }>(
-      `SELECT substr(paid_at, 1, 7) as ym, COALESCE(SUM(total_usd), 0) as total
+      `SELECT substr(paid_at, 1, 7) as ym, COALESCE(SUM(${shopItemEarningsSql}), 0) as total
        FROM orders
        WHERE paid_at IS NOT NULL
          AND length(paid_at) >= 7
@@ -2199,7 +2703,7 @@ export async function handleCatalogApi(
           kind: 'shop' as const,
           label: String(o.customer_name || o.customer_email || 'Customer'),
           email: String(o.customer_email ?? ''),
-          amountUsd: roundMoney(Number(o.total_usd) || 0),
+          amountUsd: roundMoney(Number(o.item_earnings_usd) || 0),
           status: String(o.status ?? ''),
           paidAt: o.paid_at != null ? String(o.paid_at) : null,
           stripeSessionId: o.stripe_session_id != null ? String(o.stripe_session_id) : null,

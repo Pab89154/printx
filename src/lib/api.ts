@@ -1,9 +1,15 @@
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const { headers: initHeaders, ...rest } = init ?? {}
+  // Avoid forcing Content-Type on GETs — iOS Safari can mishandle empty JSON bodies.
+  const method = (rest.method || 'GET').toUpperCase()
+  const headers: Record<string, string> = { ...(initHeaders as Record<string, string>) }
+  if (method !== 'GET' && method !== 'HEAD' && headers['Content-Type'] === undefined) {
+    headers['Content-Type'] = 'application/json'
+  }
   const res = await fetch(url, {
     credentials: 'include',
     ...rest,
-    headers: { 'Content-Type': 'application/json', ...initHeaders },
+    headers,
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Request failed')
@@ -11,6 +17,36 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  customer: {
+    me: () =>
+      request<{ customer: { id: string; email: string; displayName: string | null } }>(
+        '/api/public/auth/me',
+      ),
+    login: (email: string, password: string) =>
+      request<{ customer: { id: string; email: string; displayName: string | null } }>(
+        '/api/public/auth/login',
+        { method: 'POST', body: JSON.stringify({ email, password }) },
+      ),
+    register: (name: string, email: string, password: string) =>
+      request<{ customer: { id: string; email: string; displayName: string | null } }>(
+        '/api/public/auth/register',
+        { method: 'POST', body: JSON.stringify({ name, email, password }) },
+      ),
+    logout: () =>
+      request<{ ok: true }>('/api/public/auth/logout', { method: 'POST', body: '{}' }),
+    orders: () =>
+      request<{ shopOrders: unknown[]; customOrders: unknown[] }>('/api/public/account/orders'),
+    requestShopRefund: (orderId: string, reason: string) =>
+      request<{ ok: true; id: string; status: string }>(
+        `/api/public/account/orders/${orderId}/refund-request`,
+        { method: 'POST', body: JSON.stringify({ reason }) },
+      ),
+    requestCustomRefund: (id: string, reason: string) =>
+      request<{ ok: true; id: string; status: string }>(
+        `/api/public/account/custom-orders/${id}/refund-request`,
+        { method: 'POST', body: JSON.stringify({ reason }) },
+      ),
+  },
   public: {
     bootstrap: (opts?: { full?: boolean }) =>
       request<import('../types/api.ts').PublicBootstrap>(
@@ -169,8 +205,80 @@ export const api = {
           method: 'POST',
           body: '{}',
         }),
+      ship: (orderId: string, body: { trackingNumber: string; carrier?: string }) =>
+        request<import('../types/catalog.ts').OrderDto>(`/api/admin/orders/${orderId}/ship`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+      refreshShipping: () =>
+        request<{
+          orders: import('../types/catalog.ts').OrderDto[]
+          printers: import('../types/catalog.ts').PrinterDto[]
+        }>('/api/admin/orders/refresh-shipping', {
+          method: 'POST',
+          body: '{}',
+        }),
       delete: (orderId: string) =>
         request<{ ok: true; id: string }>(`/api/admin/orders/${orderId}`, { method: 'DELETE' }),
+      listRefundRequests: () =>
+        request<{
+          requests: {
+            id: string
+            orderId: string | null
+            customRequestId: string | null
+            customerEmail: string
+            customerName: string
+            reason: string
+            amountUsd: number
+            createdAt: string
+          }[]
+        }>('/api/admin/refund-requests'),
+      approveRefundRequest: (id: string, adminNote?: string) =>
+        request<{ ok: true; status: string }>(`/api/admin/refund-requests/${id}/approve`, {
+          method: 'POST',
+          body: JSON.stringify({ adminNote }),
+        }),
+      declineRefundRequest: (id: string, adminNote?: string) =>
+        request<{ ok: true; status: string }>(`/api/admin/refund-requests/${id}/decline`, {
+          method: 'POST',
+          body: JSON.stringify({ adminNote }),
+        }),
+      discounts: {
+        list: () =>
+          request<{
+            discounts: {
+              id: string
+              code: string
+              kind: string
+              percentOff: number | null
+              amountOffCents: number | null
+              maxRedemptions: number | null
+              active: boolean
+              createdAt: string
+            }[]
+          }>('/api/admin/discounts'),
+        create: (body: {
+          code: string
+          kind: 'percent' | 'amount'
+          percentOff?: number
+          amountOffCents?: number
+          maxRedemptions?: number | null
+        }) =>
+          request<{ discount: { id: string; code: string } }>('/api/admin/discounts', {
+            method: 'POST',
+            body: JSON.stringify(body),
+          }),
+        deactivate: (id: string) =>
+          request<{ ok: true }>(`/api/admin/discounts/${id}/deactivate`, {
+            method: 'POST',
+            body: '{}',
+          }),
+      },
+      shipCustom: (id: string, body: { trackingNumber: string; carrier?: string }) =>
+        request<{ ok: true }>(`/api/admin/custom-requests/${id}/ship`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
       downloadGcode: async (itemId: string) => {
         const res = await fetch(`/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`, {
           credentials: 'include',
@@ -288,6 +396,24 @@ export const api = {
         a.click()
         URL.revokeObjectURL(url)
       },
+    },
+    push: {
+      vapidPublicKey: () =>
+        request<{ publicKey: string; configured: boolean }>('/api/admin/push/vapid-public-key'),
+      subscribe: (body: {
+        endpoint: string
+        keys: { p256dh: string; auth: string }
+        userAgent?: string
+      }) =>
+        request<{ ok: true }>('/api/admin/push/subscribe', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+      unsubscribe: (endpoint: string) =>
+        request<{ ok: true }>('/api/admin/push/subscribe', {
+          method: 'DELETE',
+          body: JSON.stringify({ endpoint }),
+        }),
     },
     messages: {
       list: () => request<import('../types/api.ts').ContactMessage[]>('/api/admin/contact-messages'),

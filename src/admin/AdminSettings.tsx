@@ -13,6 +13,13 @@ import {
   type PermissionKey,
 } from '../../shared/permissions'
 import { SandboxIcon } from '../lib/sandboxIcon'
+import {
+  disableAdminPush,
+  enableAdminPush,
+  getPushSetupState,
+  isIosDevice,
+  type PushSetupState,
+} from '../lib/adminPush'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 px-3 py-2.5 text-base outline-none focus:border-electric focus:ring-2 focus:ring-electric/20 sm:text-sm'
@@ -78,6 +85,10 @@ export function AdminSettings() {
     { id: string; ownerLabel: string; modelName: string; ownerUserId: string | null }[]
   >([])
   const [csSaving, setCsSaving] = useState(false)
+  const [pushState, setPushState] = useState<PushSetupState>('loading')
+  const [pushBusy, setPushBusy] = useState(false)
+  const [pushError, setPushError] = useState('')
+  const [pushMessage, setPushMessage] = useState('')
   const [csMessage, setCsMessage] = useState('')
   const [csError, setCsError] = useState('')
 
@@ -122,6 +133,10 @@ export function AdminSettings() {
   useEffect(() => {
     setEmailDraft(email ?? '')
   }, [email])
+
+  useEffect(() => {
+    void getPushSetupState().then(setPushState)
+  }, [])
 
   useEffect(() => {
     loadAdmins().catch(console.error)
@@ -405,6 +420,105 @@ export function AdminSettings() {
             </button>
           </form>
         )}
+      </div>
+
+      <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+        <h2 className="mb-1 font-semibold">Phone notifications</h2>
+        <p className="text-sm text-muted">
+          Get Inbox, Mail, Orders, and Custom Requests alerts in your phone Notification Center (iPhone
+          and Pixel).
+        </p>
+        <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs text-muted">
+          {isIosDevice() ? (
+            <>
+              <li>Safari → Share → Add to Home Screen</li>
+              <li>Open PrintX from the Home Screen icon (not a Safari tab)</li>
+              <li>Tap Enable notifications below and allow</li>
+            </>
+          ) : (
+            <>
+              <li>Chrome menu → Install app / Add to Home screen</li>
+              <li>Open the PrintX Portal icon</li>
+              <li>Tap Enable notifications below and allow</li>
+            </>
+          )}
+        </ol>
+        {pushState === 'needs_homescreen' && (
+          <p className="mt-3 text-sm text-amber-700">
+            Add this portal to your Home Screen first, then open it from the icon.
+          </p>
+        )}
+        {pushState === 'unsupported' && (
+          <p className="mt-3 text-sm text-amber-700">This browser does not support Web Push.</p>
+        )}
+        {pushState === 'no_vapid' && (
+          <p className="mt-3 text-sm text-amber-700">
+            Server is missing VAPID keys. Add VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY on Render.
+          </p>
+        )}
+        {pushState === 'denied' && (
+          <p className="mt-3 text-sm text-red-600">
+            Notifications are blocked for this site. Enable them in phone Settings, then try again.
+          </p>
+        )}
+        {pushState === 'enabled' && (
+          <p className="mt-3 text-sm text-green-600">Notifications enabled on this device.</p>
+        )}
+        {pushError && <p className="mt-2 text-sm text-red-600">{pushError}</p>}
+        {pushMessage && <p className="mt-2 text-sm text-green-600">{pushMessage}</p>}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={
+              pushBusy ||
+              pushState === 'loading' ||
+              pushState === 'unsupported' ||
+              pushState === 'needs_homescreen' ||
+              pushState === 'no_vapid'
+            }
+            onClick={() => {
+              setPushBusy(true)
+              setPushError('')
+              setPushMessage('')
+              void enableAdminPush()
+                .then((next) => {
+                  setPushState(next)
+                  if (next === 'enabled') setPushMessage('This phone will get portal alerts.')
+                  else if (next === 'no_vapid')
+                    setPushError('Push is not configured on the server (VAPID keys).')
+                  else if (next === 'denied') setPushError('Permission denied.')
+                  else if (next === 'needs_homescreen')
+                    setPushError('Open PrintX from the Home Screen icon, then try again.')
+                })
+                .catch((e) => setPushError(e instanceof Error ? e.message : 'Could not enable'))
+                .finally(() => setPushBusy(false))
+            }}
+          >
+            {pushBusy ? 'Working…' : pushState === 'enabled' ? 'Re-enable on this device' : 'Enable notifications'}
+          </button>
+          {pushState === 'enabled' && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={pushBusy}
+              onClick={() => {
+                setPushBusy(true)
+                setPushError('')
+                setPushMessage('')
+                void disableAdminPush()
+                  .then(() => {
+                    setPushState('ready')
+                    setPushMessage('Notifications turned off on this device.')
+                  })
+                  .catch((e) => setPushError(e instanceof Error ? e.message : 'Could not disable'))
+                  .finally(() => setPushBusy(false))
+              }}
+            >
+              Disable
+            </button>
+          )}
+        </div>
       </div>
 
       <form onSubmit={saveCloudSlicer} className="mt-8 max-w-md rounded-2xl border bg-white p-6" autoComplete="off">

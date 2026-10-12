@@ -153,7 +153,7 @@ export function AdminDashboard() {
           <div className="mt-6 grid gap-6 sm:grid-cols-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
-                From Stripe
+                What you earn
               </p>
               <p className="mt-2 text-4xl font-extrabold tracking-tight tabular-nums sm:text-5xl">
                 {money ? `$${money.earnings.totalUsd.toFixed(2)}` : '—'}
@@ -178,8 +178,8 @@ export function AdminDashboard() {
           </div>
           {money?.totals && (
             <p className="mt-5 text-sm text-white/60">
-              Year Stripe ${money.totals.year.stripeUsd.toFixed(2)} · All time $
-              {money.totals.allTime.stripeUsd.toFixed(2)}
+              Year ${money.totals.year.stripeUsd.toFixed(2)} · All time $
+              {money.totals.allTime.stripeUsd.toFixed(2)} · shipping excluded
             </p>
           )}
         </Link>

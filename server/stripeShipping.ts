@@ -18,14 +18,12 @@ export function stripeCheckoutShippingFields(): Pick<
   | 'shipping_address_collection'
   | 'shipping_options'
   | 'billing_address_collection'
-  | 'customer_creation'
   | 'customer_update'
 > {
   return {
     // Always collect a billing address so we have a street even if ship-to is missing in API.
     billing_address_collection: 'required',
-    // Required for customer_update.shipping to persist ship-to onto the Customer object.
-    customer_creation: 'always',
+    // Checkout always passes an existing Stripe Customer (signed-in account).
     customer_update: {
       name: 'auto',
       address: 'auto',

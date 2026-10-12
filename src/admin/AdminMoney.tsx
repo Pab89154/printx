@@ -73,8 +73,8 @@ export function AdminMoney() {
         <div>
           <h1 className="text-2xl font-bold text-navy">Money</h1>
           <p className="mt-1 text-sm text-muted">
-            Stripe earnings and print costs (no profit share). Each month&apos;s owed resets for the
-            new month; older months stay in history.
+            Item earnings and print costs (shipping excluded — that money is for UPS). Each
+            month&apos;s owed resets for the new month; older months stay in history.
           </p>
         </div>
         <label className="text-sm font-semibold text-navy">
@@ -96,14 +96,14 @@ export function AdminMoney() {
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                From Stripe
+                What you earn
               </p>
               <p className="mt-2 text-2xl font-bold text-navy">
                 ${data.earnings.totalUsd.toFixed(2)}
               </p>
               <p className="mt-1 text-xs text-muted">
                 Shop ${data.earnings.shopUsd.toFixed(2)} · Custom $
-                {data.earnings.customUsd.toFixed(2)}
+                {data.earnings.customUsd.toFixed(2)} · shipping excluded
               </p>
             </div>
             <div className="rounded-2xl border bg-white p-5">
@@ -127,21 +127,21 @@ export function AdminMoney() {
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                This year · Stripe
+                This year · earned
               </p>
               <p className="mt-2 text-2xl font-bold text-navy">
                 ${data.totals.year.stripeUsd.toFixed(2)}
               </p>
-              <p className="mt-1 text-xs text-muted">{data.totals.year.year} UTC</p>
+              <p className="mt-1 text-xs text-muted">{data.totals.year.year} UTC · items only</p>
             </div>
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                All time · Stripe
+                All time · earned
               </p>
               <p className="mt-2 text-2xl font-bold text-navy">
                 ${data.totals.allTime.stripeUsd.toFixed(2)}
               </p>
-              <p className="mt-1 text-xs text-muted">Every paid shop + custom order</p>
+              <p className="mt-1 text-xs text-muted">Paid shop + custom · shipping excluded</p>
             </div>
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -170,7 +170,7 @@ export function AdminMoney() {
                   <thead>
                     <tr className="border-b text-xs uppercase tracking-wide text-muted">
                       <th className="py-2 pr-3 font-semibold">Month</th>
-                      <th className="py-2 pr-3 font-semibold">Stripe</th>
+                      <th className="py-2 pr-3 font-semibold">Earned</th>
                       <th className="py-2 pr-3 font-semibold">Owed to me</th>
                       <th className="py-2 pr-3 font-semibold">All printers</th>
                       <th className="py-2 font-semibold">Settled</th>
@@ -300,7 +300,7 @@ export function AdminMoney() {
           </section>
 
           <section className="rounded-2xl border bg-white p-6">
-            <h2 className="text-lg font-bold text-navy">Stripe payments</h2>
+            <h2 className="text-lg font-bold text-navy">Item payments</h2>
             <p className="mt-1 text-sm text-muted">
               Paid shop checkouts and custom prints in {formatMonthLabel(data.month)}.
             </p>

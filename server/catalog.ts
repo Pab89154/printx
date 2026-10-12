@@ -106,6 +106,11 @@ export type Order = {
   shippingCountry: string
   shippingMethod: string
   shippingUsd: number
+  trackingNumber: string
+  trackingCarrier: string
+  trackingUrl: string
+  shippedAt: string | null
+  userId: string | null
   createdAt: string
   updatedAt: string
   paidAt: string | null
@@ -184,6 +189,11 @@ export function rowToOrder(row: Record<string, unknown>): Order {
     shippingCountry: (row.shipping_country as string) || '',
     shippingMethod: (row.shipping_method as string) || '',
     shippingUsd: Number(row.shipping_usd) || 0,
+    trackingNumber: (row.tracking_number as string) || '',
+    trackingCarrier: (row.tracking_carrier as string) || '',
+    trackingUrl: (row.tracking_url as string) || '',
+    shippedAt: (row.shipped_at as string | null) ?? null,
+    userId: (row.user_id as string | null) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     paidAt: (row.paid_at as string | null) ?? null,

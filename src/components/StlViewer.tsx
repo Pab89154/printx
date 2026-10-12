@@ -17,6 +17,30 @@ type Props = {
   eager?: boolean
 }
 
+/** iOS Safari / home-screen web apps crash or error when too many WebGL contexts are open. */
+const MAX_LIVE_VIEWERS = 2
+let liveViewers = 0
+const viewerWaitQueue: Array<() => void> = []
+
+function acquireViewerSlot(): Promise<boolean> {
+  if (liveViewers < MAX_LIVE_VIEWERS) {
+    liveViewers += 1
+    return Promise.resolve(true)
+  }
+  return new Promise((resolve) => {
+    viewerWaitQueue.push(() => {
+      liveViewers += 1
+      resolve(true)
+    })
+  })
+}
+
+function releaseViewerSlot() {
+  liveViewers = Math.max(0, liveViewers - 1)
+  const next = viewerWaitQueue.shift()
+  if (next) next()
+}
+
 function parseHex(hex: string | undefined, fallback: number): number {
   if (!hex) return fallback
   const h = hex.trim().replace('#', '')
@@ -102,6 +126,8 @@ export function StlViewer({
     let mesh: THREE.Mesh | null = null
     let controls: OrbitControls | null = null
     let renderer: THREE.WebGLRenderer | null = null
+    let acquired = false
+    let ro: ResizeObserver | null = null
     const loader = new STLLoader()
     const meshColor = parseHex(colorHexRef.current, 0x12b5d4)
 
@@ -110,63 +136,97 @@ export function StlViewer({
 
     const scene = new THREE.Scene()
     sceneRef.current = scene
-    // Slightly darker than white filament so light colors stay visible.
     scene.background = new THREE.Color(0xe2e8f0)
 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000)
     camera.position.set(80, 60, 100)
     cameraRef.current = camera
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' })
-    rendererRef.current = renderer
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    host.replaceChildren(renderer.domElement)
-    renderer.domElement.style.display = 'block'
-    renderer.domElement.style.width = '100%'
-    renderer.domElement.style.height = '100%'
-    if (!interactive) {
-      renderer.domElement.style.pointerEvents = 'none'
-    }
-
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xcbd5e1, 1.15)
-    scene.add(hemi)
-    const dir = new THREE.DirectionalLight(0xffffff, 0.9)
-    dir.position.set(40, 80, 30)
-    scene.add(dir)
-
-    if (interactive) {
-      controls = new OrbitControls(camera, renderer.domElement)
-      controls.enableDamping = true
-    }
-
-    const syncSize = () => {
-      if (!renderer || !hostRef.current) return
-      const w = Math.max(hostRef.current.clientWidth || 0, 120)
-      const h = Math.max(
-        hostRef.current.clientHeight || (typeof height === 'number' ? height : 120),
-        120,
-      )
-      camera.aspect = w / h
-      camera.updateProjectionMatrix()
-      renderer.setSize(w, h, false)
-    }
-    syncSize()
-
-    const ro = new ResizeObserver(() => {
-      syncSize()
-      if (renderer) renderer.render(scene, camera)
-    })
-    ro.observe(host)
-
-    const tick = () => {
-      if (cancelled || !renderer) return
-      frame = requestAnimationFrame(tick)
-      controls?.update()
-      renderer.render(scene, camera)
-    }
-    if (interactive) tick()
-
     void (async () => {
+      const ok = await acquireViewerSlot()
+      if (ok) acquired = true
+      if (cancelled) {
+        if (acquired) {
+          releaseViewerSlot()
+          acquired = false
+        }
+        return
+      }
+      if (!ok) return
+
+      try {
+        renderer = new THREE.WebGLRenderer({
+          antialias: false,
+          alpha: false,
+          powerPreference: 'default',
+          failIfMajorPerformanceCaveat: false,
+        })
+      } catch {
+        if (!cancelled) {
+          setLoading(false)
+          setError('3D preview not available on this device.')
+        }
+        if (acquired) {
+          releaseViewerSlot()
+          acquired = false
+        }
+        return
+      }
+
+      if (cancelled) {
+        renderer.dispose()
+        if (acquired) {
+          releaseViewerSlot()
+          acquired = false
+        }
+        return
+      }
+
+      rendererRef.current = renderer
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, interactive ? 1.5 : 1))
+      host.replaceChildren(renderer.domElement)
+      renderer.domElement.style.display = 'block'
+      renderer.domElement.style.width = '100%'
+      renderer.domElement.style.height = '100%'
+      if (!interactive) renderer.domElement.style.pointerEvents = 'none'
+
+      scene.add(new THREE.HemisphereLight(0xffffff, 0xcbd5e1, 1.15))
+      const dir = new THREE.DirectionalLight(0xffffff, 0.9)
+      dir.position.set(40, 80, 30)
+      scene.add(dir)
+
+      if (interactive) {
+        controls = new OrbitControls(camera, renderer.domElement)
+        controls.enableDamping = true
+      }
+
+      const syncSize = () => {
+        if (!renderer || !hostRef.current) return
+        const w = Math.max(hostRef.current.clientWidth || 0, 120)
+        const h = Math.max(
+          hostRef.current.clientHeight || (typeof height === 'number' ? height : 120),
+          120,
+        )
+        camera.aspect = w / h
+        camera.updateProjectionMatrix()
+        renderer.setSize(w, h, false)
+      }
+      syncSize()
+
+      ro = new ResizeObserver(() => {
+        syncSize()
+        if (renderer) renderer.render(scene, camera)
+      })
+      ro.observe(host)
+
+      const tick = () => {
+        if (cancelled || !renderer) return
+        frame = requestAnimationFrame(tick)
+        controls?.update()
+        renderer.render(scene, camera)
+      }
+      if (interactive) tick()
+
       try {
         const res = await fetch(activeUrl, { credentials })
         if (cancelled) return
@@ -210,7 +270,7 @@ export function StlViewer({
           controls.update()
         }
         syncSize()
-        renderer?.render(scene, camera)
+        renderer.render(scene, camera)
         if (!cancelled) setLoading(false)
       } catch (err) {
         if (!cancelled) {
@@ -223,7 +283,7 @@ export function StlViewer({
     return () => {
       cancelled = true
       cancelAnimationFrame(frame)
-      ro.disconnect()
+      ro?.disconnect()
       controls?.dispose()
       materialRef.current = null
       if (rendererRef.current === renderer) rendererRef.current = null
@@ -236,6 +296,10 @@ export function StlViewer({
       renderer?.dispose()
       renderer = null
       host.replaceChildren()
+      if (acquired) {
+        releaseViewerSlot()
+        acquired = false
+      }
     }
   }, [activeUrl, height, credentials, interactive])
 

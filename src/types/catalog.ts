@@ -121,6 +121,16 @@ export type OrderDto = {
   shippingCountry: string
   shippingMethod: string
   shippingUsd: number
+  trackingNumber?: string
+  trackingCarrier?: string
+  trackingUrl?: string
+  shippedAt?: string | null
+  userId?: string | null
+  pendingRefundRequest?: {
+    id: string
+    reason: string
+    createdAt: string
+  } | null
   createdAt: string
   updatedAt: string
   paidAt: string | null

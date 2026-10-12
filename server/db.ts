@@ -312,6 +312,73 @@ async function migrateCheckoutShipping(database: DbApi) {
   }
 }
 
+/** Public customer accounts, order ownership, tracking, refund requests, discounts. */
+async function migrateCustomerAccounts(database: DbApi) {
+  try {
+    await database.exec(`ALTER TABLE users ADD COLUMN stripe_customer_id TEXT`)
+  } catch {
+    /* exists */
+  }
+
+  const orderCols: [string, string][] = [
+    ['user_id', `TEXT`],
+    ['tracking_number', `TEXT NOT NULL DEFAULT ''`],
+    ['tracking_carrier', `TEXT NOT NULL DEFAULT ''`],
+    ['tracking_url', `TEXT NOT NULL DEFAULT ''`],
+    ['shipped_at', `TEXT`],
+  ]
+  for (const table of ['orders', 'custom_requests'] as const) {
+    for (const [name, def] of orderCols) {
+      try {
+        await database.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`)
+      } catch {
+        /* exists */
+      }
+    }
+  }
+
+  await database.exec(`
+    CREATE TABLE IF NOT EXISTS refund_requests (
+      id TEXT PRIMARY KEY,
+      order_id TEXT REFERENCES orders(id) ON DELETE CASCADE,
+      custom_request_id TEXT REFERENCES custom_requests(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      admin_note TEXT NOT NULL DEFAULT '',
+      reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS discounts (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'percent',
+      percent_off REAL,
+      amount_off_cents INTEGER,
+      currency TEXT NOT NULL DEFAULT 'usd',
+      max_redemptions INTEGER,
+      stripe_coupon_id TEXT NOT NULL DEFAULT '',
+      stripe_promotion_code_id TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      user_agent TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+  `)
+}
+
 /** Convert legacy emoji product icons to Lucide CDN icon names. */
 async function migrateEmojiToIcons(database: DbApi) {
   const map: Record<string, string> = {
@@ -882,6 +949,7 @@ async function initDb(): Promise<DbApi> {
   await migratePrinterSettlements(database)
   await migrateCheckoutShipping(database)
   await migrateDesignQuoteIds(database)
+  await migrateCustomerAccounts(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
   const { seedCatalogDefaults } = await import('./catalog.ts')

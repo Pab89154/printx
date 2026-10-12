@@ -33,7 +33,7 @@ export function AdminMessages() {
     <div>
       <h1 className="text-2xl font-bold text-navy">Inbox</h1>
       <p className="mt-1 text-muted">
-        Feedback and contact form messages. Also emailed to hello@printx.pw when email is configured.
+        Feedback and contact form messages from the public site. Stored in the portal only — not sent as email.
       </p>
 
       <div className="mt-6 space-y-4">

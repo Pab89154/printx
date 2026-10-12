@@ -111,6 +111,11 @@ export type CustomRequest = {
   shipping_country: string
   shipping_method: string
   shipping_usd: number
+  tracking_number?: string
+  tracking_carrier?: string
+  tracking_url?: string
+  shipped_at?: string | null
+  paid_at?: string | null
   created_at: string
   updated_at: string
 }

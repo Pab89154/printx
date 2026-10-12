@@ -30,8 +30,15 @@ export function PublicSite({ forceOnline = false }: Props) {
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-white p-4">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-4 text-center">
         <p className="text-red-600">Unable to load site: {error}</p>
+        <button
+          type="button"
+          className="btn btn-primary btn-compact"
+          onClick={() => window.location.reload()}
+        >
+          Try again
+        </button>
       </div>
     )
   }

@@ -1,16 +1,21 @@
 import { useState } from 'react'
-import { Menu, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Menu, User, X } from 'lucide-react'
 import { NAV_LINKS } from '../data/navigation'
 import { usePublicData } from '../context/PublicDataContext'
+import { useCustomerAuth } from '../context/CustomerAuthContext'
 import { onHashLinkClick } from '../lib/scroll'
 import { Button } from './Button'
 import { Logo } from './Logo'
+import { CartLink } from './CartLink'
 
 export function Header() {
   const [menuOpen, setMenuOpen] = useState(false)
   const { data } = usePublicData()
+  const { customer } = useCustomerAuth()
   const hasStands = (data?.stands?.length ?? 0) > 0
   const links = NAV_LINKS.filter((link) => link.href !== '#stands' || hasStands)
+  const accountHref = customer ? '/account' : '/account/sign-in'
 
   return (
     <header className="sticky top-0 z-50 border-b border-navy/8 bg-white/90 backdrop-blur-lg">
@@ -41,15 +46,14 @@ export function Header() {
         </nav>
 
         <div className="flex items-center gap-2">
-          {hasStands ? (
-            <Button href="#stands" size="sm" className="hidden sm:inline-flex">
-              Find a Stand
-            </Button>
-          ) : (
-            <Button href="/shop" size="sm" className="hidden sm:inline-flex">
-              Shop
-            </Button>
-          )}
+          <CartLink />
+          <Link
+            to={accountHref}
+            aria-label={customer ? 'Account' : 'Sign in'}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-navy transition hover:bg-slate-100"
+          >
+            <User size={20} strokeWidth={2} aria-hidden />
+          </Link>
           <button
             type="button"
             aria-label="Open menu"
@@ -77,13 +81,20 @@ export function Header() {
                 {link.label}
               </a>
             ))}
+            <Link
+              to={accountHref}
+              className="rounded-xl px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-electric"
+              onClick={() => setMenuOpen(false)}
+            >
+              {customer ? 'My account' : 'Sign in'}
+            </Link>
             {hasStands ? (
               <Button href="#stands" size="md" className="mt-2 w-full">
                 Find a Stand
               </Button>
             ) : (
-              <Button href="/shop" size="md" className="mt-2 w-full">
-                Shop
+              <Button href={accountHref} size="md" className="mt-2 w-full">
+                {customer ? 'My account' : 'Sign in'}
               </Button>
             )}
           </div>

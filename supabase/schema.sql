@@ -22,6 +22,7 @@ create table if not exists users (
   cloud_slicer_printer_id text not null default '',
   cloud_slicer_filament_id text not null default '',
   cloud_slicer_configured_at text,
+  stripe_customer_id text,
   created_at text not null
 );
 
@@ -108,6 +109,20 @@ create table if not exists custom_requests (
   quoted_at text,
   stripe_session_id text,
   paid_at text,
+  user_id text references users(id) on delete set null,
+  shipping_name text not null default '',
+  shipping_line1 text not null default '',
+  shipping_line2 text not null default '',
+  shipping_city text not null default '',
+  shipping_state text not null default '',
+  shipping_postal text not null default '',
+  shipping_country text not null default '',
+  shipping_method text not null default '',
+  shipping_usd double precision not null default 0,
+  tracking_number text not null default '',
+  tracking_carrier text not null default '',
+  tracking_url text not null default '',
+  shipped_at text,
   created_at text not null,
   updated_at text not null
 );
@@ -219,7 +234,21 @@ create table if not exists orders (
   currency text not null default 'usd',
   created_at text not null,
   updated_at text not null,
-  paid_at text
+  paid_at text,
+  user_id text references users(id) on delete set null,
+  shipping_name text not null default '',
+  shipping_line1 text not null default '',
+  shipping_line2 text not null default '',
+  shipping_city text not null default '',
+  shipping_state text not null default '',
+  shipping_postal text not null default '',
+  shipping_country text not null default '',
+  shipping_method text not null default '',
+  shipping_usd double precision not null default 0,
+  tracking_number text not null default '',
+  tracking_carrier text not null default '',
+  tracking_url text not null default '',
+  shipped_at text
 );
 
 create table if not exists order_items (
@@ -263,6 +292,55 @@ create table if not exists printer_settlements (
   unique (user_id, year_month)
 );
 
+create table if not exists refund_requests (
+  id text primary key,
+  order_id text references orders(id) on delete cascade,
+  custom_request_id text references custom_requests(id) on delete cascade,
+  user_id text not null references users(id) on delete cascade,
+  reason text not null default '',
+  status text not null default 'pending',
+  admin_note text not null default '',
+  reviewed_by text references users(id) on delete set null,
+  reviewed_at text,
+  created_at text not null
+);
+
+create table if not exists discounts (
+  id text primary key,
+  code text not null,
+  kind text not null default 'percent',
+  percent_off double precision,
+  amount_off_cents integer,
+  currency text not null default 'usd',
+  max_redemptions integer,
+  stripe_coupon_id text not null default '',
+  stripe_promotion_code_id text not null default '',
+  active integer not null default 1,
+  created_by text references users(id) on delete set null,
+  created_at text not null,
+  updated_at text not null
+);
+
+create table if not exists push_subscriptions (
+  id text primary key,
+  user_id text not null references users(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  user_agent text not null default '',
+  created_at text not null
+);
+
+-- Existing projects (customer accounts / shipping / tracking):
+-- alter table users add column if not exists stripe_customer_id text;
+-- alter table orders add column if not exists user_id text references users(id) on delete set null;
+-- alter table custom_requests add column if not exists user_id text references users(id) on delete set null;
+-- alter table orders add column if not exists tracking_number text not null default '';
+-- alter table orders add column if not exists tracking_carrier text not null default '';
+-- alter table orders add column if not exists tracking_url text not null default '';
+-- alter table orders add column if not exists shipped_at text;
+-- (same tracking_* / shipped_at / shipping_* on custom_requests as needed)
+
 -- ---------------------------------------------------------------------------
 -- Security (required on Supabase)
 -- The Node server connects with DATABASE_URL (postgres role) and bypasses RLS.
@@ -287,6 +365,9 @@ alter table orders enable row level security;
 alter table order_items enable row level security;
 alter table profit_ledger enable row level security;
 alter table printer_settlements enable row level security;
+alter table refund_requests enable row level security;
+alter table discounts enable row level security;
+alter table push_subscriptions enable row level security;
 
 revoke all on table users from anon, authenticated;
 revoke all on table sessions from anon, authenticated;
@@ -305,3 +386,6 @@ revoke all on table orders from anon, authenticated;
 revoke all on table order_items from anon, authenticated;
 revoke all on table profit_ledger from anon, authenticated;
 revoke all on table printer_settlements from anon, authenticated;
+revoke all on table refund_requests from anon, authenticated;
+revoke all on table discounts from anon, authenticated;
+revoke all on table push_subscriptions from anon, authenticated;

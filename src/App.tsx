@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { AdminAuthProvider } from './context/AdminAuthContext'
+import { CustomerAuthProvider } from './context/CustomerAuthContext'
 import { PublicDataProvider } from './context/PublicDataContext'
 import { CartProvider } from './context/CartContext'
 import { PublicSite } from './pages/PublicSite'
@@ -9,6 +10,10 @@ import { Shop } from './pages/Shop'
 import { ShopProduct } from './pages/ShopProduct'
 import { Cart } from './pages/Cart'
 import { OrderSuccess } from './pages/OrderSuccess'
+import { Account } from './pages/Account'
+import { AccountSignIn } from './pages/AccountSignIn'
+import { AccountRegister } from './pages/AccountRegister'
+import { AdminDiscounts } from './admin/AdminDiscounts'
 import { AdminLogin } from './admin/AdminLogin'
 import { AdminGuard } from './admin/AdminGuard'
 import { AdminLayout } from './admin/AdminLayout'
@@ -60,6 +65,7 @@ function PortalRoutes() {
           <Route path="designs" element={<AdminDesigns />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
+          <Route path="discounts" element={<AdminDiscounts />} />
           <Route path="money" element={<AdminMoney />} />
           <Route path="requests" element={<AdminRequests />} />
           <Route path="content" element={<Navigate to="../dashboard" replace />} />
@@ -79,6 +85,9 @@ function PublicRoutes() {
       <Route path="/shop/:skuBase" element={<ShopProduct />} />
       <Route path="/cart" element={<Cart />} />
       <Route path="/order/success" element={<OrderSuccess />} />
+      <Route path="/account" element={<Account />} />
+      <Route path="/account/sign-in" element={<AccountSignIn />} />
+      <Route path="/account/register" element={<AccountRegister />} />
       <Route path="/admin" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminGuard />}>
         <Route path="sandbox" element={<AdminSandbox />} />
@@ -91,6 +100,7 @@ function PublicRoutes() {
           <Route path="designs" element={<AdminDesigns />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
+          <Route path="discounts" element={<AdminDiscounts />} />
           <Route path="money" element={<AdminMoney />} />
           <Route path="requests" element={<AdminRequests />} />
           <Route path="content" element={<Navigate to="../dashboard" replace />} />
@@ -110,9 +120,11 @@ export default function App() {
       <ButtonPopNavBridge />
       <PublicDataProvider>
         <CartProvider>
-          <AdminAuthProvider>
-            {portal ? <PortalRoutes /> : <PublicRoutes />}
-          </AdminAuthProvider>
+          <CustomerAuthProvider>
+            <AdminAuthProvider>
+              {portal ? <PortalRoutes /> : <PublicRoutes />}
+            </AdminAuthProvider>
+          </CustomerAuthProvider>
         </CartProvider>
       </PublicDataProvider>
     </BrowserRouter>

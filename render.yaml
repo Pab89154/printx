@@ -41,3 +41,10 @@ services:
         value: hello@printx.pw
       - key: PRINTX_MAIL_FROM
         value: PrintX <hello@printx.pw>
+      # Admin phone push (npx web-push generate-vapid-keys → paste both)
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        value: mailto:hello@printx.pw

@@ -1,20 +1,17 @@
 import { AtSign, Mail, MessageCircle } from 'lucide-react'
 import { usePublicData } from '../context/PublicDataContext'
 import { FOOTER_LINKS } from '../data/navigation'
-import { mailtoHref, PRINTX_CONTACT_EMAIL } from '../lib/mailto'
 import { onHashLinkClick } from '../lib/scroll'
 import { Logo } from './Logo'
 
 export function Footer() {
   const { data } = usePublicData()
-  const contactEmail = data?.content?.contactEmail?.trim() || PRINTX_CONTACT_EMAIL
   const contactInstagram = (data?.content?.contactInstagram || '').trim()
   const contactWhatsapp = (data?.content?.contactWhatsapp || '').trim()
-  const emailDraftHref = mailtoHref(contactEmail, { subject: 'Hello PrintX' })
   const hasStands = (data?.stands?.length ?? 0) > 0
   const links = FOOTER_LINKS.filter((link) => link.href !== '#stands' || hasStands)
 
-  // Always show Instagram, WhatsApp, and Email — URLs come from site content settings
+  // Contact uses the on-site form → portal inbox (no mailto / mail app).
   const socialLinks = [
     {
       label: 'Instagram',
@@ -27,8 +24,8 @@ export function Footer() {
       Icon: MessageCircle,
     },
     {
-      label: 'Email',
-      href: emailDraftHref,
+      label: 'Message',
+      href: '#contact',
       Icon: Mail,
     },
   ]
@@ -75,8 +72,12 @@ export function Footer() {
             <ul className="space-y-2.5 text-sm text-slate-400">
               <li>Dallas–Fort Worth, TX</li>
               <li>
-                <a href={emailDraftHref} className="transition-colors hover:text-cyan">
-                  {contactEmail}
+                <a
+                  href="#contact"
+                  className="transition-colors hover:text-cyan"
+                  onClick={(e) => onHashLinkClick(e, '#contact')}
+                >
+                  Contact form
                 </a>
               </li>
             </ul>
@@ -88,7 +89,7 @@ export function Footer() {
             </h3>
             <div className="flex gap-3">
               {socialLinks.map(({ label, href, Icon }) => {
-                const isMail = Boolean(href?.startsWith('mailto:'))
+                const isHash = Boolean(href?.startsWith('#'))
                 const enabled = Boolean(href)
                 const className =
                   'flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 text-slate-400 transition-all hover:border-cyan/50 hover:bg-cyan/10 hover:text-cyan'
@@ -110,10 +111,11 @@ export function Footer() {
                   <a
                     key={label}
                     href={href}
-                    target={isMail ? undefined : '_blank'}
-                    rel={isMail ? undefined : 'noopener noreferrer'}
+                    target={isHash ? undefined : '_blank'}
+                    rel={isHash ? undefined : 'noopener noreferrer'}
                     aria-label={label}
                     className={className}
+                    onClick={isHash ? (e) => onHashLinkClick(e, href!) : undefined}
                   >
                     <Icon size={18} />
                   </a>

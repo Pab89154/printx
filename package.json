@@ -35,7 +35,8 @@
     "three": "^0.186.1",
     "tsx": "^4.20.3",
     "typescript": "~5.7.3",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "web-push": "^3.6.7"
   },
   "allowScripts": {
     "esbuild@0.25.12": true,
@@ -44,6 +45,7 @@
   "devDependencies": {
     "@types/nspell": "^2.1.6",
     "@types/pg": "^8.23.1",
-    "@types/three": "^0.186.0"
+    "@types/three": "^0.186.0",
+    "@types/web-push": "^3.6.4"
   }
 }
