@@ -379,7 +379,7 @@ export function AdminOrders() {
                           onClick={() => {
                             setGcodeBusyId(item.id)
                             setError(
-                              'Preparing G-code for the claimed printer. Re-slice can take 2–3 minutes — leave this tab open.',
+                              'Preparing G-code in the background (2–3 min). Leave this tab open — the file will download when ready.',
                             )
                             void api.catalog.orders
                               .downloadGcode(item.id)

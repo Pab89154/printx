@@ -457,14 +457,47 @@ async function saveDesignPrinterQuote(
   designRow.gcode_paths_json = JSON.stringify(gcodePaths)
 }
 
+type GcodePrepJob = {
+  status: 'running' | 'ready' | 'error'
+  error?: string
+  updatedAt: number
+}
+
+/** Background prepare jobs — avoids HTTP timeouts while Cloud Slicer re-slices. */
+const orderGcodeJobs = new Map<string, GcodePrepJob>()
+
+async function peekStoredOrderItemGcode(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<{ buffer: Buffer; filename: string } | null> {
+  const item = await db.get<Record<string, unknown>>('SELECT * FROM order_items WHERE id = ?', itemId)
+  if (!item) return null
+  const printerId = String(item.assigned_printer_id || '').trim()
+  if (!printerId) return null
+  const designId = String(item.design_id || '')
+  const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+  if (!designRow) return null
+  const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
+  const storedGcode = gcodePaths[printerId] || ''
+  if (!storedGcode) return null
+  const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
+  const safeName = `printx-${sku}-${printerId}.gcode`
+  const local = await loadStoredGcode(storedGcode)
+  if (!local) return null
+  return { buffer: local.buffer, filename: safeName }
+}
+
 /**
- * Download G-code for the claimed printer only (never all printers).
- * Re-slices that printer if the stored quote’s output was cleaned up.
+ * Build G-code for the claimed printer only and store it on PrintX.
+ * Safe to run in a background job (can take several minutes).
  */
-async function downloadOrderItemGcode(
+async function ensureOrderItemGcode(
   db: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
 ): Promise<{ buffer: Buffer; filename: string }> {
+  const existing = await peekStoredOrderItemGcode(db, itemId)
+  if (existing) return existing
+
   const item = await db.get<Record<string, unknown>>('SELECT * FROM order_items WHERE id = ?', itemId)
   if (!item) throw new Error('Order item not found.')
   const printerId = String(item.assigned_printer_id || '').trim()
@@ -475,9 +508,7 @@ async function downloadOrderItemGcode(
   if (!designRow) throw new Error('Design not found for this order item.')
 
   const fileIds = parseDesignIdMap(designRow.file_ids_json)
-  const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
   const fileId = fileIds[printerId] || ''
-  const storedGcode = gcodePaths[printerId] || ''
 
   const owners = await loadPrinterOwnerCreds(db)
   const owner = owners.find((o) => o.printer_id === printerId)
@@ -493,12 +524,6 @@ async function downloadOrderItemGcode(
   const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
   const safeName = `printx-${sku}-${printerId}.gcode`
 
-  // Prefer G-code PrintX already captured (Cloud Slicer discards output by default).
-  if (storedGcode) {
-    const local = await loadStoredGcode(storedGcode)
-    if (local) return { buffer: local.buffer, filename: safeName }
-  }
-
   async function persistCaptured(result: {
     buffer: Buffer
     filename: string
@@ -507,32 +532,30 @@ async function downloadOrderItemGcode(
     grams: number
     hours: number
   }) {
-    let gcodePath = ''
+    // Always return the file to the caller even if saving metadata fails.
     try {
-      gcodePath = await storeGcodeBuffer(result.buffer, {
+      const gcodePath = await storeGcodeBuffer(result.buffer, {
         hint: `${sku}-${printerId}`,
+      })
+      await saveDesignPrinterQuote(db, designId, designRow, printerId, {
+        ...result,
+        gcodePath,
       })
     } catch (err) {
       console.warn('[gcode] persist failed:', err instanceof Error ? err.message : err)
     }
-    await saveDesignPrinterQuote(db, designId, designRow, printerId, {
-      ...result,
-      gcodePath: gcodePath || undefined,
-    })
     return { buffer: result.buffer, filename: result.filename || safeName }
   }
 
-  // Re-quote claimed printer only and capture G-code immediately.
+  const errors: string[] = []
+
   if (fileId) {
     try {
       return await persistCaptured(await requoteFileAndDownloadGcode(creds, fileId))
     } catch (err) {
-      if (!isGcodeOutputMissing(err)) {
-        console.warn(
-          '[gcode] requote existing file failed, will re-upload:',
-          err instanceof Error ? err.message : err,
-        )
-      }
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(`Re-quote: ${msg}`)
+      console.warn('[gcode] requote existing file failed, will re-upload:', msg)
     }
   }
 
@@ -543,11 +566,30 @@ async function downloadOrderItemGcode(
   try {
     return await persistCaptured(await quoteAndDownloadGcode(creds, resolved.path))
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    errors.push(`Re-upload: ${msg}`)
     if (isGcodeOutputMissing(err)) throw new Error(GCODE_SAVE_HINT)
-    throw err
+    throw new Error(errors.filter(Boolean).join(' · ') || msg)
   } finally {
     resolved.cleanup?.()
   }
+}
+
+function startOrderGcodePrep(itemId: string) {
+  const current = orderGcodeJobs.get(itemId)
+  if (current?.status === 'running') return
+  orderGcodeJobs.set(itemId, { status: 'running', updatedAt: Date.now() })
+  void (async () => {
+    try {
+      const db = await getDb()
+      await ensureOrderItemGcode(db, itemId)
+      orderGcodeJobs.set(itemId, { status: 'ready', updatedAt: Date.now() })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'G-code prepare failed'
+      console.error('[gcode] prepare failed', itemId, message)
+      orderGcodeJobs.set(itemId, { status: 'error', error: message, updatedAt: Date.now() })
+    }
+  })()
 }
 
 const GRAMS_COLUMN: Record<string, string> = {
@@ -2360,6 +2402,64 @@ export async function handleCatalogApi(
     return true
   }
 
+  const orderItemGcodeStatusMatch = /^\/api\/admin\/order-items\/([^/]+)\/gcode\/status$/.exec(urlPath)
+  if (orderItemGcodeStatusMatch && method === 'GET') {
+    const itemId = orderItemGcodeStatusMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const stored = await peekStoredOrderItemGcode(db, itemId)
+    if (stored) {
+      send(res, 200, { status: 'ready' as const })
+      return true
+    }
+    const job = orderGcodeJobs.get(itemId)
+    if (job?.status === 'running') {
+      send(res, 200, { status: 'running' as const })
+      return true
+    }
+    if (job?.status === 'error') {
+      send(res, 200, { status: 'error' as const, error: job.error || 'G-code prepare failed' })
+      return true
+    }
+    send(res, 200, { status: 'idle' as const })
+    return true
+  }
+
+  const orderItemGcodePrepareMatch = /^\/api\/admin\/order-items\/([^/]+)\/gcode\/prepare$/.exec(
+    urlPath,
+  )
+  if (orderItemGcodePrepareMatch && method === 'POST') {
+    const itemId = orderItemGcodePrepareMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const stored = await peekStoredOrderItemGcode(db, itemId)
+    if (stored) {
+      send(res, 200, { status: 'ready' as const })
+      return true
+    }
+    const item = await db.get<{ assigned_printer_id: string | null }>(
+      'SELECT assigned_printer_id FROM order_items WHERE id = ?',
+      itemId,
+    )
+    if (!item) {
+      send(res, 404, { error: 'Order item not found' })
+      return true
+    }
+    if (!String(item.assigned_printer_id || '').trim()) {
+      send(res, 400, { error: 'Claim this item with a printer before downloading G-code.' })
+      return true
+    }
+    startOrderGcodePrep(itemId)
+    send(res, 200, { status: 'running' as const })
+    return true
+  }
+
   const orderItemGcodeMatch = /^\/api\/admin\/order-items\/([^/]+)\/gcode$/.exec(urlPath)
   if (orderItemGcodeMatch && method === 'GET') {
     const itemId = orderItemGcodeMatch[1]!
@@ -2369,12 +2469,28 @@ export async function handleCatalogApi(
       return true
     }
     try {
-      const { buffer, filename } = await downloadOrderItemGcode(db, itemId)
+      // Fast path only — slicing runs via /gcode/prepare so proxies do not time out.
+      const stored = await peekStoredOrderItemGcode(db, itemId)
+      if (!stored) {
+        const job = orderGcodeJobs.get(itemId)
+        if (job?.status === 'error') {
+          send(res, 400, { error: job.error || 'G-code prepare failed' })
+          return true
+        }
+        send(res, 409, {
+          error: 'G-code is still preparing. Wait a moment and try again.',
+          code: 'NOT_READY',
+        })
+        return true
+      }
       res.statusCode = 200
       res.setHeader('Content-Type', 'application/octet-stream')
-      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '')}"`)
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${stored.filename.replace(/"/g, '')}"`,
+      )
       res.setHeader('Cache-Control', 'private, no-store')
-      res.end(buffer)
+      res.end(stored.buffer)
     } catch (err) {
       send(res, 400, { error: err instanceof Error ? err.message : 'G-code download failed' })
     }

@@ -350,12 +350,31 @@ export const api = {
           method: 'POST',
           body: JSON.stringify(body),
         }),
-      downloadGcode: (itemId: string) =>
-        downloadAuthFile(
-          `/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`,
-          `printx-${itemId.slice(0, 8)}.gcode`,
-          'G-code download failed',
-        ),
+      downloadGcode: async (itemId: string) => {
+        const base = `/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`
+        type PrepStatus = { status: 'idle' | 'running' | 'ready' | 'error'; error?: string }
+        let st = await request<PrepStatus>(`${base}/status`)
+        if (st.status !== 'ready') {
+          // idle / error / running — start (or join) a background prepare job.
+          if (st.status !== 'running') {
+            st = await request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' })
+          }
+          const deadline = Date.now() + 280_000
+          while (Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 2000))
+            st = await request<PrepStatus>(`${base}/status`)
+            if (st.status === 'ready') break
+            if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
+            if (st.status === 'idle') {
+              st = await request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' })
+            }
+          }
+          if (st.status !== 'ready') {
+            throw new Error('Timed out preparing G-code. Try Download again in a minute.')
+          }
+        }
+        await downloadAuthFile(base, `printx-${itemId.slice(0, 8)}.gcode`, 'G-code download failed')
+      },
     },
     money: {
       get: (month?: string) => {
