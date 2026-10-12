@@ -169,6 +169,8 @@ export const api = {
           method: 'POST',
           body: '{}',
         }),
+      delete: (orderId: string) =>
+        request<{ ok: true; id: string }>(`/api/admin/orders/${orderId}`, { method: 'DELETE' }),
       downloadGcode: async (itemId: string) => {
         const res = await fetch(`/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`, {
           credentials: 'include',

@@ -10,6 +10,7 @@ export function AdminOrders() {
   const [error, setError] = useState('')
   const [claimPrinter, setClaimPrinter] = useState<Record<string, string>>({})
   const [refundBusyId, setRefundBusyId] = useState<string | null>(null)
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null)
   const [gcodeBusyId, setGcodeBusyId] = useState<string | null>(null)
 
   async function load() {
@@ -32,10 +33,10 @@ export function AdminOrders() {
   }, [])
 
   async function refundOrder(order: OrderDto) {
-    const label = order.customerName || order.customerEmail || 'this customer'
+    const who = order.customerName || order.customerEmail || 'this customer'
     if (
       !window.confirm(
-        `Refund $${order.totalUsd.toFixed(2)} to ${label}? Money returns through Stripe to their original payment method.`,
+        `Refund $${order.totalUsd.toFixed(2)} to ${who}? Money returns through Stripe to their original payment method.`,
       )
     ) {
       return
@@ -49,6 +50,25 @@ export function AdminOrders() {
       setError(e instanceof Error ? e.message : 'Refund failed')
     } finally {
       setRefundBusyId(null)
+    }
+  }
+
+  async function deleteOrder(order: OrderDto) {
+    const who = order.customerName || order.customerEmail || 'this order'
+    const warn =
+      order.status === 'refunded'
+        ? `Delete order for ${who}? This removes it from the portal permanently.`
+        : `Delete order for ${who} ($${order.totalUsd.toFixed(2)}, ${order.status})? This does not refund Stripe — refund first if needed. Removes the order from the portal permanently.`
+    if (!window.confirm(warn)) return
+    setDeleteBusyId(order.id)
+    setError('')
+    try {
+      await api.catalog.orders.delete(order.id)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Delete failed')
+    } finally {
+      setDeleteBusyId(null)
     }
   }
 
@@ -83,7 +103,10 @@ export function AdminOrders() {
                   : ''}{' '}
                 · paid {order.paidAt ? new Date(order.paidAt).toLocaleString() : '—'}
               </p>
-              {(order.shippingLine1 || order.shippingMethod) && (
+              {(order.shippingName ||
+                order.shippingLine1 ||
+                order.shippingMethod ||
+                order.shippingUsd > 0) && (
                 <div className="mt-2 rounded-lg bg-surface px-3 py-2 text-xs text-navy">
                   <p className="font-semibold">Ship to</p>
                   {order.shippingName ? <p>{order.shippingName}</p> : null}
@@ -96,6 +119,9 @@ export function AdminOrders() {
                     </p>
                   )}
                   {order.shippingCountry ? <p>{order.shippingCountry}</p> : null}
+                  {!order.shippingLine1 && !order.shippingCity && !order.shippingPostal ? (
+                    <p className="text-amber-700">Street address not saved yet — reopen Orders to refresh from Stripe.</p>
+                  ) : null}
                   {(order.shippingMethod || order.shippingUsd > 0) && (
                     <p className="mt-1 text-muted">
                       {order.shippingMethod || 'Shipping'}
@@ -105,16 +131,26 @@ export function AdminOrders() {
                 </div>
               )}
             </div>
-            {order.status !== 'refunded' && (
+            <div className="flex flex-wrap items-center gap-2">
+              {order.status !== 'refunded' && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-compact text-red-600"
+                  disabled={refundBusyId === order.id || deleteBusyId === order.id}
+                  onClick={() => void refundOrder(order)}
+                >
+                  {refundBusyId === order.id ? 'Refunding…' : 'Refund'}
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-ghost btn-compact text-red-600"
-                disabled={refundBusyId === order.id}
-                onClick={() => void refundOrder(order)}
+                disabled={deleteBusyId === order.id || refundBusyId === order.id}
+                onClick={() => void deleteOrder(order)}
               >
-                {refundBusyId === order.id ? 'Refunding…' : 'Refund'}
+                {deleteBusyId === order.id ? 'Deleting…' : 'Delete'}
               </button>
-            )}
+            </div>
           </div>
 
           <div className="mt-4 space-y-3">

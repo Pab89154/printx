@@ -75,9 +75,33 @@ export type ParsedCheckoutShipping = {
   amountTotalUsd: number | null
 }
 
+type ShippingDetailsLike = {
+  name?: string | null
+  address?: {
+    line1?: string | null
+    line2?: string | null
+    city?: string | null
+    state?: string | null
+    postal_code?: string | null
+    country?: string | null
+  } | null
+}
+
+/** Stripe 2025+ moved shipping_details under collected_information. */
+function sessionShippingDetails(session: Stripe.Checkout.Session): ShippingDetailsLike | null {
+  const raw = session as Stripe.Checkout.Session & {
+    collected_information?: { shipping_details?: ShippingDetailsLike | null } | null
+  }
+  return (
+    raw.collected_information?.shipping_details ||
+    session.shipping_details ||
+    null
+  )
+}
+
 /** Pull email, ship-to name/address, and chosen shipping rate from a completed Checkout Session. */
 export function parseCheckoutShipping(session: Stripe.Checkout.Session): ParsedCheckoutShipping {
-  const details = session.shipping_details
+  const details = sessionShippingDetails(session)
   const addr = details?.address
   const shippingName = details?.name?.trim() || ''
   const customerEmail =

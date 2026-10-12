@@ -4,23 +4,13 @@ import tailwindcss from '@tailwindcss/vite'
 import type { Plugin } from 'vite'
 
 export default defineConfig(async ({ mode, command }) => {
+  // Load full .env into process.env for the API plugin (Stripe, Resend, etc.).
+  // A fixed allow-list previously omitted STRIPE_* and broke portal refunds locally.
   const env = loadEnv(mode, process.cwd(), '')
-  for (const key of [
-    'PRINTX_ADMIN_EMAIL',
-    'PRINTX_ADMIN_PASSWORD',
-    'PRINTX_SESSION_SECRET',
-    'DATABASE_URL',
-    'SUPABASE_URL',
-    'SUPABASE_ANON_KEY',
-    'SUPABASE_SERVICE_ROLE_KEY',
-    'SUPABASE_SECRET_KEY',
-    'SUPABASE_STORAGE_BUCKET',
-    'PRINTX_DATA_DIR',
-    'RESEND_API_KEY',
-    'PRINTX_NOTIFY_EMAIL',
-    'PRINTX_MAIL_FROM',
-  ] as const) {
-    if (env[key]) process.env[key] = env[key]
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && value !== '' && process.env[key] === undefined) {
+      process.env[key] = value
+    }
   }
 
   const plugins: Plugin[] = [react(), tailwindcss()]

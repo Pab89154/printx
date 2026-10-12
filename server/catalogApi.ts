@@ -1424,6 +1424,68 @@ export async function handleCatalogApi(
   }
 
   // ----- Orders -----
+  async function backfillOrderShippingFromStripe(
+    row: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (String(row.shipping_line1 || '').trim()) return row
+    const sessionId = String(row.stripe_session_id || '').trim()
+    if (!sessionId) return row
+    const stripe = stripeClient()
+    if (!stripe) return row
+    try {
+      const session = await stripe.checkout.sessions.retrieve(sessionId)
+      const ship = parseCheckoutShipping(session)
+      if (!ship.shippingLine1 && !ship.shippingCity && !ship.shippingPostal) return row
+      const shippingMethod = await resolveShippingMethodName(stripe, session, ship.shippingMethod)
+      const now = new Date().toISOString()
+      await db.run(
+        `UPDATE orders SET
+           shipping_name = CASE WHEN ? != '' THEN ? ELSE shipping_name END,
+           shipping_line1 = CASE WHEN ? != '' THEN ? ELSE shipping_line1 END,
+           shipping_line2 = CASE WHEN ? != '' THEN ? ELSE shipping_line2 END,
+           shipping_city = CASE WHEN ? != '' THEN ? ELSE shipping_city END,
+           shipping_state = CASE WHEN ? != '' THEN ? ELSE shipping_state END,
+           shipping_postal = CASE WHEN ? != '' THEN ? ELSE shipping_postal END,
+           shipping_country = CASE WHEN ? != '' THEN ? ELSE shipping_country END,
+           shipping_method = CASE WHEN ? != '' THEN ? ELSE shipping_method END,
+           shipping_usd = CASE WHEN ? > 0 THEN ? ELSE shipping_usd END,
+           updated_at = ?
+         WHERE id = ?`,
+        ship.shippingName,
+        ship.shippingName,
+        ship.shippingLine1,
+        ship.shippingLine1,
+        ship.shippingLine2,
+        ship.shippingLine2,
+        ship.shippingCity,
+        ship.shippingCity,
+        ship.shippingState,
+        ship.shippingState,
+        ship.shippingPostal,
+        ship.shippingPostal,
+        ship.shippingCountry,
+        ship.shippingCountry,
+        shippingMethod,
+        shippingMethod,
+        ship.shippingUsd,
+        ship.shippingUsd,
+        now,
+        String(row.id),
+      )
+      return (
+        (await db.get<Record<string, unknown>>('SELECT * FROM orders WHERE id = ?', String(row.id))) ||
+        row
+      )
+    } catch (err) {
+      console.warn(
+        '[printx] Could not backfill shipping from Stripe session',
+        sessionId,
+        err instanceof Error ? err.message : err,
+      )
+      return row
+    }
+  }
+
   if (urlPath === '/api/admin/orders' && method === 'GET') {
     const admin = await requireAdmin(req)
     if (!admin || !adminCan(admin, 'orders')) {
@@ -1435,7 +1497,8 @@ export async function handleCatalogApi(
        ORDER BY COALESCE(paid_at, created_at) DESC LIMIT 200`,
     )
     const orders = []
-    for (const row of rows) {
+    for (const raw of rows) {
+      const row = await backfillOrderShippingFromStripe(raw)
       const order = rowToOrder(row)
       const items = await db.all<Record<string, unknown>>(
         `SELECT oi.*, d.name as design_name
@@ -1453,6 +1516,28 @@ export async function handleCatalogApi(
     return true
   }
 
+  const orderDeleteMatch = /^\/api\/admin\/orders\/([^/]+)$/.exec(urlPath)
+  if (orderDeleteMatch && method === 'DELETE') {
+    const orderId = orderDeleteMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const order = await db.get<{ id: string; status: string }>(
+      'SELECT id, status FROM orders WHERE id = ?',
+      orderId,
+    )
+    if (!order) {
+      send(res, 404, { error: 'Order not found' })
+      return true
+    }
+    // Ledger rows cascade via order_items; settlements are month snapshots and stay.
+    await db.run('DELETE FROM orders WHERE id = ?', orderId)
+    send(res, 200, { ok: true, id: orderId })
+    return true
+  }
+
   const orderRefundMatch = /^\/api\/admin\/orders\/([^/]+)\/refund$/.exec(urlPath)
   if (orderRefundMatch && method === 'POST') {
     const orderId = orderRefundMatch[1]!
@@ -1463,7 +1548,10 @@ export async function handleCatalogApi(
     }
     const stripe = stripeClient()
     if (!stripe) {
-      send(res, 503, { error: 'Stripe is not configured (STRIPE_SECRET_KEY).' })
+      send(res, 503, {
+        error:
+          'Stripe is not configured. Set STRIPE_SECRET_KEY in the server environment (Render Runtime, or local .env) and restart.',
+      })
       return true
     }
     const order = await db.get<Record<string, unknown>>('SELECT * FROM orders WHERE id = ?', orderId)
@@ -1473,7 +1561,14 @@ export async function handleCatalogApi(
     }
     const status = String(order.status || '')
     if (status === 'refunded') {
-      send(res, 200, rowToOrder(order))
+      const items = await db.all<Record<string, unknown>>(
+        `SELECT oi.*, d.name as design_name FROM order_items oi
+         JOIN designs d ON d.id = oi.design_id WHERE oi.order_id = ? ORDER BY oi.sku ASC`,
+        orderId,
+      )
+      const result = rowToOrder(order)
+      result.items = items.map(rowToOrderItem)
+      send(res, 200, result)
       return true
     }
     if (!['paid', 'in_production', 'ready', 'fulfilled'].includes(status)) {
@@ -1481,42 +1576,87 @@ export async function handleCatalogApi(
       return true
     }
 
+    const stripeErrText = (err: unknown): string => {
+      if (!err || typeof err !== 'object') return String(err)
+      const e = err as {
+        message?: string
+        code?: string
+        raw?: { message?: string; code?: string; decline_code?: string }
+      }
+      return e.raw?.message || e.message || String(err)
+    }
+    const isAlreadyRefunded = (err: unknown): boolean => {
+      const e = err as { code?: string; raw?: { code?: string } }
+      const code = e.code || e.raw?.code || ''
+      if (code === 'charge_already_refunded') return true
+      return /already been refunded|has already been refunded|charge.*?fully refunded/i.test(
+        stripeErrText(err),
+      )
+    }
+
     let paymentIntent =
       typeof order.stripe_payment_intent === 'string' && order.stripe_payment_intent.trim()
         ? order.stripe_payment_intent.trim()
         : ''
-    if (!paymentIntent && typeof order.stripe_session_id === 'string' && order.stripe_session_id.trim()) {
+    const sessionId =
+      typeof order.stripe_session_id === 'string' ? order.stripe_session_id.trim() : ''
+
+    // Prefer live session lookup so we always have the current PaymentIntent id.
+    if (sessionId) {
       try {
-        const session = await stripe.checkout.sessions.retrieve(order.stripe_session_id.trim())
-        if (typeof session.payment_intent === 'string') {
+        const session = await stripe.checkout.sessions.retrieve(sessionId)
+        if (typeof session.payment_intent === 'string' && session.payment_intent) {
           paymentIntent = session.payment_intent
-        } else if (session.payment_intent && typeof session.payment_intent === 'object') {
-          paymentIntent = session.payment_intent.id
+        } else if (
+          session.payment_intent &&
+          typeof session.payment_intent === 'object' &&
+          'id' in session.payment_intent
+        ) {
+          paymentIntent = String(session.payment_intent.id)
         }
       } catch (err) {
-        send(res, 400, {
-          error: err instanceof Error ? err.message : 'Could not load Stripe session for refund.',
-        })
-        return true
+        if (!paymentIntent) {
+          send(res, 400, {
+            error: `Could not load Stripe Checkout session: ${stripeErrText(err)}`,
+          })
+          return true
+        }
+        console.warn('[printx] refund: session retrieve failed, using stored payment_intent', err)
       }
     }
+
     if (!paymentIntent) {
-      send(res, 400, { error: 'No Stripe payment found for this order.' })
+      send(res, 400, {
+        error:
+          'No Stripe payment found for this order. The Checkout webhook may not have recorded payment_intent — check STRIPE_WEBHOOK_SECRET and checkout.session.completed.',
+      })
       return true
     }
 
+    let alreadyRefundedOnStripe = false
     try {
-      await stripe.refunds.create({
-        payment_intent: paymentIntent,
-        reason: 'requested_by_customer',
+      const pi = await stripe.paymentIntents.retrieve(paymentIntent, {
+        expand: ['latest_charge'],
       })
+      const charge = pi.latest_charge
+      const chargeFullyRefunded =
+        charge && typeof charge === 'object' && Boolean(charge.refunded)
+
+      if (chargeFullyRefunded) {
+        alreadyRefundedOnStripe = true
+      } else {
+        // Full refund of the Checkout total (items + shipping).
+        await stripe.refunds.create({
+          payment_intent: paymentIntent,
+          reason: 'requested_by_customer',
+        })
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Refund failed'
-      // Idempotent: if Stripe already refunded, still mark local order.
-      const already =
-        /already been refunded|has already been refunded|charge.*?refunded/i.test(msg)
-      if (!already) {
-        send(res, 400, { error: msg })
+      if (isAlreadyRefunded(err)) {
+        alreadyRefundedOnStripe = true
+      } else {
+        console.error('[printx] Stripe refund failed', paymentIntent, err)
+        send(res, 400, { error: stripeErrText(err) || 'Refund failed' })
         return true
       }
     }
@@ -1525,7 +1665,7 @@ export async function handleCatalogApi(
     await db.run(
       `UPDATE orders SET
          status = 'refunded',
-         stripe_payment_intent = COALESCE(NULLIF(stripe_payment_intent, ''), ?),
+         stripe_payment_intent = ?,
          updated_at = ?
        WHERE id = ?`,
       paymentIntent,
@@ -1543,6 +1683,9 @@ export async function handleCatalogApi(
       orderId,
     )
     result.items = items.map(rowToOrderItem)
+    if (alreadyRefundedOnStripe) {
+      console.log('[printx] Order marked refunded; Stripe charge was already refunded', orderId)
+    }
     send(res, 200, result)
     return true
   }
