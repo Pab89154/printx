@@ -65,7 +65,6 @@ import {
   clearCustomRequestSliceArtifacts,
   downloadCustomRequestGcode,
   mapCustomRequestRow,
-  quoteCustomRequest,
 } from './customRequestSlice.ts'
 import { publicOrigin, stripeClient } from './catalogApi.ts'
 import {
@@ -595,14 +594,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         now,
         now,
       )
+      const { scheduleCustomRequestQuote } = await import('./catalogApi.ts')
+      scheduleCustomRequestQuote(id)
       void (async () => {
-        const bg = await getDb()
         try {
-          await quoteCustomRequest(bg, id)
-        } catch (err) {
-          console.error('[custom-request] background quote failed:', err)
-        }
-        try {
+          const bg = await getDb()
           await notifyAdminsWithPermission(bg, 'requests', {
             title: 'New custom print estimate',
             body: 'A customer uploaded a model for pricing.',

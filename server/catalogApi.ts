@@ -835,6 +835,14 @@ export function scheduleDesignSlice(designId: string, stlPath: string): void {
   })
 }
 
+export function scheduleCustomRequestQuote(requestId: string): void {
+  enqueueQuoteJob(`custom-quote:${requestId}`, async () => {
+    const { quoteCustomRequest } = await import('./customRequestSlice.ts')
+    const bg = await getDb()
+    await quoteCustomRequest(bg, requestId)
+  })
+}
+
 function send(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json')
