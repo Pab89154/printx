@@ -53,9 +53,33 @@ export function AdminOrders() {
                 {order.customerName || 'Customer'} · {order.customerEmail}
               </p>
               <p className="text-xs text-muted">
-                {order.status} · ${order.totalUsd.toFixed(2)} · paid{' '}
-                {order.paidAt ? new Date(order.paidAt).toLocaleString() : '—'}
+                {order.status} · ${order.totalUsd.toFixed(2)}
+                {order.subtotalUsd > 0 && order.shippingUsd > 0
+                  ? ` (items $${order.subtotalUsd.toFixed(2)} + ship $${order.shippingUsd.toFixed(2)})`
+                  : ''}{' '}
+                · paid {order.paidAt ? new Date(order.paidAt).toLocaleString() : '—'}
               </p>
+              {(order.shippingLine1 || order.shippingMethod) && (
+                <div className="mt-2 rounded-lg bg-surface px-3 py-2 text-xs text-navy">
+                  <p className="font-semibold">Ship to</p>
+                  {order.shippingName ? <p>{order.shippingName}</p> : null}
+                  {order.shippingLine1 ? <p>{order.shippingLine1}</p> : null}
+                  {order.shippingLine2 ? <p>{order.shippingLine2}</p> : null}
+                  {(order.shippingCity || order.shippingState || order.shippingPostal) && (
+                    <p>
+                      {[order.shippingCity, order.shippingState].filter(Boolean).join(', ')}
+                      {order.shippingPostal ? ` ${order.shippingPostal}` : ''}
+                    </p>
+                  )}
+                  {order.shippingCountry ? <p>{order.shippingCountry}</p> : null}
+                  {(order.shippingMethod || order.shippingUsd > 0) && (
+                    <p className="mt-1 text-muted">
+                      {order.shippingMethod || 'Shipping'}
+                      {order.shippingUsd > 0 ? ` · $${order.shippingUsd.toFixed(2)}` : ''}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

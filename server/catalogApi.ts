@@ -39,6 +39,11 @@ import {
 } from '../shared/modelFormats.ts'
 import { roundMoney } from './pricing.ts'
 import {
+  parseCheckoutShipping,
+  resolveShippingMethodName,
+  stripeCheckoutShippingFields,
+} from './stripeShipping.ts'
+import {
   cloudSlicerConfigured,
   quoteStlForPrinter,
   type CloudSlicerCreds,
@@ -718,6 +723,7 @@ export async function handleCatalogApi(
       cancel_url: cancelUrl,
       client_reference_id: orderId,
       metadata: { orderId },
+      ...stripeCheckoutShippingFields(),
       // Ad-hoc price_data only — catalog lives in Supabase, never Stripe Products.
       line_items: lineItems.map((i) => ({
         quantity: i.qty,
@@ -769,11 +775,14 @@ export async function handleCatalogApi(
       const now = new Date().toISOString()
       const paymentIntent =
         typeof session.payment_intent === 'string' ? session.payment_intent : null
-      const stripeEmail =
-        session.customer_details?.email?.trim() ||
-        session.customer_email?.trim() ||
-        ''
-      const stripeName = session.customer_details?.name?.trim() || ''
+      const ship = parseCheckoutShipping(session)
+      const shippingMethod = await resolveShippingMethodName(
+        stripe,
+        session,
+        ship.shippingMethod,
+      )
+      const stripeEmail = ship.customerEmail
+      const stripeName = ship.customerName
       const customRequestId = session.metadata?.customRequestId?.trim()
       if (customRequestId) {
         await db.run(
@@ -781,6 +790,15 @@ export async function handleCatalogApi(
             status = 'new',
             name = CASE WHEN ? != '' THEN ? ELSE name END,
             email = CASE WHEN ? != '' THEN ? ELSE email END,
+            shipping_name = ?,
+            shipping_line1 = ?,
+            shipping_line2 = ?,
+            shipping_city = ?,
+            shipping_state = ?,
+            shipping_postal = ?,
+            shipping_country = ?,
+            shipping_method = ?,
+            shipping_usd = ?,
             stripe_session_id = ?,
             paid_at = ?,
             updated_at = ?
@@ -789,6 +807,15 @@ export async function handleCatalogApi(
           stripeName,
           stripeEmail,
           stripeEmail,
+          ship.shippingName || stripeName,
+          ship.shippingLine1,
+          ship.shippingLine2,
+          ship.shippingCity,
+          ship.shippingState,
+          ship.shippingPostal,
+          ship.shippingCountry,
+          shippingMethod,
+          ship.shippingUsd,
           session.id,
           now,
           now,
@@ -802,6 +829,16 @@ export async function handleCatalogApi(
               status = 'paid',
               customer_name = CASE WHEN ? != '' THEN ? ELSE customer_name END,
               customer_email = CASE WHEN ? != '' THEN ? ELSE customer_email END,
+              shipping_name = ?,
+              shipping_line1 = ?,
+              shipping_line2 = ?,
+              shipping_city = ?,
+              shipping_state = ?,
+              shipping_postal = ?,
+              shipping_country = ?,
+              shipping_method = ?,
+              shipping_usd = ?,
+              total_usd = COALESCE(?, total_usd),
               stripe_payment_intent = ?,
               paid_at = ?,
               updated_at = ?
@@ -810,6 +847,16 @@ export async function handleCatalogApi(
             stripeName,
             stripeEmail,
             stripeEmail,
+            ship.shippingName || stripeName,
+            ship.shippingLine1,
+            ship.shippingLine2,
+            ship.shippingCity,
+            ship.shippingState,
+            ship.shippingPostal,
+            ship.shippingCountry,
+            shippingMethod,
+            ship.shippingUsd,
+            ship.amountTotalUsd,
             paymentIntent,
             now,
             now,

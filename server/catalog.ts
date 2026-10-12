@@ -97,6 +97,15 @@ export type Order = {
   subtotalUsd: number
   totalUsd: number
   currency: string
+  shippingName: string
+  shippingLine1: string
+  shippingLine2: string
+  shippingCity: string
+  shippingState: string
+  shippingPostal: string
+  shippingCountry: string
+  shippingMethod: string
+  shippingUsd: number
   createdAt: string
   updatedAt: string
   paidAt: string | null
@@ -166,6 +175,15 @@ export function rowToOrder(row: Record<string, unknown>): Order {
     subtotalUsd: Number(row.subtotal_usd) || 0,
     totalUsd: Number(row.total_usd) || 0,
     currency: (row.currency as string) || 'usd',
+    shippingName: (row.shipping_name as string) || '',
+    shippingLine1: (row.shipping_line1 as string) || '',
+    shippingLine2: (row.shipping_line2 as string) || '',
+    shippingCity: (row.shipping_city as string) || '',
+    shippingState: (row.shipping_state as string) || '',
+    shippingPostal: (row.shipping_postal as string) || '',
+    shippingCountry: (row.shipping_country as string) || '',
+    shippingMethod: (row.shipping_method as string) || '',
+    shippingUsd: Number(row.shipping_usd) || 0,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     paidAt: (row.paid_at as string | null) ?? null,

@@ -112,6 +112,15 @@ export type OrderDto = {
   subtotalUsd: number
   totalUsd: number
   currency: string
+  shippingName: string
+  shippingLine1: string
+  shippingLine2: string
+  shippingCity: string
+  shippingState: string
+  shippingPostal: string
+  shippingCountry: string
+  shippingMethod: string
+  shippingUsd: number
   createdAt: string
   updatedAt: string
   paidAt: string | null

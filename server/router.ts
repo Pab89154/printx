@@ -60,6 +60,7 @@ import {
   quoteCustomRequest,
 } from './customRequestSlice.ts'
 import { publicOrigin, stripeClient } from './catalogApi.ts'
+import { stripeCheckoutShippingFields } from './stripeShipping.ts'
 import { roundMoney } from './pricing.ts'
 
 const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
@@ -636,12 +637,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     try {
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
-        // Stripe Checkout collects name + email.
+        // Stripe Checkout collects name + email + shipping.
         ...(email ? { customer_email: email } : {}),
         success_url: successUrl,
         cancel_url: cancelUrl,
         client_reference_id: id,
         metadata: { customRequestId: id },
+        ...stripeCheckoutShippingFields(),
         line_items: [
           {
             quantity: 1,
@@ -1131,6 +1133,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
           catalog_price_usd: mapped.catalog_price_usd,
           quoted_at: mapped.quoted_at,
           has_gcode: Object.keys(mapped.quote_ids).length > 0,
+          shipping_name: mapped.shipping_name,
+          shipping_line1: mapped.shipping_line1,
+          shipping_line2: mapped.shipping_line2,
+          shipping_city: mapped.shipping_city,
+          shipping_state: mapped.shipping_state,
+          shipping_postal: mapped.shipping_postal,
+          shipping_country: mapped.shipping_country,
+          shipping_method: mapped.shipping_method,
+          shipping_usd: mapped.shipping_usd,
           created_at: mapped.created_at,
           updated_at: mapped.updated_at,
         }

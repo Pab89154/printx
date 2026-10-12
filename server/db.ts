@@ -274,6 +274,30 @@ async function migratePrinterSettlements(database: DbApi) {
   `)
 }
 
+/** Ship-to address + flat rate chosen on Stripe Checkout (UPS counter later). */
+async function migrateCheckoutShipping(database: DbApi) {
+  const cols: [string, string][] = [
+    ['shipping_name', `TEXT NOT NULL DEFAULT ''`],
+    ['shipping_line1', `TEXT NOT NULL DEFAULT ''`],
+    ['shipping_line2', `TEXT NOT NULL DEFAULT ''`],
+    ['shipping_city', `TEXT NOT NULL DEFAULT ''`],
+    ['shipping_state', `TEXT NOT NULL DEFAULT ''`],
+    ['shipping_postal', `TEXT NOT NULL DEFAULT ''`],
+    ['shipping_country', `TEXT NOT NULL DEFAULT ''`],
+    ['shipping_method', `TEXT NOT NULL DEFAULT ''`],
+    ['shipping_usd', `REAL NOT NULL DEFAULT 0`],
+  ]
+  for (const table of ['orders', 'custom_requests'] as const) {
+    for (const [name, def] of cols) {
+      try {
+        await database.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`)
+      } catch {
+        /* column already exists */
+      }
+    }
+  }
+}
+
 /** Convert legacy emoji product icons to Lucide CDN icon names. */
 async function migrateEmojiToIcons(database: DbApi) {
   const map: Record<string, string> = {
@@ -842,6 +866,7 @@ async function initDb(): Promise<DbApi> {
   await migrateBrandGradients(database)
   await migrateDfwAreaCopy(database)
   await migratePrinterSettlements(database)
+  await migrateCheckoutShipping(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
   const { seedCatalogDefaults } = await import('./catalog.ts')

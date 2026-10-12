@@ -115,6 +115,27 @@ export function AdminRequests() {
                     {req.worst_cost_usd != null ? ` · cost $${req.worst_cost_usd.toFixed(2)}` : ''}
                   </p>
                 )}
+                {(req.shipping_line1 || req.shipping_method) && (
+                  <div className="mt-2 rounded-lg bg-surface px-3 py-2 text-xs text-navy">
+                    <p className="font-semibold">Ship to</p>
+                    {req.shipping_name ? <p>{req.shipping_name}</p> : null}
+                    {req.shipping_line1 ? <p>{req.shipping_line1}</p> : null}
+                    {req.shipping_line2 ? <p>{req.shipping_line2}</p> : null}
+                    {(req.shipping_city || req.shipping_state || req.shipping_postal) && (
+                      <p>
+                        {[req.shipping_city, req.shipping_state].filter(Boolean).join(', ')}
+                        {req.shipping_postal ? ` ${req.shipping_postal}` : ''}
+                      </p>
+                    )}
+                    {req.shipping_country ? <p>{req.shipping_country}</p> : null}
+                    {(req.shipping_method || req.shipping_usd > 0) && (
+                      <p className="mt-1 text-muted">
+                        {req.shipping_method || 'Shipping'}
+                        {req.shipping_usd > 0 ? ` · $${req.shipping_usd.toFixed(2)}` : ''}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {(req.grams_pablo_p1s != null ||
                   req.grams_court_ender != null ||
                   req.grams_josh_kobra != null) && (

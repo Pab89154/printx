@@ -102,6 +102,15 @@ export type CustomRequest = {
   catalog_price_usd: number | null
   quoted_at: string | null
   has_gcode: boolean
+  shipping_name: string
+  shipping_line1: string
+  shipping_line2: string
+  shipping_city: string
+  shipping_state: string
+  shipping_postal: string
+  shipping_country: string
+  shipping_method: string
+  shipping_usd: number
   created_at: string
   updated_at: string
 }
