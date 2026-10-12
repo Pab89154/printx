@@ -15,7 +15,9 @@ RUN chmod +x /slicer-build/scripts/install-slicer.sh \
   && PRINTX_SLICER_HOME=/opt/printx-slicer bash /slicer-build/scripts/install-slicer.sh \
   && test -x /opt/printx-slicer/AppRun
 
-FROM ubuntu:22.04
+# Runtime on 24.04 — recent Bambu Studio AppImages link libwebkit2gtk-4.1
+# (Ubuntu 22.04 only ships 4.0, which fails at CLI start).
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Node 22 + libs Bambu Studio / AppRun need for headless CLI slicing.
@@ -32,7 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxkbcommon0 \
     libdbus-1-3 \
     libstdc++6 \
-    libwebkit2gtk-4.0-37 \
+    libwebkit2gtk-4.1-0 \
+    libsoup-3.0-0 \
     libgstreamer1.0-0 \
     libgstreamer-plugins-base1.0-0 \
     libegl1 \
@@ -82,6 +85,11 @@ RUN set -e; \
   PROFILES="$(cat /etc/printx-slicer-profiles)"; \
   echo "Profiles at $PROFILES"; \
   /opt/printx-slicer/printx-slice --help >/tmp/bambu-help.txt 2>&1 || true; \
+  if grep -q 'cannot open shared object file' /tmp/bambu-help.txt; then \
+    echo "ERROR: bambu-studio missing shared libraries:"; \
+    cat /tmp/bambu-help.txt; \
+    exit 1; \
+  fi; \
   head -n 12 /tmp/bambu-help.txt
 
 EXPOSE 10000
