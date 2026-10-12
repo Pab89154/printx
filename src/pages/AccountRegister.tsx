@@ -39,7 +39,7 @@ export function AccountRegister() {
       <main className="mx-auto max-w-md px-4 py-12 sm:px-6">
         <h1 className="text-3xl font-extrabold text-navy">Create account</h1>
         <p className="mt-2 text-sm text-muted">
-          You need an account to checkout and track shipping.
+          Create an account to track orders. Guest checkout is also available from the cart.
         </p>
         <form onSubmit={(e) => void onSubmit(e)} className="mt-8 space-y-4 rounded-2xl border bg-white p-6">
           <label className="block text-sm font-medium text-navy">

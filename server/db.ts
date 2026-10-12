@@ -276,14 +276,34 @@ async function migratePrinterSettlements(database: DbApi) {
   `)
 }
 
-/** Show selected promo codes on signed-in customer accounts. */
+/** Opt-in: promo codes appear on customer accounts only when admin enables it. */
 async function migrateDiscountCustomerVisibility(database: DbApi) {
   try {
     await database.exec(
-      `ALTER TABLE discounts ADD COLUMN visible_to_customers INTEGER NOT NULL DEFAULT 1`,
+      `ALTER TABLE discounts ADD COLUMN visible_to_customers INTEGER NOT NULL DEFAULT 0`,
     )
   } catch {
     /* column already exists */
+  }
+  // One-time: earlier default was on; flip to opt-in so codes stay checkout-only
+  // until an admin checks “Show on customer account”.
+  try {
+    const flag = await database.get<{ value: string }>(
+      `SELECT value FROM website_settings WHERE key = ?`,
+      'discount_visibility_opt_in_v1',
+    )
+    if (!flag) {
+      await database.run(`UPDATE discounts SET visible_to_customers = 0`)
+      const now = new Date().toISOString()
+      await database.run(
+        `INSERT INTO website_settings (key, value, updated_at) VALUES (?, '1', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        'discount_visibility_opt_in_v1',
+        now,
+      )
+    }
+  } catch {
+    /* ignore if settings table missing mid-migrate */
   }
 }
 
@@ -387,7 +407,7 @@ async function migrateCustomerAccounts(database: DbApi) {
       stripe_coupon_id TEXT NOT NULL DEFAULT '',
       stripe_promotion_code_id TEXT NOT NULL DEFAULT '',
       active INTEGER NOT NULL DEFAULT 1,
-      visible_to_customers INTEGER NOT NULL DEFAULT 1,
+      visible_to_customers INTEGER NOT NULL DEFAULT 0,
       created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL

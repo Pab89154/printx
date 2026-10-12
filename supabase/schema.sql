@@ -318,7 +318,7 @@ create table if not exists discounts (
   stripe_coupon_id text not null default '',
   stripe_promotion_code_id text not null default '',
   active integer not null default 1,
-  visible_to_customers integer not null default 1,
+  visible_to_customers integer not null default 0,
   created_by text references users(id) on delete set null,
   created_at text not null,
   updated_at text not null

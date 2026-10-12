@@ -47,7 +47,7 @@ export function AdminDiscounts() {
   const [percentOff, setPercentOff] = useState('10')
   const [amountDollars, setAmountDollars] = useState('5')
   const [maxRedemptions, setMaxRedemptions] = useState('')
-  const [visibleToCustomers, setVisibleToCustomers] = useState(true)
+  const [visibleToCustomers, setVisibleToCustomers] = useState(false)
 
   async function load() {
     const data = await api.catalog.orders.discounts.list()
@@ -96,6 +96,37 @@ export function AdminDiscounts() {
     }
   }
 
+  async function reactivate(id: string) {
+    setError('')
+    try {
+      await api.catalog.orders.discounts.reactivate(id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Reactivate failed')
+    }
+  }
+
+  async function remove(id: string, code: string) {
+    if (!window.confirm(`Delete promo code ${code}? This cannot be undone.`)) return
+    setError('')
+    try {
+      await api.catalog.orders.discounts.remove(id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
+    }
+  }
+
+  async function toggleAccountVisibility(id: string, next: boolean) {
+    setError('')
+    try {
+      await api.catalog.orders.discounts.setVisibility(id, next)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update visibility')
+    }
+  }
+
   const usesPercent = kind === 'percent' || kind === 'percent_and_shipping'
   const usesAmount = kind === 'amount' || kind === 'amount_and_shipping'
 
@@ -104,8 +135,8 @@ export function AdminDiscounts() {
       <div>
         <h1 className="text-2xl font-bold text-navy">Discounts</h1>
         <p className="mt-1 text-sm text-muted">
-          Codes appear on Stripe Checkout. Item+shipping codes should be entered on the cart so both
-          discounts apply. Customers with accounts can also see codes marked visible.
+          Codes work on Checkout/cart. They stay hidden from customer accounts unless you check “Show
+          on customer account.” Item+shipping codes should be entered on the cart.
         </p>
       </div>
 
@@ -196,7 +227,7 @@ export function AdminDiscounts() {
             checked={visibleToCustomers}
             onChange={(e) => setVisibleToCustomers(e.target.checked)}
           />
-          Show on customer account page
+          Show on customer account page (optional — off by default)
         </label>
         <button type="submit" className="btn btn-primary" disabled={busy}>
           {busy ? 'Creating…' : 'Create in Stripe'}
@@ -222,15 +253,39 @@ export function AdminDiscounts() {
                     {d.active ? 'active' : 'inactive'}
                   </p>
                 </div>
-                {d.active && (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-compact"
+                    onClick={() => void toggleAccountVisibility(d.id, !d.visibleToCustomers)}
+                  >
+                    {d.visibleToCustomers ? 'Hide from accounts' : 'Show on accounts'}
+                  </button>
+                  {d.active ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-compact"
+                      onClick={() => void deactivate(d.id)}
+                    >
+                      Deactivate
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-compact"
+                      onClick={() => void reactivate(d.id)}
+                    >
+                      Reactivate
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-ghost btn-compact text-red-600"
-                    onClick={() => void deactivate(d.id)}
+                    onClick={() => void remove(d.id, d.code)}
                   >
-                    Deactivate
+                    Delete
                   </button>
-                )}
+                </div>
               </li>
             ))}
           </ul>

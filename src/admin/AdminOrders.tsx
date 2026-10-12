@@ -370,6 +370,7 @@ export function AdminOrders() {
                   )}
 
                   {order.status !== 'refunded' &&
+                    !order.shippedAt &&
                     (item.printStatus === 'claimed' || item.printStatus === 'done') && (
                       <div className="flex flex-wrap items-center gap-2">
                         <button
@@ -379,7 +380,7 @@ export function AdminOrders() {
                           onClick={() => {
                             setGcodeBusyId(item.id)
                             setError(
-                              'Preparing G-code in the background (2–3 min). Leave this tab open — the file will download when ready.',
+                              'Preparing G-code (usually under a few minutes). Leave this tab open.',
                             )
                             void api.catalog.orders
                               .downloadGcode(item.id)

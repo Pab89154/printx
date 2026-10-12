@@ -38,7 +38,7 @@ export function AccountSignIn() {
       <main className="mx-auto max-w-md px-4 py-12 sm:px-6">
         <h1 className="text-3xl font-extrabold text-navy">Sign in</h1>
         <p className="mt-2 text-sm text-muted">
-          Sign in to checkout and view your orders.
+          Sign in to view orders and saved details. You can also checkout as a guest from the cart.
         </p>
         <form onSubmit={(e) => void onSubmit(e)} className="mt-8 space-y-4 rounded-2xl border bg-white p-6">
           <label className="block text-sm font-medium text-navy">

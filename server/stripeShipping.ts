@@ -41,6 +41,8 @@ export function stripeAccountSavedPaymentFields(): Pick<
 export function stripeCheckoutShippingFields(opts?: {
   /** Waive Standard shipping (used with item+shipping promo codes). */
   freeStandard?: boolean
+  /** Guest checkout has no Stripe Customer yet — omit customer_update. */
+  guest?: boolean
 }): Pick<
   Stripe.Checkout.SessionCreateParams,
   | 'shipping_address_collection'
@@ -52,12 +54,16 @@ export function stripeCheckoutShippingFields(opts?: {
   return {
     // Always collect a billing address so we have a street even if ship-to is missing in API.
     billing_address_collection: 'required',
-    // Checkout always passes an existing Stripe Customer (signed-in account).
-    customer_update: {
-      name: 'auto',
-      address: 'auto',
-      shipping: 'auto',
-    },
+    // customer_update only works when a Stripe Customer is attached (signed-in accounts).
+    ...(opts?.guest
+      ? {}
+      : {
+          customer_update: {
+            name: 'auto',
+            address: 'auto',
+            shipping: 'auto',
+          },
+        }),
     shipping_address_collection: {
       allowed_countries: ['US'],
     },

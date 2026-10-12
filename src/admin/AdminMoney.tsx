@@ -120,7 +120,12 @@ export function AdminMoney() {
               <p className="mt-2 text-2xl font-bold text-electric">
                 ${data.businessKeptUsd.toFixed(2)}
               </p>
-              <p className="mt-1 text-xs text-muted">Customer paid minus what we owe printers</p>
+              <p className="mt-1 text-xs text-muted">
+                Earned $
+                {(data.printxEarnedGrossUsd ?? data.earnings.totalUsd).toFixed(2)} − admins $
+                {(data.adminsEarnAllUsd ?? data.reimbursementsTotalUsd).toFixed(2)} − shipping $
+                {(data.shippingTotalUsd ?? 0).toFixed(2)}
+              </p>
             </div>
           </div>
 

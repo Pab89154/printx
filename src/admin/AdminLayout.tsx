@@ -144,11 +144,11 @@ export function AdminLayout() {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[min(18rem,88vw)] flex-col border-r border-slate-200 bg-navy text-white transition-transform duration-200 safe-top safe-bottom md:w-64 md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-[min(18rem,88vw)] flex-col overflow-y-auto overscroll-contain border-r border-slate-200 bg-navy text-white transition-transform duration-200 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden safe-top safe-bottom md:w-64 md:translate-x-0 ${
           menuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="flex items-center gap-3 border-b border-white/10 px-4 py-5 sm:px-5">
+        <div className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-4 sm:px-5">
           <Logo size={36} className="shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="font-bold">PrintX Admin</div>
@@ -167,7 +167,8 @@ export function AdminLayout() {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+        {/* Natural height — no nested mid-nav scrollbar. */}
+        <nav className="space-y-0.5 p-2.5">
           {navLinks.map(({ to, label, icon: Icon, section }) => (
             <NavLink
               key={to}
@@ -176,7 +177,7 @@ export function AdminLayout() {
                 if (section === 'mail') ensureMailNotificationPermission()
               }}
               className={({ isActive }) =>
-                `press-pop flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-colors md:py-2.5 ${
+                `press-pop flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                   isActive ? 'bg-electric text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                 }`
               }
@@ -195,11 +196,11 @@ export function AdminLayout() {
           ))}
         </nav>
 
-        <div className="border-t border-white/10 p-3">
+        <div className="mt-auto shrink-0 border-t border-white/10 p-2.5">
           {can('sandbox') && (
             <NavLink
               to={adminPath('sandbox')}
-              className="press-pop mb-1 flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-amber-200 hover:bg-white/10 hover:text-white md:py-2.5"
+              className="press-pop mb-1 flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-amber-200 hover:bg-white/10 hover:text-white"
             >
               <SandboxIcon size={18} className="shrink-0 text-amber-400" />
               Site sandbox
@@ -209,14 +210,14 @@ export function AdminLayout() {
             href={publicSiteUrl('/')}
             target="_blank"
             rel="noopener noreferrer"
-            className="mb-2 block rounded-xl px-3 py-2 text-sm text-slate-400 hover:bg-white/10 hover:text-white"
+            className="mb-1 block rounded-xl px-3 py-2 text-sm text-slate-400 hover:bg-white/10 hover:text-white"
           >
             Open public site ↗
           </a>
           <button
             type="button"
             onClick={handleLogout}
-            className="btn flex w-full items-center gap-3 !justify-start !rounded-xl !border-0 !bg-transparent px-3 py-3 text-sm font-medium !text-slate-300 hover:!bg-white/10 hover:!text-white md:py-2.5"
+            className="btn flex w-full items-center gap-3 !justify-start !rounded-xl !border-0 !bg-transparent px-3 py-2 text-sm font-medium !text-slate-300 hover:!bg-white/10 hover:!text-white"
           >
             <LogOut size={18} />
             Logout

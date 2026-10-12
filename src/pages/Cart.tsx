@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { colorSwatchStyle } from '../../shared/colors'
 import { useCart } from '../context/CartContext'
@@ -10,16 +10,11 @@ import { Footer } from '../components/Footer'
 export function Cart() {
   const { lines, setQty, remove, subtotal, clear } = useCart()
   const { customer, loading } = useCustomerAuth()
-  const navigate = useNavigate()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [promoCode, setPromoCode] = useState('')
 
   async function checkout() {
-    if (!customer) {
-      navigate('/account/sign-in?next=/cart')
-      return
-    }
     setBusy(true)
     setError('')
     try {
@@ -114,7 +109,15 @@ export function Cart() {
             <p className="mt-4 text-sm text-muted">
               {customer
                 ? 'Enter item+shipping promos here. Other codes can also be entered on Checkout.'
-                : 'Sign in to checkout so you can track your order and shipping.'}
+                : (
+                  <>
+                    Pay as a guest — email and shipping are collected on Checkout.{' '}
+                    <Link to="/account/sign-in?next=/cart" className="text-electric hover:underline">
+                      Sign in
+                    </Link>{' '}
+                    if you want order tracking in your account.
+                  </>
+                )}
             </p>
 
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
@@ -125,11 +128,7 @@ export function Cart() {
               disabled={busy || loading}
               onClick={() => void checkout()}
             >
-              {busy
-                ? 'Redirecting…'
-                : customer
-                  ? 'Checkout'
-                  : 'Sign in to checkout'}
+              {busy ? 'Redirecting…' : customer ? 'Checkout' : 'Checkout as guest'}
             </button>
           </>
         )}

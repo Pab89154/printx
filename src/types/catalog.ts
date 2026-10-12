@@ -204,6 +204,11 @@ export type MoneySummaryDto = {
   }
   owedByPerson: MoneyOwedPersonDto[]
   reimbursementsTotalUsd: number
+  /** Printer/admin costs combined (ledger or worst-case estimate). */
+  adminsEarnAllUsd?: number
+  shippingTotalUsd?: number
+  /** Customer paid this month (items + shipping). */
+  printxEarnedGrossUsd?: number
   businessKeptUsd: number
   canSettle: boolean
   totals: {

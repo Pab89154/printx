@@ -51,7 +51,8 @@ function triggerBlobSave(objectUrl: string, filename: string) {
 /** Authenticated file download that survives Safari/iOS (delayed revoke; no blank-tab freeze). */
 async function downloadAuthFile(url: string, fallbackFilename: string, errorLabel: string) {
   const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), 240_000)
+  // File should already be prepared; keep this short so the UI cannot hang forever.
+  const timeoutId = window.setTimeout(() => controller.abort(), 90_000)
   try {
     const res = await fetch(url, { credentials: 'include', signal: controller.signal })
     if (!res.ok) {
@@ -367,10 +368,27 @@ export const api = {
             method: 'POST',
             body: JSON.stringify(body),
           }),
+        setVisibility: (id: string, visibleToCustomers: boolean) =>
+          request<{ ok: true; visibleToCustomers: boolean }>(
+            `/api/admin/discounts/${id}/visibility`,
+            {
+              method: 'POST',
+              body: JSON.stringify({ visibleToCustomers }),
+            },
+          ),
         deactivate: (id: string) =>
           request<{ ok: true }>(`/api/admin/discounts/${id}/deactivate`, {
             method: 'POST',
             body: '{}',
+          }),
+        reactivate: (id: string) =>
+          request<{ ok: true }>(`/api/admin/discounts/${id}/reactivate`, {
+            method: 'POST',
+            body: '{}',
+          }),
+        remove: (id: string) =>
+          request<{ ok: true }>(`/api/admin/discounts/${id}`, {
+            method: 'DELETE',
           }),
       },
       shipCustom: (id: string, body: { trackingNumber: string; carrier?: string }) =>
@@ -381,24 +399,59 @@ export const api = {
       downloadGcode: async (itemId: string) => {
         const base = `/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`
         type PrepStatus = { status: 'idle' | 'running' | 'ready' | 'error'; error?: string }
-        let st = await request<PrepStatus>(`${base}/status`)
-        if (st.status !== 'ready') {
-          // idle / error / running — start (or join) a background prepare job.
-          if (st.status !== 'running') {
-            st = await request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' })
+        const withTimeout = async <T,>(p: Promise<T>, ms: number, label: string): Promise<T> => {
+          let timer: ReturnType<typeof setTimeout> | undefined
+          try {
+            return await Promise.race([
+              p,
+              new Promise<T>((_, reject) => {
+                timer = setTimeout(() => reject(new Error(label)), ms)
+              }),
+            ])
+          } finally {
+            if (timer) clearTimeout(timer)
           }
-          const deadline = Date.now() + 280_000
+        }
+        let st = await withTimeout(
+          request<PrepStatus>(`${base}/status`),
+          20_000,
+          'Could not check G-code status. Try again.',
+        )
+        if (st.status !== 'ready') {
+          if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
+          // idle / running — start (or join) a background prepare job.
+          if (st.status !== 'running') {
+            st = await withTimeout(
+              request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' }),
+              20_000,
+              'Could not start G-code prepare. Try again.',
+            )
+          }
+          if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
+          // Cloud Slicer Free can take several minutes; fail loudly instead of hanging forever.
+          const deadline = Date.now() + 420_000
           while (Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, 2000))
-            st = await request<PrepStatus>(`${base}/status`)
+            await new Promise((r) => setTimeout(r, 2500))
+            st = await withTimeout(
+              request<PrepStatus>(`${base}/status`),
+              20_000,
+              'G-code status check timed out. Try Download again.',
+            )
             if (st.status === 'ready') break
             if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
             if (st.status === 'idle') {
-              st = await request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' })
+              st = await withTimeout(
+                request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' }),
+                20_000,
+                'Could not restart G-code prepare. Try again.',
+              )
+              if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
             }
           }
           if (st.status !== 'ready') {
-            throw new Error('Timed out preparing G-code. Try Download again in a minute.')
+            throw new Error(
+              'Timed out preparing G-code after ~7 minutes. Try Download again — if it keeps failing, re-claim or check Cloud Slicer.',
+            )
           }
         }
         await downloadAuthFile(base, `printx-${itemId.slice(0, 8)}.gcode`, 'G-code download failed')

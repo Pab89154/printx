@@ -461,11 +461,30 @@ async function saveDesignPrinterQuote(
 type GcodePrepJob = {
   status: 'running' | 'ready' | 'error'
   error?: string
+  buffer?: Buffer
+  filename?: string
   updatedAt: number
 }
 
 /** Background prepare jobs — avoids HTTP timeouts while Cloud Slicer re-slices. */
 const orderGcodeJobs = new Map<string, GcodePrepJob>()
+
+/** Jobs stuck "running" longer than this are treated as failed so the UI can recover. */
+const GCODE_JOB_STALE_MS = 8 * 60_000
+
+async function orderItemIsShipped(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<boolean> {
+  const row = await db.get<{ shipped_at: string | null }>(
+    `SELECT o.shipped_at
+     FROM order_items oi
+     JOIN orders o ON o.id = oi.order_id
+     WHERE oi.id = ?`,
+    itemId,
+  )
+  return Boolean(row?.shipped_at)
+}
 
 async function peekStoredOrderItemGcode(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -486,6 +505,20 @@ async function peekStoredOrderItemGcode(
   const local = await loadStoredGcode(storedGcode)
   if (!local) return null
   return { buffer: local.buffer, filename: safeName }
+}
+
+/** Prefer disk, then in-memory job buffer (persist may have failed). */
+async function resolveOrderItemGcode(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<{ buffer: Buffer; filename: string } | null> {
+  const stored = await peekStoredOrderItemGcode(db, itemId)
+  if (stored) return stored
+  const job = orderGcodeJobs.get(itemId)
+  if (job?.status === 'ready' && job.buffer?.length) {
+    return { buffer: job.buffer, filename: job.filename || `printx-${itemId.slice(0, 8)}.gcode` }
+  }
+  return null
 }
 
 /**
@@ -578,13 +611,23 @@ async function ensureOrderItemGcode(
 
 function startOrderGcodePrep(itemId: string) {
   const current = orderGcodeJobs.get(itemId)
-  if (current?.status === 'running') return
+  if (current?.status === 'running') {
+    // Stale in-memory job (server restart mid-slice, hung Cloud Slicer, etc.).
+    if (Date.now() - current.updatedAt < GCODE_JOB_STALE_MS) return
+    console.warn('[gcode] restarting stale prepare job', itemId)
+  }
+  if (current?.status === 'ready' && current.buffer?.length) return
   orderGcodeJobs.set(itemId, { status: 'running', updatedAt: Date.now() })
   void (async () => {
     try {
       const db = await getDb()
-      await ensureOrderItemGcode(db, itemId)
-      orderGcodeJobs.set(itemId, { status: 'ready', updatedAt: Date.now() })
+      const file = await ensureOrderItemGcode(db, itemId)
+      orderGcodeJobs.set(itemId, {
+        status: 'ready',
+        buffer: file.buffer,
+        filename: file.filename,
+        updatedAt: Date.now(),
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'G-code prepare failed'
       console.error('[gcode] prepare failed', itemId, message)
@@ -903,14 +946,11 @@ export async function handleCatalogApi(
       send(res, 503, { error: 'Stripe is not configured (STRIPE_SECRET_KEY).' })
       return true
     }
+    // Signed-in optional — guests can pay; Stripe collects email + shipping.
     const account = await requireCustomer(req)
-    if (!account) {
-      send(res, 401, { error: 'Sign in to checkout.' })
-      return true
-    }
     const body = await readJson(req)
-    const customerName = account.displayName || sanitizeText(String(body.customerName ?? ''), 120)
-    const customerEmail = account.email || sanitizeEmail(String(body.customerEmail ?? ''))
+    const customerName = account?.displayName || sanitizeText(String(body.customerName ?? ''), 120)
+    const customerEmail = account?.email || sanitizeEmail(String(body.customerEmail ?? ''))
     const itemsIn = Array.isArray(body.items) ? body.items : []
     if (itemsIn.length === 0) {
       send(res, 400, { error: 'At least one item is required.' })
@@ -1015,7 +1055,7 @@ export async function handleCatalogApi(
       subtotal,
       now,
       now,
-      account.id,
+      account?.id ?? null,
     )
     for (const item of lineItems) {
       await db.run(
@@ -1042,10 +1082,19 @@ export async function handleCatalogApi(
       `${origin}/order/success?session_id={CHECKOUT_SESSION_ID}`
     const cancelUrl = process.env.STRIPE_CANCEL_URL?.trim() || `${origin}/cart`
 
-    const stripeCustomerId = await ensureStripeCustomer(stripe, account)
+    const stripeCustomerId = account ? await ensureStripeCustomer(stripe, account) : null
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      customer: stripeCustomerId,
+      ...(stripeCustomerId
+        ? {
+            customer: stripeCustomerId,
+            ...stripeAccountSavedPaymentFields(),
+          }
+        : {
+            // Guest: Stripe collects email; create a Customer when needed for the payment.
+            customer_creation: 'if_required',
+            ...(customerEmail ? { customer_email: customerEmail } : {}),
+          }),
       // Stripe disallows allow_promotion_codes when a discount is already applied.
       ...(appliedPromo
         ? { discounts: [{ promotion_code: appliedPromo.stripePromotionCodeId }] }
@@ -1055,11 +1104,13 @@ export async function handleCatalogApi(
       client_reference_id: orderId,
       metadata: {
         orderId,
-        customerUserId: account.id,
+        ...(account ? { customerUserId: account.id } : { guest: '1' }),
         ...(appliedPromo ? { promoCode: appliedPromo.code, promoKind: appliedPromo.kind } : {}),
       },
-      ...stripeCheckoutShippingFields({ freeStandard: freeStandardShipping }),
-      ...stripeAccountSavedPaymentFields(),
+      ...stripeCheckoutShippingFields({
+        freeStandard: freeStandardShipping,
+        guest: !account,
+      }),
       line_items: lineItems.map((i) => ({
         quantity: i.qty,
         price_data: {
@@ -2280,7 +2331,7 @@ export async function handleCatalogApi(
         stripeCouponId: String(d.stripe_coupon_id || ''),
         stripePromotionCodeId: String(d.stripe_promotion_code_id || ''),
         active: Boolean(Number(d.active)),
-        visibleToCustomers: d.visible_to_customers == null ? true : Boolean(Number(d.visible_to_customers)),
+        visibleToCustomers: Boolean(Number(d.visible_to_customers ?? 0)),
         createdAt: String(d.created_at || ''),
       })),
     })
@@ -2338,10 +2389,11 @@ export async function handleCatalogApi(
       body.maxRedemptions != null && body.maxRedemptions !== ''
         ? Math.max(1, Math.floor(Number(body.maxRedemptions)))
         : null
+    // Opt-in: only show on customer accounts when admin explicitly enables it.
     const visibleToCustomers =
-      body.visibleToCustomers === false || body.visibleToCustomers === 0 || body.visibleToCustomers === '0'
-        ? 0
-        : 1
+      body.visibleToCustomers === true || body.visibleToCustomers === 1 || body.visibleToCustomers === '1'
+        ? 1
+        : 0
     const usesPercent = kind === 'percent' || kind === 'percent_and_shipping'
     if (usesPercent) {
       if (!(percentOff > 0 && percentOff <= 100)) {
@@ -2412,6 +2464,35 @@ export async function handleCatalogApi(
     return true
   }
 
+  const discountVisibility = /^\/api\/admin\/discounts\/([^/]+)\/visibility$/.exec(urlPath)
+  if (discountVisibility && method === 'POST') {
+    const discountId = discountVisibility[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const body = await readJson(req)
+    const visible =
+      body.visibleToCustomers === true || body.visibleToCustomers === 1 || body.visibleToCustomers === '1'
+        ? 1
+        : 0
+    const row = await db.get<{ id: string }>('SELECT id FROM discounts WHERE id = ?', discountId)
+    if (!row) {
+      send(res, 404, { error: 'Discount not found' })
+      return true
+    }
+    const now = new Date().toISOString()
+    await db.run(
+      `UPDATE discounts SET visible_to_customers = ?, updated_at = ? WHERE id = ?`,
+      visible,
+      now,
+      discountId,
+    )
+    send(res, 200, { ok: true, visibleToCustomers: Boolean(visible) })
+    return true
+  }
+
   const discountDeactivate = /^\/api\/admin\/discounts\/([^/]+)\/deactivate$/.exec(urlPath)
   if (discountDeactivate && method === 'POST') {
     const discountId = discountDeactivate[1]!
@@ -2442,6 +2523,84 @@ export async function handleCatalogApi(
       now,
       discountId,
     )
+    send(res, 200, { ok: true })
+    return true
+  }
+
+  const discountReactivate = /^\/api\/admin\/discounts\/([^/]+)\/reactivate$/.exec(urlPath)
+  if (discountReactivate && method === 'POST') {
+    const discountId = discountReactivate[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const stripe = stripeClient()
+    const row = await db.get<{ stripe_promotion_code_id: string; active: number | string }>(
+      'SELECT stripe_promotion_code_id, active FROM discounts WHERE id = ?',
+      discountId,
+    )
+    if (!row) {
+      send(res, 404, { error: 'Discount not found' })
+      return true
+    }
+    if (stripe && row.stripe_promotion_code_id) {
+      try {
+        await stripe.promotionCodes.update(row.stripe_promotion_code_id, { active: true })
+      } catch (err) {
+        send(res, 400, {
+          error:
+            err instanceof Error
+              ? err.message
+              : 'Could not reactivate this code in Stripe. Create a new code instead.',
+        })
+        return true
+      }
+    }
+    const now = new Date().toISOString()
+    await db.run(
+      `UPDATE discounts SET active = 1, updated_at = ? WHERE id = ?`,
+      now,
+      discountId,
+    )
+    send(res, 200, { ok: true })
+    return true
+  }
+
+  const discountDelete = /^\/api\/admin\/discounts\/([^/]+)$/.exec(urlPath)
+  if (discountDelete && method === 'DELETE') {
+    const discountId = discountDelete[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const stripe = stripeClient()
+    const row = await db.get<{
+      stripe_promotion_code_id: string
+      stripe_coupon_id: string
+    }>('SELECT stripe_promotion_code_id, stripe_coupon_id FROM discounts WHERE id = ?', discountId)
+    if (!row) {
+      send(res, 404, { error: 'Discount not found' })
+      return true
+    }
+    if (stripe) {
+      if (row.stripe_promotion_code_id) {
+        try {
+          await stripe.promotionCodes.update(row.stripe_promotion_code_id, { active: false })
+        } catch (err) {
+          console.warn('[printx] Could not deactivate Stripe promotion code before delete', err)
+        }
+      }
+      if (row.stripe_coupon_id) {
+        try {
+          await stripe.coupons.del(row.stripe_coupon_id)
+        } catch (err) {
+          console.warn('[printx] Could not delete Stripe coupon', err)
+        }
+      }
+    }
+    await db.run(`DELETE FROM discounts WHERE id = ?`, discountId)
     send(res, 200, { ok: true })
     return true
   }
@@ -2507,14 +2666,38 @@ export async function handleCatalogApi(
       send(res, 403, { error: 'Forbidden' })
       return true
     }
-    const stored = await peekStoredOrderItemGcode(db, itemId)
-    if (stored) {
+    if (await orderItemIsShipped(db, itemId)) {
+      send(res, 200, {
+        status: 'error' as const,
+        error: 'G-code download is disabled after the order is marked shipped.',
+      })
+      return true
+    }
+    const ready = await resolveOrderItemGcode(db, itemId)
+    if (ready) {
       send(res, 200, { status: 'ready' as const })
       return true
     }
     const job = orderGcodeJobs.get(itemId)
     if (job?.status === 'running') {
+      if (Date.now() - job.updatedAt > GCODE_JOB_STALE_MS) {
+        orderGcodeJobs.set(itemId, {
+          status: 'error',
+          error: 'G-code prepare timed out. Try Download again.',
+          updatedAt: Date.now(),
+        })
+        send(res, 200, {
+          status: 'error' as const,
+          error: 'G-code prepare timed out. Try Download again.',
+        })
+        return true
+      }
       send(res, 200, { status: 'running' as const })
+      return true
+    }
+    if (job?.status === 'ready') {
+      // Ready without buffer shouldn't happen; treat as idle so client can retry prepare.
+      send(res, 200, { status: 'idle' as const })
       return true
     }
     if (job?.status === 'error') {
@@ -2535,8 +2718,12 @@ export async function handleCatalogApi(
       send(res, 403, { error: 'Forbidden' })
       return true
     }
-    const stored = await peekStoredOrderItemGcode(db, itemId)
-    if (stored) {
+    if (await orderItemIsShipped(db, itemId)) {
+      send(res, 400, { error: 'G-code download is disabled after the order is marked shipped.' })
+      return true
+    }
+    const ready = await resolveOrderItemGcode(db, itemId)
+    if (ready) {
       send(res, 200, { status: 'ready' as const })
       return true
     }
@@ -2565,10 +2752,14 @@ export async function handleCatalogApi(
       send(res, 403, { error: 'Forbidden' })
       return true
     }
+    if (await orderItemIsShipped(db, itemId)) {
+      send(res, 400, { error: 'G-code download is disabled after the order is marked shipped.' })
+      return true
+    }
     try {
       // Fast path only — slicing runs via /gcode/prepare so proxies do not time out.
-      const stored = await peekStoredOrderItemGcode(db, itemId)
-      if (!stored) {
+      const file = await resolveOrderItemGcode(db, itemId)
+      if (!file) {
         const job = orderGcodeJobs.get(itemId)
         if (job?.status === 'error') {
           send(res, 400, { error: job.error || 'G-code prepare failed' })
@@ -2584,10 +2775,10 @@ export async function handleCatalogApi(
       res.setHeader('Content-Type', 'application/octet-stream')
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="${stored.filename.replace(/"/g, '')}"`,
+        `attachment; filename="${file.filename.replace(/"/g, '')}"`,
       )
       res.setHeader('Cache-Control', 'private, no-store')
-      res.end(stored.buffer)
+      res.end(file.buffer)
     } catch (err) {
       send(res, 400, { error: err instanceof Error ? err.message : 'G-code download failed' })
     }
@@ -2776,7 +2967,8 @@ export async function handleCatalogApi(
       rangeEnd,
     )
     const customPaid = await db.all<Record<string, unknown>>(
-      `SELECT id, name, email, catalog_price_usd, status, paid_at, stripe_session_id
+      `SELECT id, name, email, catalog_price_usd, shipping_usd, worst_cost_usd,
+              status, paid_at, stripe_session_id
        FROM custom_requests
        WHERE paid_at IS NOT NULL
          AND paid_at >= ? AND paid_at < ?
@@ -2793,6 +2985,15 @@ export async function handleCatalogApi(
       customPaid.reduce((sum, o) => sum + (Number(o.catalog_price_usd) || 0), 0),
     )
     const earningsTotalUsd = roundMoney(shopEarnings + customEarnings)
+    const shopShippingUsd = roundMoney(
+      shopOrders.reduce((sum, o) => sum + (Number(o.shipping_usd) || 0), 0),
+    )
+    const customShippingUsd = roundMoney(
+      customPaid.reduce((sum, o) => sum + (Number(o.shipping_usd) || 0), 0),
+    )
+    const shippingTotalUsd = roundMoney(shopShippingUsd + customShippingUsd)
+    // Gross customer payments this month (items + shipping).
+    const printxEarnedGrossUsd = roundMoney(earningsTotalUsd + shippingTotalUsd)
 
     const ledgerRows = await db.all<Record<string, unknown>>(
       `SELECT l.id, l.user_id, l.amount_usd, l.note, l.created_at, l.order_item_id,
@@ -2889,6 +3090,31 @@ export async function handleCatalogApi(
 
     const reimbursementsTotalUsd = roundMoney(
       owedByPerson.reduce((sum, p) => sum + p.totalOwedUsd, 0),
+    )
+
+    // What admins/printers earn (all combined): use ledger reimbursements when present,
+    // otherwise worst-case print cost on paid items so profit is right before settle.
+    const shopPrinterCostRow = await db.get<{ total: number | string | null }>(
+      `SELECT COALESCE(SUM(oi.worst_cost_unit_usd * oi.qty), 0) as total
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       WHERE o.paid_at IS NOT NULL
+         AND o.paid_at >= ? AND o.paid_at < ?
+         AND o.status IN ('paid', 'in_production', 'ready', 'fulfilled')`,
+      rangeStart,
+      rangeEnd,
+    )
+    const shopPrinterCostUsd = roundMoney(Number(shopPrinterCostRow?.total) || 0)
+    const customPrinterCostUsd = roundMoney(
+      customPaid.reduce((sum, o) => sum + (Number(o.worst_cost_usd) || 0), 0),
+    )
+    const estimatedAdminsEarnUsd = roundMoney(shopPrinterCostUsd + customPrinterCostUsd)
+    const adminsEarnAllUsd = roundMoney(
+      Math.max(reimbursementsTotalUsd, estimatedAdminsEarnUsd),
+    )
+    // PrintX profit = customer paid − admins earn (all) − shipping.
+    const businessKeptUsd = roundMoney(
+      printxEarnedGrossUsd - adminsEarnAllUsd - shippingTotalUsd,
     )
 
     // Sequential — session pooler has one client; parallel queries queue/saturate it.
@@ -3023,7 +3249,10 @@ export async function handleCatalogApi(
       },
       owedByPerson,
       reimbursementsTotalUsd,
-      businessKeptUsd: roundMoney(earningsTotalUsd - reimbursementsTotalUsd),
+      adminsEarnAllUsd,
+      shippingTotalUsd,
+      printxEarnedGrossUsd,
+      businessKeptUsd,
       canSettle: admin.isMainAdmin,
       totals: {
         year: {
