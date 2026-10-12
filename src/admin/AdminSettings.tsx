@@ -583,8 +583,9 @@ export function AdminSettings() {
           />
         </label>
         <p className="mt-2 text-xs text-muted">
-          Dashboard: cloudslicer3d.com → create printer/filament → copy IDs. Free plan: 100 quotes/month per
-          account. PrintX captures G-code when you download (no Cloud Slicer Pro needed) and stores a copy.
+          Dashboard: cloudslicer3d.com → create printer/filament → copy IDs (quotes/pricing). Free plan does
+          not release G-code — PrintX slices locally (P1S / Ender-3 V2 / Kobra) when you tap Download, then
+          stores a copy.
         </p>
         {csError && <p className="mt-3 text-sm text-red-600">{csError}</p>}
         {csMessage && <p className="mt-3 text-sm text-green-600">{csMessage}</p>}

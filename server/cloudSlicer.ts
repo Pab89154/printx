@@ -3,6 +3,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { localSlicerAvailable, sliceStlLocally } from './localSlicer.ts'
+
 const DEFAULT_BASE = 'https://api.cloudslicer3d.com'
 
 export type CloudSlicerCreds = {
@@ -136,13 +138,20 @@ export async function waitForQuote(
 /** True when we should re-slice this printer instead of using the stored quote id. */
 export function isGcodeOutputMissing(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
-  return /output file is not available|not available for this quote|g-code download failed \(404\)|poll failed \(404\)|quote(?: record)? not found|quote not ready|quote timed out|discarded this g-code|save gcode/i.test(
+  return /output file is not available|not available for this quote|g-code download failed \(404\)|poll failed \(404\)|quote(?: record)? not found|quote not ready|quote timed out|discarded this g-code|save gcode|did not release|not released this g-code|has not released|never releases g-code|save gcode files/i.test(
     msg,
   )
 }
 
+
+/** Free plan (and Pro with Save gcode off) finishes quotes with null gcode_path — /output never works. */
+export function quoteHasNoGcodeOutput(quote: Record<string, unknown> | null | undefined): boolean {
+  const files = (quote?.files as Record<string, unknown> | undefined) ?? {}
+  return !files.gcode_path && !files.gcode_name
+}
+
 export const GCODE_SAVE_HINT =
-  'Cloud Slicer has not released this G-code yet. Wait about a minute and try Download again — PrintX will re-slice for your claimed printer and save a copy.'
+  'Could not produce G-code. Cloud Slicer Free never releases files; install Bambu Studio (or set PRINTX_SLICER_BIN) for local slicing, then try Download again.'
 
 function extractGramsHours(quote: Record<string, unknown>): { grams: number; hours: number } {
   const pricing = (quote.pricing as Record<string, unknown> | undefined) ?? {}
@@ -186,13 +195,14 @@ async function downloadQuoteGcodeOnce(
 
 /**
  * Grab G-code after quote success.
- * Status can flip to success before /output is ready (“…not available yet”), so wait longer.
+ * Free-plan Cloud Slicer often flips to success before /output is ready, then discards
+ * quickly — poll hard at first, then keep trying for several minutes.
  */
 async function captureGcodeAfterSuccess(
   creds: CloudSlicerCreds,
   quoteId: string,
   quote: Record<string, unknown>,
-  waitMs = 90_000,
+  waitMs = 180_000,
 ): Promise<{ buffer: Buffer; filename: string } | null> {
   const deadline = Date.now() + waitMs
   let lastErr: Error | null = null
@@ -203,8 +213,8 @@ async function captureGcodeAfterSuccess(
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
       if (!isGcodeOutputMissing(lastErr)) throw lastErr
-      // Back off a little; first tries stay quick for the common “almost ready” case.
-      const delay = attempt < 5 ? 500 : attempt < 15 ? 1500 : 3000
+      // Hammer early (Free plan window is short), then ease off.
+      const delay = attempt < 20 ? 400 : attempt < 40 ? 1000 : 2500
       attempt++
       await sleep(delay)
     }
@@ -227,7 +237,7 @@ async function captureGcodeAfterSuccess(
 export async function waitForQuoteAndDownloadGcode(
   creds: CloudSlicerCreds,
   quoteId: string,
-  timeoutMs = 300_000,
+  timeoutMs = 360_000,
 ): Promise<{
   quote: Record<string, unknown>
   grams: number
@@ -250,16 +260,7 @@ export async function waitForQuoteAndDownloadGcode(
       )
     }
     const status = String(data.status || '')
-    if (status === 'success') {
-      const { grams, hours } = extractGramsHours(data)
-      const captured =
-        earlyGcode || (await captureGcodeAfterSuccess(creds, id, data, 90_000))
-      if (!captured) throw new Error(GCODE_SAVE_HINT)
-      return { quote: data, grams, hours, buffer: captured.buffer, filename: captured.filename }
-    }
-    if (status === 'failed' || status === 'error') {
-      throw new Error(String(data.error_message || data.error || data.message || 'Cloud Slicer quote failed'))
-    }
+    // Try /output on every poll — Free plan may expose the file briefly before status=success.
     if (!earlyGcode) {
       try {
         earlyGcode = await downloadQuoteGcodeOnce(creds, id)
@@ -267,7 +268,21 @@ export async function waitForQuoteAndDownloadGcode(
         /* output not ready yet */
       }
     }
-    await sleep(1000)
+    if (status === 'success') {
+      const { grams, hours } = extractGramsHours(data)
+      if (earlyGcode) {
+        return { quote: data, grams, hours, buffer: earlyGcode.buffer, filename: earlyGcode.filename }
+      }
+      // Free / Save-gcode-off: path stays null forever — do not burn minutes retrying.
+      if (quoteHasNoGcodeOutput(data)) throw new Error(GCODE_SAVE_HINT)
+      const captured = await captureGcodeAfterSuccess(creds, id, data, 60_000)
+      if (!captured) throw new Error(GCODE_SAVE_HINT)
+      return { quote: data, grams, hours, buffer: captured.buffer, filename: captured.filename }
+    }
+    if (status === 'failed' || status === 'error') {
+      throw new Error(String(data.error_message || data.error || data.message || 'Cloud Slicer quote failed'))
+    }
+    await sleep(500)
   }
   throw new Error('Cloud Slicer quote timed out.')
 }
@@ -282,7 +297,7 @@ export async function quoteStlForPrinter(
   const quoteId = await queueQuote(creds, fileId)
 
   let earlyGcode: { buffer: Buffer; filename: string } | null = null
-  const deadline = Date.now() + 300_000
+  const deadline = Date.now() + 360_000
   while (Date.now() < deadline) {
     const res = await fetch(`${apiBase()}/v1/quote/${encodeURIComponent(quoteId)}`, {
       headers: authHeaders(creds.token),
@@ -294,10 +309,29 @@ export async function quoteStlForPrinter(
       )
     }
     const status = String(data.status || '')
+    if (!earlyGcode) {
+      try {
+        earlyGcode = await downloadQuoteGcodeOnce(creds, quoteId)
+      } catch {
+        /* not ready */
+      }
+    }
     if (status === 'success') {
       const { grams, hours } = extractGramsHours(data)
-      const captured =
-        earlyGcode || (await captureGcodeAfterSuccess(creds, quoteId, data, 90_000))
+      if (earlyGcode) {
+        return {
+          grams,
+          hours,
+          quoteId,
+          fileId,
+          gcodeBuffer: earlyGcode.buffer,
+          gcodeFilename: earlyGcode.filename,
+        }
+      }
+      if (quoteHasNoGcodeOutput(data)) {
+        return { grams, hours, quoteId, fileId }
+      }
+      const captured = await captureGcodeAfterSuccess(creds, quoteId, data, 60_000)
       return {
         grams,
         hours,
@@ -310,14 +344,7 @@ export async function quoteStlForPrinter(
     if (status === 'failed' || status === 'error') {
       throw new Error(String(data.error_message || data.error || data.message || 'Cloud Slicer quote failed'))
     }
-    if (!earlyGcode) {
-      try {
-        earlyGcode = await downloadQuoteGcodeOnce(creds, quoteId)
-      } catch {
-        /* not ready */
-      }
-    }
-    await sleep(1000)
+    await sleep(500)
   }
   throw new Error('Cloud Slicer quote timed out.')
 }
@@ -380,11 +407,27 @@ export async function requoteFileAndDownloadGcode(
   }
 }
 
-/** Fresh upload + slice, capture G-code immediately. */
+/** Fresh upload + slice; use local slicer when Cloud Slicer Free withholds G-code. */
 export async function quoteAndDownloadGcode(
   creds: CloudSlicerCreds,
   localPath: string,
+  opts?: { printxPrinterId?: string },
 ): Promise<{ buffer: Buffer; filename: string; quoteId: string; fileId: string; grams: number; hours: number }> {
+  const printxPrinterId = opts?.printxPrinterId?.trim() || ''
+  const canLocal = Boolean(printxPrinterId && localSlicerAvailable(printxPrinterId))
+
+  if (canLocal) {
+    const local = await sliceStlLocally(localPath, printxPrinterId)
+    return {
+      buffer: local.buffer,
+      filename: local.filename,
+      quoteId: `local-${Date.now().toString(36)}`,
+      fileId: '',
+      grams: local.grams,
+      hours: local.hours,
+    }
+  }
+
   const quoted = await quoteStlForPrinter(creds, localPath)
   if (quoted.gcodeBuffer && quoted.gcodeBuffer.length) {
     return {
@@ -396,17 +439,7 @@ export async function quoteAndDownloadGcode(
       hours: quoted.hours,
     }
   }
-  // Quote succeeded but capture missed the window — one more attempt via output API.
-  const again = await captureGcodeAfterSuccess(creds, quoted.quoteId, {})
-  if (!again) throw new Error(GCODE_SAVE_HINT)
-  return {
-    buffer: again.buffer,
-    filename: again.filename,
-    quoteId: quoted.quoteId,
-    fileId: quoted.fileId,
-    grams: quoted.grams,
-    hours: quoted.hours,
-  }
+  throw new Error(GCODE_SAVE_HINT)
 }
 
 /** Delete a quote record and its G-code on Cloud Slicer. */

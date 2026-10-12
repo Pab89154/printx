@@ -4,3 +4,6 @@ node_modules
 .env.local
 *.db
 *.tsbuildinfo
+
+# Extracted Bambu Studio AppImage (Render / Linux)
+.slicer/

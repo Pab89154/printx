@@ -15,6 +15,7 @@ import {
   requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
+import { localSlicerAvailable, sliceStlLocally } from './localSlicer.ts'
 import { loadStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
 import { resolveStoredFile } from './objectStorage.ts'
 import { priceDesign, type PrinterCostInput } from './pricing.ts'
@@ -501,7 +502,24 @@ export async function downloadCustomRequestGcode(
   const resolved = await resolveStoredFile(fileName)
   if (!resolved) throw new Error('Source model missing on server — cannot re-slice for download.')
   try {
-    return await persistAndReturn(await quoteAndDownloadGcode(creds, resolved.path))
+    if (localSlicerAvailable(printerId)) {
+      try {
+        const local = await sliceStlLocally(resolved.path, printerId)
+        return await persistAndReturn({
+          buffer: local.buffer,
+          filename: local.filename,
+          quoteId: `local-${Date.now().toString(36)}`,
+          fileId: existingFileId || '',
+          grams: local.grams,
+          hours: local.hours,
+        })
+      } catch (err) {
+        console.warn('[gcode] custom local slicer failed:', err instanceof Error ? err.message : err)
+      }
+    }
+    return await persistAndReturn(
+      await quoteAndDownloadGcode(creds, resolved.path, { printxPrinterId: printerId }),
+    )
   } catch (err) {
     if (isGcodeOutputMissing(err)) throw new Error(GCODE_SAVE_HINT)
     throw err

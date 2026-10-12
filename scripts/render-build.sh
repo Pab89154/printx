@@ -16,4 +16,11 @@ if [ ! -f dist/index.html ]; then
   exit 1
 fi
 
+echo "==> Installing local slicer (Bambu Studio AppImage) for Free-plan G-code"
+if bash scripts/install-slicer.sh; then
+  echo "==> Local slicer install OK"
+else
+  echo "WARNING: local slicer install failed — G-code download needs Bambu Studio on the host"
+fi
+
 echo "==> Build complete"

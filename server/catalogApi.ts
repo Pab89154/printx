@@ -63,6 +63,7 @@ import {
   requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
+import { localSlicerAvailable, sliceStlLocally } from './localSlicer.ts'
 import { loadStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
 import {
   objectStorageConfigured,
@@ -470,7 +471,7 @@ type GcodePrepJob = {
 const orderGcodeJobs = new Map<string, GcodePrepJob>()
 
 /** Jobs stuck "running" longer than this are treated as failed so the UI can recover. */
-const GCODE_JOB_STALE_MS = 8 * 60_000
+const GCODE_JOB_STALE_MS = 15 * 60_000
 
 async function orderItemIsShipped(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -551,8 +552,12 @@ async function ensureOrderItemGcode(
     printerId: String(owner?.cloud_slicer_printer_id || ''),
     filamentId: String(owner?.cloud_slicer_filament_id || ''),
   }
-  if (!cloudSlicerConfigured(creds)) {
-    throw new Error('Cloud Slicer is not set up for this printer. Add API keys under Settings.')
+  const canCloud = cloudSlicerConfigured(creds)
+  const canLocal = localSlicerAvailable(printerId)
+  if (!canCloud && !canLocal) {
+    throw new Error(
+      'No slicer available for this printer. Add Cloud Slicer keys under Settings, or install Bambu Studio / set PRINTX_SLICER_BIN.',
+    )
   }
 
   const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
@@ -582,28 +587,70 @@ async function ensureOrderItemGcode(
   }
 
   const errors: string[] = []
-
-  if (fileId) {
-    try {
-      return await persistCaptured(await requoteFileAndDownloadGcode(creds, fileId))
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      errors.push(`Re-quote: ${msg}`)
-      console.warn('[gcode] requote existing file failed, will re-upload:', msg)
-    }
-  }
-
   const stlPath = String(designRow.stl_path || '')
   if (!stlPath) throw new Error('Design has no model file to slice.')
   const resolved = await resolveStoredFile(stlPath)
   if (!resolved) throw new Error('Model file missing on server. Re-upload the design.')
+
   try {
-    return await persistCaptured(await quoteAndDownloadGcode(creds, resolved.path))
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    errors.push(`Re-upload: ${msg}`)
-    if (isGcodeOutputMissing(err)) throw new Error(GCODE_SAVE_HINT)
-    throw new Error(errors.filter(Boolean).join(' · ') || msg)
+    // Free Cloud Slicer never returns G-code — prefer local slicer when available.
+    if (canLocal) {
+      try {
+        const local = await sliceStlLocally(resolved.path, printerId)
+        const existingGrams = Number(
+          printerId === 'pablo_p1s'
+            ? designRow.grams_pablo_p1s
+            : printerId === 'court_ender'
+              ? designRow.grams_court_ender
+              : designRow.grams_josh_kobra,
+        )
+        const existingHours = Number(
+          printerId === 'pablo_p1s'
+            ? designRow.hours_pablo_p1s
+            : printerId === 'court_ender'
+              ? designRow.hours_court_ender
+              : designRow.hours_josh_kobra,
+        )
+        return await persistCaptured({
+          buffer: local.buffer,
+          filename: local.filename || safeName,
+          quoteId: `local-${Date.now().toString(36)}`,
+          fileId: fileId || '',
+          grams: Number.isFinite(existingGrams) && existingGrams > 0 ? existingGrams : local.grams,
+          hours: Number.isFinite(existingHours) && existingHours > 0 ? existingHours : local.hours,
+        })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        errors.push(`Local slicer: ${msg}`)
+        console.warn('[gcode] local slicer failed:', msg)
+        if (!canCloud) throw err
+      }
+    }
+
+    if (fileId && canCloud) {
+      try {
+        return await persistCaptured(await requoteFileAndDownloadGcode(creds, fileId))
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        errors.push(`Re-quote: ${msg}`)
+        console.warn('[gcode] requote existing file failed, will re-upload:', msg)
+      }
+    }
+
+    if (canCloud) {
+      try {
+        return await persistCaptured(
+          await quoteAndDownloadGcode(creds, resolved.path, { printxPrinterId: printerId }),
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        errors.push(`Re-upload: ${msg}`)
+        if (isGcodeOutputMissing(err)) throw new Error(errors.filter(Boolean).join(' · ') || GCODE_SAVE_HINT)
+        throw new Error(errors.filter(Boolean).join(' · ') || msg)
+      }
+    }
+
+    throw new Error(errors.filter(Boolean).join(' · ') || GCODE_SAVE_HINT)
   } finally {
     resolved.cleanup?.()
   }
@@ -618,6 +665,12 @@ function startOrderGcodePrep(itemId: string) {
   }
   if (current?.status === 'ready' && current.buffer?.length) return
   orderGcodeJobs.set(itemId, { status: 'running', updatedAt: Date.now() })
+  const heartbeat = setInterval(() => {
+    const job = orderGcodeJobs.get(itemId)
+    if (job?.status === 'running') {
+      orderGcodeJobs.set(itemId, { ...job, updatedAt: Date.now() })
+    }
+  }, 30_000)
   void (async () => {
     try {
       const db = await getDb()
@@ -632,6 +685,8 @@ function startOrderGcodePrep(itemId: string) {
       const message = err instanceof Error ? err.message : 'G-code prepare failed'
       console.error('[gcode] prepare failed', itemId, message)
       orderGcodeJobs.set(itemId, { status: 'error', error: message, updatedAt: Date.now() })
+    } finally {
+      clearInterval(heartbeat)
     }
   })()
 }

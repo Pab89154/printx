@@ -428,8 +428,8 @@ export const api = {
             )
           }
           if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
-          // Cloud Slicer Free can take several minutes; fail loudly instead of hanging forever.
-          const deadline = Date.now() + 420_000
+          // Free-plan capture + automatic re-slices can take a while; fail with a clear error.
+          const deadline = Date.now() + 12 * 60_000
           while (Date.now() < deadline) {
             await new Promise((r) => setTimeout(r, 2500))
             st = await withTimeout(
@@ -450,7 +450,7 @@ export const api = {
           }
           if (st.status !== 'ready') {
             throw new Error(
-              'Timed out preparing G-code after ~7 minutes. Try Download again — if it keeps failing, re-claim or check Cloud Slicer.',
+              'Timed out preparing G-code after ~12 minutes. Tap Download again — PrintX will start a fresh slice.',
             )
           }
         }
