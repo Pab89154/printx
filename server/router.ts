@@ -44,6 +44,7 @@ import {
   setCachedBootstrap,
 } from './bootstrapCache.ts'
 import { syncStandLifecycle } from './standLifecycle.ts'
+import { CUSTOMER_ACCOUNTS_ENABLED } from '../shared/customerAccounts.ts'
 import type { PermissionKey } from '../shared/permissions.ts'
 import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
@@ -648,7 +649,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     }
     const cookies = parseCookies(req.headers.cookie)
     const account = await getSessionCustomer(cookies[CUSTOMER_SESSION_COOKIE] ?? null)
-    if (!account) {
+    if (CUSTOMER_ACCOUNTS_ENABLED && !account) {
       send(res, 401, { error: 'Sign in to checkout.' })
       return true
     }
@@ -681,34 +682,46 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const cancelUrl = `${origin}/#custom`
 
     try {
-      let stripeCustomerId = account.stripeCustomerId
-      if (stripeCustomerId) {
-        try {
-          const existing = await stripe.customers.retrieve(stripeCustomerId)
-          if ('deleted' in existing && existing.deleted) stripeCustomerId = null
-        } catch {
-          stripeCustomerId = null
+      let stripeCustomerId: string | null = null
+      if (account) {
+        stripeCustomerId = account.stripeCustomerId
+        if (stripeCustomerId) {
+          try {
+            const existing = await stripe.customers.retrieve(stripeCustomerId)
+            if ('deleted' in existing && existing.deleted) stripeCustomerId = null
+          } catch {
+            stripeCustomerId = null
+          }
         }
-      }
-      if (!stripeCustomerId) {
-        const created = await stripe.customers.create({
-          email: account.email || undefined,
-          name: account.displayName || undefined,
-          metadata: { printxUserId: account.id },
-        })
-        stripeCustomerId = created.id
-        await setCustomerStripeId(account.id, created.id)
+        if (!stripeCustomerId) {
+          const created = await stripe.customers.create({
+            email: account.email || undefined,
+            name: account.displayName || undefined,
+            metadata: { printxUserId: account.id },
+          })
+          stripeCustomerId = created.id
+          await setCustomerStripeId(account.id, created.id)
+        }
       }
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
-        customer: stripeCustomerId,
+        ...(stripeCustomerId
+          ? {
+              customer: stripeCustomerId,
+              ...stripeAccountSavedPaymentFields(),
+            }
+          : {
+              customer_creation: 'if_required',
+            }),
         allow_promotion_codes: true,
         success_url: successUrl,
         cancel_url: cancelUrl,
         client_reference_id: id,
-        metadata: { customRequestId: id, customerUserId: account.id },
-        ...stripeCheckoutShippingFields(),
-        ...stripeAccountSavedPaymentFields(),
+        metadata: {
+          customRequestId: id,
+          ...(account ? { customerUserId: account.id } : { guest: '1' }),
+        },
+        ...stripeCheckoutShippingFields({ guest: !account }),
         line_items: [
           {
             quantity: 1,
@@ -726,7 +739,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       await db.run(
         `UPDATE custom_requests SET stripe_session_id = ?, user_id = ?, updated_at = ? WHERE id = ?`,
         session.id,
-        account.id,
+        account?.id ?? null,
         new Date().toISOString(),
         id,
       )

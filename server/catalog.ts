@@ -5,7 +5,9 @@ import {
   buildSku,
   clampMulticolorSlotCount,
   colorById,
+  defaultMulticolorPartLabel,
   emptyCustomColorSlots,
+  MULTICOLOR_SLOT_MAX,
   normalizeCustomSlots,
   type CustomColorSlot,
 } from '../shared/colors.ts'
@@ -22,6 +24,12 @@ import {
 export type DesignStatus = 'draft' | 'pending_review' | 'approved' | 'rejected' | 'archived'
 
 export type SliceStatus = 'idle' | 'slicing' | 'ready' | 'error'
+
+/** One STL per color region for multicolor preview (slicing still uses stlPath). */
+export type DesignPart = {
+  label: string
+  stlPath: string
+}
 
 export type Design = {
   id: string
@@ -51,12 +59,33 @@ export type Design = {
   multicolorOnly: boolean
   /** How many solid filaments the customer must pick (multicolor designs). */
   multicolorSlotCount: number
+  /** Ordered part STLs matching multicolorSlotCount (preview + order clarity). */
+  parts: DesignPart[]
   worstCostUsd: number | null
   catalogPriceUsd: number | null
   pricedAt: string | null
   pricingInputsJson: string
   createdAt: string
   updatedAt: string
+}
+
+export function parsePartsJson(raw: unknown, slotCount: number): DesignPart[] {
+  let parsed: unknown[] = []
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw
+    if (Array.isArray(v)) parsed = v
+  } catch {
+    parsed = []
+  }
+  const slots = clampMulticolorSlotCount(slotCount)
+  const out: DesignPart[] = []
+  for (let i = 0; i < Math.min(slots, MULTICOLOR_SLOT_MAX); i++) {
+    const row = parsed[i] as { label?: unknown; stlPath?: unknown } | undefined
+    const label = String(row?.label ?? '').trim() || defaultMulticolorPartLabel(i)
+    const stlPath = String(row?.stlPath ?? '').trim()
+    out.push({ label: label.slice(0, 40), stlPath })
+  }
+  return out
 }
 
 export type OrderStatus =
@@ -142,6 +171,11 @@ export function rowToDesign(row: Record<string, unknown>): Design {
     sliceStatusRaw === 'slicing' || sliceStatusRaw === 'ready' || sliceStatusRaw === 'error'
       ? sliceStatusRaw
       : 'idle'
+  const multicolorOnly = Boolean(Number(row.multicolor_only ?? 0))
+  const multicolorSlotCount = clampMulticolorSlotCount(row.multicolor_slot_count)
+  const parts = multicolorOnly
+    ? parsePartsJson(row.parts_json, multicolorSlotCount)
+    : []
   return {
     id: row.id as string,
     skuBase: row.sku_base as string,
@@ -166,8 +200,9 @@ export function rowToDesign(row: Record<string, unknown>): Design {
     gramsJoshKobra: numOrNull(row.grams_josh_kobra),
     hoursJoshKobra: numOrNull(row.hours_josh_kobra),
     availableColorIds: Array.isArray(colors) ? colors : [],
-    multicolorOnly: Boolean(Number(row.multicolor_only ?? 0)),
-    multicolorSlotCount: clampMulticolorSlotCount(row.multicolor_slot_count),
+    multicolorOnly,
+    multicolorSlotCount,
+    parts,
     worstCostUsd: numOrNull(row.worst_cost_usd),
     catalogPriceUsd: numOrNull(row.catalog_price_usd),
     pricedAt: (row.priced_at as string | null) ?? null,

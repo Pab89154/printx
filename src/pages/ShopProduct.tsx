@@ -6,6 +6,7 @@ import {
   MULTICOLOR_SLOT_DEFAULT,
   clampMulticolorSlotCount,
   colorSwatchStyle,
+  defaultMulticolorPartLabel,
   formatMulticolorSelection,
   isMulticolorColorId,
 } from '../../shared/colors'
@@ -14,7 +15,7 @@ import type { PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 import { CartLink } from '../components/CartLink'
-import { StlViewer } from '../components/StlViewer'
+import { MultiStlViewer, StlViewer } from '../components/StlViewer'
 
 export function ShopProduct() {
   const { skuBase = '' } = useParams()
@@ -59,12 +60,36 @@ export function ShopProduct() {
     [design],
   )
 
+  const slotLabels = useMemo(() => {
+    const n = clampMulticolorSlotCount(design?.multicolorSlotCount ?? MULTICOLOR_SLOT_DEFAULT)
+    return Array.from({ length: n }, (_, i) => {
+      const fromParts = design?.parts?.[i]?.label?.trim()
+      return fromParts || defaultMulticolorPartLabel(i)
+    })
+  }, [design])
+
   const slotColors = slotColorIds.map((id) => solidChoices.find((c) => c.id === id) ?? null)
   const multicolorReady =
     multicolorOnly &&
     slotColorIds.length > 0 &&
     slotColorIds.every((id) => Boolean(id)) &&
     slotColors.every(Boolean)
+
+  const multiParts = useMemo(() => {
+    if (!design?.parts?.length) return []
+    return design.parts
+      .map((p, i) => {
+        const hex = solidChoices.find((c) => c.id === slotColorIds[i])?.hex
+        return {
+          url: p.modelUrl || '',
+          colorHex: hex || '#94A3B8',
+          label: p.label,
+        }
+      })
+      .filter((p) => p.url)
+  }, [design, slotColorIds, solidChoices])
+
+  const useMultiPreview = multicolorOnly && multiParts.length >= 2
 
   const previewColor = multicolorOnly
     ? slotColors.find(Boolean) ?? { id: MULTICOLOR_COLOR_ID, hex: '#7C3AED', name: 'Multicolor' }
@@ -91,7 +116,16 @@ export function ShopProduct() {
         {design && (
           <div className="grid gap-10 lg:grid-cols-2">
             <div>
-              {design.modelUrl ? (
+              {useMultiPreview ? (
+                <MultiStlViewer
+                  parts={multiParts}
+                  credentials="same-origin"
+                  interactive
+                  eager
+                  height={420}
+                  className="overflow-hidden rounded-2xl border bg-white [&_>div]:rounded-2xl [&_>div]:border-0"
+                />
+              ) : design.modelUrl ? (
                 <StlViewer
                   url={design.modelUrl}
                   credentials="same-origin"
@@ -126,7 +160,7 @@ export function ShopProduct() {
                   {slotColorIds.map((selectedId, index) => (
                     <div key={`slot-${index}`}>
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                        Color {index + 1}
+                        {slotLabels[index] || defaultMulticolorPartLabel(index)}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {solidChoices.map((c) => (
@@ -208,7 +242,7 @@ export function ShopProduct() {
                         name: design.name,
                         imageUrl: '',
                         colorId: MULTICOLOR_COLOR_ID,
-                        colorName: formatMulticolorSelection(names),
+                        colorName: formatMulticolorSelection(names, slotLabels),
                         colorHex: slotColors[0]?.hex ?? '#7C3AED',
                         filamentColorIds: [...slotColorIds],
                         unitPrice: design.catalogPriceUsd,

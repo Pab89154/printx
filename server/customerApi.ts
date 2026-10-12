@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { CUSTOMER_ACCOUNTS_ENABLED } from '../shared/customerAccounts.ts'
 import {
   clearCustomerSessionCookieHeader,
   createSession,
@@ -62,6 +63,17 @@ export async function handleCustomerApi(
   urlPath: string,
   method: string,
 ): Promise<boolean> {
+  if (!CUSTOMER_ACCOUNTS_ENABLED) {
+    const gated =
+      urlPath === '/api/public/auth/register' ||
+      urlPath === '/api/public/auth/login' ||
+      urlPath.startsWith('/api/public/account')
+    if (gated) {
+      send(res, 403, { error: 'Customer accounts are disabled.' })
+      return true
+    }
+  }
+
   if (urlPath === '/api/public/auth/register' && method === 'POST') {
     const body = await readJson(req)
     const result = await registerCustomer(body.name, body.email, body.password)

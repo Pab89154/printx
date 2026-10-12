@@ -196,6 +196,7 @@ async function migrate(database: DbApi) {
       available_color_ids TEXT NOT NULL DEFAULT '[]',
       multicolor_only INTEGER NOT NULL DEFAULT 0,
       multicolor_slot_count INTEGER NOT NULL DEFAULT 2,
+      parts_json TEXT NOT NULL DEFAULT '[]',
       worst_cost_usd REAL,
       catalog_price_usd REAL,
       priced_at TEXT,
@@ -321,6 +322,17 @@ async function migrateDesignMulticolorOnly(database: DbApi) {
   try {
     await database.exec(
       `ALTER TABLE designs ADD COLUMN multicolor_slot_count INTEGER NOT NULL DEFAULT 2`,
+    )
+  } catch {
+    /* column already exists */
+  }
+}
+
+/** Per-color-region STLs for multicolor preview (parts_json). */
+async function migrateDesignPartsJson(database: DbApi) {
+  try {
+    await database.exec(
+      `ALTER TABLE designs ADD COLUMN parts_json TEXT NOT NULL DEFAULT '[]'`,
     )
   } catch {
     /* column already exists */
@@ -1018,6 +1030,7 @@ async function initDb(): Promise<DbApi> {
   await migrateDesignQuoteIds(database)
   await migrateDiscountCustomerVisibility(database)
   await migrateDesignMulticolorOnly(database)
+  await migrateDesignPartsJson(database)
   await migrateOrderItemFilamentColors(database)
   await migrateCustomerAccounts(database)
   await seed(database)

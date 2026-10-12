@@ -10,6 +10,13 @@ export type CatalogColor = {
 
 export type SliceStatus = 'idle' | 'slicing' | 'ready' | 'error'
 
+export type DesignPartDto = {
+  label: string
+  stlPath: string
+  hasStl: boolean
+  modelExt?: string
+}
+
 export type Design = {
   id: string
   skuBase: string
@@ -38,12 +45,18 @@ export type Design = {
   availableColorIds: string[]
   multicolorOnly: boolean
   multicolorSlotCount?: number
+  parts?: DesignPartDto[]
   worstCostUsd: number | null
   catalogPriceUsd: number | null
   pricedAt: string | null
   pricingInputsJson: string
   createdAt: string
   updatedAt: string
+}
+
+export type PublicCatalogPart = {
+  label: string
+  modelUrl: string
 }
 
 export type PublicCatalogDesign = {
@@ -60,6 +73,8 @@ export type PublicCatalogDesign = {
   catalogPriceUsd: number | null
   multicolorOnly?: boolean
   multicolorSlotCount?: number
+  /** Per-slot part STLs for multicolor tinted preview. */
+  parts?: PublicCatalogPart[]
   availableColors: CatalogColor[]
 }
 

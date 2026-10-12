@@ -235,7 +235,8 @@ export const api = {
         })
       },
       stlUrl: (id: string) => `/api/admin/designs/${id}/stl`,
-      remove: (id: string) => request(`/api/admin/designs/${id}`, { method: 'DELETE' }),
+      remove: (id: string) =>
+        request<{ ok: true; archived: boolean }>(`/api/admin/designs/${id}`, { method: 'DELETE' }),
       submit: (id: string) =>
         request<import('../types/catalog.ts').Design & { sliceWarning?: string }>(
           `/api/admin/designs/${id}/submit`,

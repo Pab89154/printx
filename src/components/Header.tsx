@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Menu, User, X } from 'lucide-react'
+import { CUSTOMER_ACCOUNTS_ENABLED } from '../../shared/customerAccounts'
 import { NAV_LINKS } from '../data/navigation'
 import { usePublicData } from '../context/PublicDataContext'
 import { useCustomerAuth } from '../context/CustomerAuthContext'
@@ -47,13 +48,19 @@ export function Header() {
 
         <div className="flex items-center gap-2">
           <CartLink />
-          <Link
-            to={accountHref}
-            aria-label={customer ? 'Account' : 'Sign in'}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-navy transition hover:bg-slate-100"
-          >
-            <User size={20} strokeWidth={2} aria-hidden />
-          </Link>
+          {CUSTOMER_ACCOUNTS_ENABLED ? (
+            <Link
+              to={accountHref}
+              aria-label={customer ? 'Account' : 'Sign in'}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-navy transition hover:bg-slate-100"
+            >
+              <User size={20} strokeWidth={2} aria-hidden />
+            </Link>
+          ) : (
+            <Button href="/shop" size="sm" className="hidden sm:inline-flex">
+              Shop
+            </Button>
+          )}
           <button
             type="button"
             aria-label="Open menu"
@@ -81,21 +88,44 @@ export function Header() {
                 {link.label}
               </a>
             ))}
-            <Link
-              to={accountHref}
-              className="rounded-xl px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-electric"
-              onClick={() => setMenuOpen(false)}
-            >
-              {customer ? 'My account' : 'Sign in'}
-            </Link>
-            {hasStands ? (
-              <Button href="#stands" size="md" className="mt-2 w-full">
-                Find a Stand
-              </Button>
+            {CUSTOMER_ACCOUNTS_ENABLED ? (
+              <>
+                <Link
+                  to={accountHref}
+                  className="rounded-xl px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-electric"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  {customer ? 'My account' : 'Sign in'}
+                </Link>
+                {hasStands ? (
+                  <Button href="#stands" size="md" className="mt-2 w-full">
+                    Find a Stand
+                  </Button>
+                ) : (
+                  <Button href={accountHref} size="md" className="mt-2 w-full">
+                    {customer ? 'My account' : 'Sign in'}
+                  </Button>
+                )}
+              </>
             ) : (
-              <Button href={accountHref} size="md" className="mt-2 w-full">
-                {customer ? 'My account' : 'Sign in'}
-              </Button>
+              <>
+                <Link
+                  to="/shop"
+                  className="rounded-xl px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-electric"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Shop
+                </Link>
+                {hasStands ? (
+                  <Button href="#stands" size="md" className="mt-2 w-full">
+                    Find a Stand
+                  </Button>
+                ) : (
+                  <Button href="/shop" size="md" className="mt-2 w-full">
+                    Shop
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </nav>

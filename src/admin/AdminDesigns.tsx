@@ -8,11 +8,34 @@ import {
   MULTICOLOR_SLOT_MIN,
   clampMulticolorSlotCount,
   colorSwatchStyle,
+  defaultMulticolorPartLabel,
   solidBuiltinColors,
 } from '../../shared/colors'
 import { MODEL_ACCEPT, modelLabel, SLICEABLE_EXTS } from '../../shared/modelFormats'
 import type { Design } from '../types/catalog'
-import { StlViewer } from '../components/StlViewer'
+import { MultiStlViewer, StlViewer } from '../components/StlViewer'
+
+type PartForm = {
+  label: string
+  stlPath: string
+  hasStl: boolean
+  modelExt: string
+  localPreviewUrl: string
+}
+
+function emptyParts(count: number, existing?: PartForm[]): PartForm[] {
+  const n = clampMulticolorSlotCount(count)
+  return Array.from({ length: n }, (_, i) => {
+    const prev = existing?.[i]
+    return {
+      label: prev?.label?.trim() || defaultMulticolorPartLabel(i),
+      stlPath: prev?.stlPath || '',
+      hasStl: Boolean(prev?.hasStl || prev?.stlPath),
+      modelExt: prev?.modelExt || '',
+      localPreviewUrl: prev?.localPreviewUrl || '',
+    }
+  })
+}
 
 const emptyForm = {
   name: '',
@@ -26,6 +49,7 @@ const emptyForm = {
   availableColorIds: ['black', 'white'] as string[],
   multicolorOnly: false,
   multicolorSlotCount: MULTICOLOR_SLOT_DEFAULT,
+  parts: emptyParts(MULTICOLOR_SLOT_DEFAULT) as PartForm[],
 }
 
 export function AdminDesigns() {
@@ -48,6 +72,19 @@ export function AdminDesigns() {
       localPreviewUrlRef.current = ''
     }
     setLocalPreviewUrl('')
+  }
+
+  function revokePartPreviews(parts: PartForm[]) {
+    for (const p of parts) {
+      if (p.localPreviewUrl) URL.revokeObjectURL(p.localPreviewUrl)
+    }
+  }
+
+  function resetForm() {
+    revokePartPreviews(form.parts)
+    clearLocalPreview()
+    setEditingId(null)
+    setForm(emptyForm)
   }
 
   async function load() {
@@ -85,6 +122,12 @@ export function AdminDesigns() {
       multicolorOnly: form.multicolorOnly,
       multicolorSlotCount: form.multicolorSlotCount,
       availableColorIds: form.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID),
+      parts: form.multicolorOnly
+        ? form.parts.map((p) => ({
+            label: p.label.trim() || 'Part',
+            ...(p.stlPath ? { stlPath: p.stlPath } : {}),
+          }))
+        : [],
     }
   }
 
@@ -92,6 +135,17 @@ export function AdminDesigns() {
     clearLocalPreview()
     setEditingId(d.id)
     const solids = d.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
+    const slotCount = clampMulticolorSlotCount(d.multicolorSlotCount ?? MULTICOLOR_SLOT_DEFAULT)
+    const parts = emptyParts(
+      slotCount,
+      (d.parts ?? []).map((p) => ({
+        label: p.label,
+        stlPath: '',
+        hasStl: Boolean(p.hasStl),
+        modelExt: p.modelExt || '',
+        localPreviewUrl: '',
+      })),
+    )
     setForm({
       name: d.name,
       skuBase: d.skuBase,
@@ -103,8 +157,45 @@ export function AdminDesigns() {
       modelExt: d.modelExt || '',
       availableColorIds: solids.length ? solids : ['black', 'white'],
       multicolorOnly: Boolean(d.multicolorOnly),
-      multicolorSlotCount: clampMulticolorSlotCount(d.multicolorSlotCount ?? MULTICOLOR_SLOT_DEFAULT),
+      multicolorSlotCount: slotCount,
+      parts,
     })
+  }
+
+  async function uploadPartModel(index: number, file: File) {
+    setUploadingStl(true)
+    setError('')
+    setMessage('')
+    try {
+      const { stlPath, hasStl, modelExt } = await api.catalog.designs.uploadModel(file)
+      if (!stlPath || !hasStl) {
+        throw new Error('Upload finished but the server did not confirm the file. Try again.')
+      }
+      setForm((f) => {
+        const parts = [...f.parts]
+        const prev = parts[index]
+        if (prev?.localPreviewUrl) URL.revokeObjectURL(prev.localPreviewUrl)
+        const localPreviewUrl =
+          modelExt === '.stl' || file.name.toLowerCase().endsWith('.stl')
+            ? URL.createObjectURL(file)
+            : ''
+        parts[index] = {
+          label: prev?.label || defaultMulticolorPartLabel(index),
+          stlPath,
+          hasStl: true,
+          modelExt,
+          localPreviewUrl,
+        }
+        return { ...f, parts }
+      })
+      setMessage(
+        `${modelLabel(modelExt)} uploaded for ${defaultMulticolorPartLabel(index)} — Save draft to attach.`,
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Part model upload failed')
+    } finally {
+      setUploadingStl(false)
+    }
   }
 
   async function uploadModel(file: File) {
@@ -183,13 +274,32 @@ export function AdminDesigns() {
               // Keep editing so Submit for approval is available after first save.
               setEditingId(saved.id)
               clearLocalPreview()
-              setForm((f) => ({
-                ...f,
-                stlPath: '',
-                hasStl: true,
-                modelExt: saved.modelExt || f.modelExt,
-                skuBase: saved.skuBase,
-              }))
+              setForm((f) => {
+                revokePartPreviews(f.parts)
+                const slotCount = clampMulticolorSlotCount(
+                  saved.multicolorSlotCount ?? f.multicolorSlotCount,
+                )
+                const savedParts = saved.parts ?? []
+                return {
+                  ...f,
+                  stlPath: '',
+                  hasStl: true,
+                  modelExt: saved.modelExt || f.modelExt,
+                  skuBase: saved.skuBase,
+                  multicolorOnly: Boolean(saved.multicolorOnly),
+                  multicolorSlotCount: slotCount,
+                  parts: emptyParts(
+                    slotCount,
+                    savedParts.map((p) => ({
+                      label: p.label,
+                      stlPath: '',
+                      hasStl: Boolean(p.hasStl),
+                      modelExt: p.modelExt || '',
+                      localPreviewUrl: '',
+                    })),
+                  ),
+                }
+              })
               setMessage(
                 wasEditing
                   ? 'Design updated (model on file). Click Submit for approval to send it to the main admin.'
@@ -307,6 +417,7 @@ export function AdminDesigns() {
                   .length
                   ? f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
                   : ['black', 'white', 'red', 'blue'],
+                parts: on ? emptyParts(f.multicolorSlotCount, f.parts) : emptyParts(f.multicolorSlotCount),
               }))
             }}
           />
@@ -318,28 +429,116 @@ export function AdminDesigns() {
           </span>
         </label>
         {form.multicolorOnly ? (
-          <label className="mt-3 flex items-center gap-3 text-sm text-navy">
-            <span className="font-medium">Colors to pick</span>
-            <select
-              className="rounded-lg border px-2 py-1.5"
-              value={form.multicolorSlotCount}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  multicolorSlotCount: clampMulticolorSlotCount(e.target.value),
-                }))
-              }
-            >
-              {Array.from(
-                { length: MULTICOLOR_SLOT_MAX - MULTICOLOR_SLOT_MIN + 1 },
-                (_, i) => MULTICOLOR_SLOT_MIN + i,
-              ).map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
+          <>
+            <label className="mt-3 flex items-center gap-3 text-sm text-navy">
+              <span className="font-medium">Colors to pick</span>
+              <select
+                className="rounded-lg border px-2 py-1.5"
+                value={form.multicolorSlotCount}
+                onChange={(e) => {
+                  const n = clampMulticolorSlotCount(e.target.value)
+                  setForm((f) => ({
+                    ...f,
+                    multicolorSlotCount: n,
+                    parts: emptyParts(n, f.parts),
+                  }))
+                }}
+              >
+                {Array.from(
+                  { length: MULTICOLOR_SLOT_MAX - MULTICOLOR_SLOT_MIN + 1 },
+                  (_, i) => MULTICOLOR_SLOT_MIN + i,
+                ).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+              <div>
+                <p className="text-sm font-semibold text-navy">Part STLs (one per color region)</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  Shop preview tints each part with the customer’s filament pick. Keep the main model
+                  above for slicing.
+                </p>
+              </div>
+              {form.parts.map((part, index) => {
+                const partPreview =
+                  part.localPreviewUrl ||
+                  (editingId && part.hasStl && !part.stlPath
+                    ? `/api/admin/designs/${editingId}/parts/${index}/stl`
+                    : '')
+                return (
+                  <div
+                    key={`part-${index}`}
+                    className="rounded-lg border border-slate-200 bg-white p-3"
+                  >
+                    <div className="flex flex-wrap items-end gap-3">
+                      <label className="min-w-[8rem] flex-1 text-xs font-medium text-navy">
+                        Slot {index + 1} label
+                        <input
+                          className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm"
+                          value={part.label}
+                          onChange={(e) =>
+                            setForm((f) => {
+                              const parts = [...f.parts]
+                              parts[index] = { ...parts[index]!, label: e.target.value }
+                              return { ...f, parts }
+                            })
+                          }
+                          placeholder={defaultMulticolorPartLabel(index)}
+                        />
+                      </label>
+                      <label className="btn btn-ghost btn-compact cursor-pointer">
+                        <Upload size={14} className="mr-1 inline" />
+                        {part.hasStl || part.stlPath ? 'Replace STL' : 'Upload STL'}
+                        <input
+                          type="file"
+                          accept=".stl,model/stl"
+                          className="hidden"
+                          disabled={uploadingStl}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            e.target.value = ''
+                            if (file) void uploadPartModel(index, file)
+                          }}
+                        />
+                      </label>
+                      {(part.hasStl || part.stlPath) && (
+                        <span className="text-xs text-muted">
+                          {part.modelExt ? modelLabel(part.modelExt) : 'STL'} attached
+                        </span>
+                      )}
+                    </div>
+                    {partPreview ? (
+                      <StlViewer
+                        url={partPreview}
+                        className="mt-2 max-w-sm"
+                        height={160}
+                        credentials={part.localPreviewUrl ? 'omit' : 'include'}
+                      />
+                    ) : null}
+                  </div>
+                )
+              })}
+              {form.parts.every((p) => p.hasStl || p.stlPath || p.localPreviewUrl) &&
+              form.parts.some((p) => p.localPreviewUrl || (editingId && p.hasStl)) ? (
+                <MultiStlViewer
+                  className="max-w-xl"
+                  height={240}
+                  credentials="include"
+                  parts={form.parts.map((p, i) => ({
+                    url:
+                      p.localPreviewUrl ||
+                      (editingId && p.hasStl
+                        ? `/api/admin/designs/${editingId}/parts/${i}/stl`
+                        : ''),
+                    colorHex: ['#E11D48', '#2563EB', '#16A34A', '#EAB308'][i],
+                  }))}
+                />
+              ) : null}
+            </div>
+          </>
         ) : null}
         <p className="mt-3 text-xs text-muted">
           {form.multicolorOnly
@@ -403,9 +602,7 @@ export function AdminDesigns() {
                         ? `Submitted for approval. ${res.sliceWarning}`
                         : 'Submitted for approval — main admin can review it now.',
                     )
-                    clearLocalPreview()
-                    setEditingId(null)
-                    setForm(emptyForm)
+                    resetForm()
                     return load()
                   })
                   .catch((err) => setError(err instanceof Error ? err.message : 'Submit failed'))
@@ -419,11 +616,7 @@ export function AdminDesigns() {
             <button
               type="button"
               className="btn btn-ghost"
-              onClick={() => {
-                clearLocalPreview()
-                setEditingId(null)
-                setForm(emptyForm)
-              }}
+              onClick={() => resetForm()}
             >
               Cancel edit
             </button>
@@ -497,12 +690,22 @@ export function AdminDesigns() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-compact text-red-600"
-                  onClick={() =>
+                  onClick={() => {
+                    if (!window.confirm(`Delete “${d.name}”?`)) return
+                    setError('')
+                    setMessage('')
                     void api.catalog.designs
                       .remove(d.id)
-                      .then(() => load())
+                      .then((res) => {
+                        setMessage(
+                          res.archived
+                            ? 'Archived (linked to orders) — hidden from this list.'
+                            : 'Deleted.',
+                        )
+                        return load()
+                      })
                       .catch((err) => setError(err instanceof Error ? err.message : 'Delete failed'))
-                  }
+                  }}
                 >
                   Delete
                 </button>

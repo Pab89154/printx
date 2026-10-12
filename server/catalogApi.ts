@@ -31,14 +31,17 @@ import {
   rowToDesign,
   rowToOrder,
   rowToOrderItem,
+  parsePartsJson,
   sanitizeSkuBase,
   seedCatalogDefaults,
   suggestSkuBase,
   type Design,
+  type DesignPart,
 } from './catalog.ts'
 import {
   BUILTIN_COLORS,
   clampMulticolorSlotCount,
+  defaultMulticolorPartLabel,
   emptyCustomColorSlots,
   formatMulticolorSelection,
   isMulticolorColorId,
@@ -94,9 +97,57 @@ const PRINTER_FIELD: Record<
   josh_kobra: { grams: 'gramsJoshKobra', hours: 'hoursJoshKobra', label: 'Josh Anycubic Kobra X' },
 }
 
-function designDto(d: Design): Omit<Design, 'stlPath'> & { stlPath: ''; modelExt: string } {
+function designDto(
+  d: Design,
+): Omit<Design, 'stlPath' | 'parts'> & {
+  stlPath: ''
+  modelExt: string
+  parts: { label: string; stlPath: ''; hasStl: boolean; modelExt: string }[]
+} {
   const modelExt = path.extname(d.stlPath || '').toLowerCase()
-  return { ...d, stlPath: '', modelExt }
+  return {
+    ...d,
+    stlPath: '',
+    modelExt,
+    parts: d.parts.map((p) => ({
+      label: p.label,
+      stlPath: '' as const,
+      hasStl: Boolean(p.stlPath.trim()),
+      modelExt: path.extname(p.stlPath || '').toLowerCase(),
+    })),
+  }
+}
+
+function safeStlPath(raw: unknown): string {
+  const p = sanitizeText(String(raw ?? ''), 200)
+  if (!p || p.includes('..') || p.includes('/') || p.includes('\\')) return ''
+  return p
+}
+
+/** Merge client part payloads with existing paths (empty stlPath keeps previous). */
+function mergeDesignParts(
+  bodyParts: unknown,
+  existing: DesignPart[],
+  slotCount: number,
+  multicolorOnly: boolean,
+): DesignPart[] {
+  if (!multicolorOnly) return []
+  const slots = clampMulticolorSlotCount(slotCount)
+  const incoming = Array.isArray(bodyParts) ? bodyParts : null
+  if (!incoming) {
+    return parsePartsJson(JSON.stringify(existing), slots)
+  }
+  const out: DesignPart[] = []
+  for (let i = 0; i < slots; i++) {
+    const row = incoming[i] as { label?: unknown; stlPath?: unknown } | undefined
+    const label =
+      sanitizeText(String(row?.label ?? existing[i]?.label ?? ''), 40) ||
+      defaultMulticolorPartLabel(i)
+    const nextPath = row?.stlPath !== undefined ? safeStlPath(row.stlPath) : ''
+    const stlPath = nextPath || existing[i]?.stlPath || ''
+    out.push({ label, stlPath })
+  }
+  return out
 }
 
 /**
@@ -836,6 +887,12 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
   if (multicolorOnly && availableColorIds.length < multicolorSlotCount) {
     availableColorIds = solidBuiltinColors().map((c) => c.id)
   }
+  const parts = mergeDesignParts(
+    body.parts,
+    existing?.parts ?? [],
+    multicolorSlotCount,
+    multicolorOnly,
+  )
   const num = (key: string, fallback: number | null) => {
     if (body[key] === undefined || body[key] === null || body[key] === '') return fallback
     const n = Number(body[key])
@@ -850,6 +907,7 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
     availableColorIds,
     multicolorOnly,
     multicolorSlotCount,
+    parts,
     gramsPabloP1s: num('gramsPabloP1s', existing?.gramsPabloP1s ?? null),
     hoursPabloP1s: num('hoursPabloP1s', existing?.hoursPabloP1s ?? null),
     gramsCourtEnder: num('gramsCourtEnder', existing?.gramsCourtEnder ?? null),
@@ -1026,6 +1084,18 @@ export async function handleCatalogApi(
     )
     const designs = rows.map(rowToDesign).map((d) => {
       const modelExt = path.extname(d.stlPath || '').toLowerCase()
+      const parts = d.multicolorOnly
+        ? d.parts.map((p, index) => {
+            const partExt = path.extname(p.stlPath || '').toLowerCase()
+            return {
+              label: p.label || defaultMulticolorPartLabel(index),
+              modelUrl:
+                p.stlPath.trim() && partExt === '.stl'
+                  ? `/api/public/catalog/${d.id}/parts/${index}/stl`
+                  : '',
+            }
+          })
+        : []
       return {
         id: d.id,
         skuBase: d.skuBase,
@@ -1040,6 +1110,7 @@ export async function handleCatalogApi(
         catalogPriceUsd: d.catalogPriceUsd,
         multicolorOnly: d.multicolorOnly,
         multicolorSlotCount: d.multicolorSlotCount,
+        parts,
         availableColors: (() => {
           // Legacy rows stored only `multicolor` — fall back to every solid filament.
           const solidIds = d.availableColorIds.filter((id) => !isMulticolorColorId(id))
@@ -1107,6 +1178,43 @@ export async function handleCatalogApi(
           ? 'Model not found'
           : 'Model file missing locally. Add SUPABASE_SERVICE_ROLE_KEY to .env, or re-upload the STL.',
       })
+      return true
+    }
+    return true
+  }
+
+  const publicPartStlMatch = /^\/api\/public\/catalog\/([^/]+)\/parts\/(\d+)\/stl$/.exec(urlPath)
+  if (publicPartStlMatch && method === 'GET') {
+    const designId = publicPartStlMatch[1]!
+    const partIndex = Number(publicPartStlMatch[2])
+    const row = await db.get<Record<string, unknown>>(
+      `SELECT * FROM designs WHERE id = ?`,
+      designId,
+    )
+    if (!row || String(row.status) !== 'approved') {
+      send(res, 404, { error: 'Model not found' })
+      return true
+    }
+    const design = rowToDesign(row)
+    const part = design.parts[partIndex]
+    const stlPath = part?.stlPath?.trim() ?? ''
+    if (!stlPath || stlPath.includes('..') || stlPath.includes('/') || stlPath.includes('\\')) {
+      send(res, 404, { error: 'Model not found' })
+      return true
+    }
+    if (path.extname(stlPath).toLowerCase() !== '.stl') {
+      send(res, 404, { error: 'Interactive preview is STL-only.' })
+      return true
+    }
+    const ok = await sendStlWithDevFallback(
+      res,
+      designId,
+      stlPath,
+      'model/stl',
+      'public, max-age=120, stale-while-revalidate=300',
+    )
+    if (!ok) {
+      send(res, 404, { error: 'Model not found' })
       return true
     }
     return true
@@ -1196,7 +1304,11 @@ export async function handleCatalogApi(
           }
           names.push(fc.name)
         }
-        colorName = formatMulticolorSelection(names)
+        const slotLabels = design.parts.map((p) => p.label)
+        colorName = formatMulticolorSelection(
+          names,
+          slotLabels.length === names.length ? slotLabels : undefined,
+        )
         colorCode = MULTICOLOR_COLOR.code
       } else {
         if (!design.availableColorIds.includes(colorId)) {
@@ -1593,7 +1705,7 @@ export async function handleCatalogApi(
       return true
     }
     const rows = await db.all<Record<string, unknown>>(
-      `SELECT * FROM designs ORDER BY updated_at DESC`,
+      `SELECT * FROM designs WHERE status != 'archived' ORDER BY updated_at DESC`,
     )
     send(res, 200, rows.map(rowToDesign).map(designDto))
     return true
@@ -1630,8 +1742,8 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'Name is required.' })
       return true
     }
-    const stlPath = sanitizeText(String(body.stlPath ?? ''), 200)
-    if (!stlPath || stlPath.includes('..') || stlPath.includes('/') || stlPath.includes('\\')) {
+    const stlPath = safeStlPath(body.stlPath)
+    if (!stlPath) {
       send(res, 400, { error: 'Upload a 3D model before saving the design.' })
       return true
     }
@@ -1645,9 +1757,10 @@ export async function handleCatalogApi(
           submitted_at, reviewed_by, reviewed_at, review_note,
           grams_pablo_p1s, hours_pablo_p1s, grams_court_ender, hours_court_ender,
           grams_josh_kobra, hours_josh_kobra, available_color_ids, multicolor_only, multicolor_slot_count,
+          parts_json,
           worst_cost_usd, catalog_price_usd, priced_at, pricing_inputs_json,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', '', 'draft', ?, NULL, NULL, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}', ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', '', 'draft', ?, NULL, NULL, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}', ?, ?)`,
         id,
         parsed.skuBase,
         parsed.name,
@@ -1665,6 +1778,7 @@ export async function handleCatalogApi(
         JSON.stringify(parsed.availableColorIds),
         parsed.multicolorOnly ? 1 : 0,
         parsed.multicolorSlotCount,
+        JSON.stringify(parsed.parts),
         now,
         now,
       )
@@ -1712,6 +1826,48 @@ export async function handleCatalogApi(
     return true
   }
 
+  const designPartStlMatch = /^\/api\/admin\/designs\/([^/]+)\/parts\/(\d+)\/stl$/.exec(urlPath)
+  if (designPartStlMatch && method === 'GET') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'products')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const designId = designPartStlMatch[1]!
+    const partIndex = Number(designPartStlMatch[2])
+    const row = await db.get<Record<string, unknown>>(
+      'SELECT * FROM designs WHERE id = ?',
+      designId,
+    )
+    if (!row) {
+      send(res, 404, { error: 'Model not found' })
+      return true
+    }
+    const design = rowToDesign(row)
+    const stlPath = design.parts[partIndex]?.stlPath?.trim() ?? ''
+    if (!stlPath || stlPath.includes('..') || stlPath.includes('/') || stlPath.includes('\\')) {
+      send(res, 404, { error: 'Model not found' })
+      return true
+    }
+    const ext = path.extname(stlPath).toLowerCase()
+    if (ext !== '.stl') {
+      send(res, 404, { error: 'Part preview is STL-only.' })
+      return true
+    }
+    const ok = await sendStlWithDevFallback(
+      res,
+      designId,
+      stlPath,
+      modelContentType(ext),
+      'private, max-age=60',
+    )
+    if (!ok) {
+      send(res, 404, { error: 'Model not found' })
+      return true
+    }
+    return true
+  }
+
   const designMatch =
     /^\/api\/admin\/designs\/([^/]+)(?:\/(submit|requote|approve|reject|reprice))?$/.exec(urlPath)
   if (designMatch) {
@@ -1744,12 +1900,8 @@ export async function handleCatalogApi(
       const body = await readJson(req)
       const parsed = parseDesignBody(body, design)
       // Ignore empty stlPath so a stale client field cannot wipe an existing model.
-      const incomingStl =
-        body.stlPath !== undefined ? sanitizeText(String(body.stlPath ?? ''), 200) : ''
-      const stlPath =
-        incomingStl && !incomingStl.includes('..') && !incomingStl.includes('/') && !incomingStl.includes('\\')
-          ? incomingStl
-          : design.stlPath
+      const incomingStl = body.stlPath !== undefined ? safeStlPath(body.stlPath) : ''
+      const stlPath = incomingStl || design.stlPath
       const stlChanged = stlPath !== design.stlPath
       const now = new Date().toISOString()
       try {
@@ -1762,6 +1914,7 @@ export async function handleCatalogApi(
             grams_pablo_p1s = ?, hours_pablo_p1s = ?, grams_court_ender = ?, hours_court_ender = ?,
             grams_josh_kobra = ?, hours_josh_kobra = ?, available_color_ids = ?, multicolor_only = ?,
             multicolor_slot_count = ?,
+            parts_json = ?,
             quote_ids_json = CASE WHEN ? THEN '{}' ELSE quote_ids_json END,
             file_ids_json = CASE WHEN ? THEN '{}' ELSE file_ids_json END,
             updated_at = ?
@@ -1783,6 +1936,7 @@ export async function handleCatalogApi(
           JSON.stringify(parsed.availableColorIds),
           parsed.multicolorOnly ? 1 : 0,
           parsed.multicolorSlotCount,
+          JSON.stringify(parsed.parts),
           stlChanged ? 1 : 0,
           stlChanged ? 1 : 0,
           now,
@@ -1804,17 +1958,35 @@ export async function handleCatalogApi(
         send(res, 403, { error: 'Only the creator or main admin can delete.' })
         return true
       }
-      if (design.status === 'approved') {
+      const linked = await db.get<{ c: number }>(
+        `SELECT COUNT(*) as c FROM order_items WHERE design_id = ?`,
+        designId,
+      )
+      const mustArchive = (linked?.c ?? 0) > 0
+      const now = new Date().toISOString()
+      if (mustArchive) {
         await db.run(
           `UPDATE designs SET status = 'archived', updated_at = ? WHERE id = ?`,
-          new Date().toISOString(),
+          now,
           designId,
         )
-      } else {
-        await db.run(`DELETE FROM designs WHERE id = ?`, designId)
+        invalidateBootstrapCache()
+        send(res, 200, { ok: true, archived: true })
+        return true
       }
-      invalidateBootstrapCache()
-      send(res, 200, { ok: true })
+      try {
+        await db.run(`DELETE FROM designs WHERE id = ?`, designId)
+        invalidateBootstrapCache()
+        send(res, 200, { ok: true, archived: false })
+      } catch {
+        await db.run(
+          `UPDATE designs SET status = 'archived', updated_at = ? WHERE id = ?`,
+          now,
+          designId,
+        )
+        invalidateBootstrapCache()
+        send(res, 200, { ok: true, archived: true })
+      }
       return true
     }
 

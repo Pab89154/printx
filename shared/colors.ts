@@ -22,6 +22,13 @@ export function clampMulticolorSlotCount(n: unknown): number {
   return Math.min(MULTICOLOR_SLOT_MAX, Math.max(MULTICOLOR_SLOT_MIN, v))
 }
 
+/** Default region labels for multicolor part STLs (Body / Accent / …). */
+export const DEFAULT_MULTICOLOR_PART_LABELS = ['Body', 'Accent', 'Detail', 'Extra'] as const
+
+export function defaultMulticolorPartLabel(index: number): string {
+  return DEFAULT_MULTICOLOR_PART_LABELS[index] ?? `Color ${index + 1}`
+}
+
 export const MULTICOLOR_COLOR: ColorDef = {
   id: MULTICOLOR_COLOR_ID,
   code: 'MLT',
@@ -31,10 +38,22 @@ export const MULTICOLOR_COLOR: ColorDef = {
   builtin: true,
 }
 
-/** Display label for chosen filaments, e.g. "Multicolor · Red + Blue". */
-export function formatMulticolorSelection(names: string[]): string {
+/**
+ * Display label for chosen filaments.
+ * With slot labels: "Body: Red · Accent: Blue".
+ * Without: "Multicolor · Red + Blue".
+ */
+export function formatMulticolorSelection(names: string[], labels?: string[]): string {
   const clean = names.map((n) => n.trim()).filter(Boolean)
   if (!clean.length) return MULTICOLOR_COLOR.name
+  if (labels && labels.length >= clean.length) {
+    return clean
+      .map((n, i) => {
+        const label = (labels[i] || '').trim() || defaultMulticolorPartLabel(i)
+        return `${label}: ${n}`
+      })
+      .join(' · ')
+  }
   return `${MULTICOLOR_COLOR.name} · ${clean.join(' + ')}`
 }
 

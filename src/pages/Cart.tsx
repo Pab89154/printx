@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { colorSwatchStyle } from '../../shared/colors'
+import { CUSTOMER_ACCOUNTS_ENABLED } from '../../shared/customerAccounts'
 import { useCart } from '../context/CartContext'
 import { useCustomerAuth } from '../context/CustomerAuthContext'
 import { Header } from '../components/Header'
@@ -13,6 +14,7 @@ export function Cart() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [promoCode, setPromoCode] = useState('')
+  const signedIn = CUSTOMER_ACCOUNTS_ENABLED && Boolean(customer)
 
   async function checkout() {
     setBusy(true)
@@ -110,17 +112,9 @@ export function Cart() {
             </label>
 
             <p className="mt-4 text-sm text-muted">
-              {customer
+              {signedIn
                 ? 'Enter item+shipping promos here. Other codes can also be entered on Checkout.'
-                : (
-                  <>
-                    Pay as a guest — email and shipping are collected on Checkout.{' '}
-                    <Link to="/account/sign-in?next=/cart" className="text-electric hover:underline">
-                      Sign in
-                    </Link>{' '}
-                    if you want order tracking in your account.
-                  </>
-                )}
+                : 'Pay as a guest — email and shipping are collected on Checkout.'}
             </p>
 
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
@@ -128,10 +122,10 @@ export function Cart() {
             <button
               type="button"
               className="btn btn-primary mt-6 w-full"
-              disabled={busy || loading}
+              disabled={busy || (CUSTOMER_ACCOUNTS_ENABLED && loading)}
               onClick={() => void checkout()}
             >
-              {busy ? 'Redirecting…' : customer ? 'Checkout' : 'Checkout as guest'}
+              {busy ? 'Redirecting…' : signedIn ? 'Checkout' : 'Checkout as guest'}
             </button>
           </>
         )}

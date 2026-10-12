@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { CUSTOMER_ACCOUNTS_ENABLED } from '../shared/customerAccounts'
 import { AdminAuthProvider } from './context/AdminAuthContext'
 import { CustomerAuthProvider } from './context/CustomerAuthContext'
 import { PublicDataProvider } from './context/PublicDataContext'
@@ -85,9 +86,15 @@ function PublicRoutes() {
       <Route path="/shop/:skuBase" element={<ShopProduct />} />
       <Route path="/cart" element={<Cart />} />
       <Route path="/order/success" element={<OrderSuccess />} />
-      <Route path="/account" element={<Account />} />
-      <Route path="/account/sign-in" element={<AccountSignIn />} />
-      <Route path="/account/register" element={<AccountRegister />} />
+      {CUSTOMER_ACCOUNTS_ENABLED ? (
+        <>
+          <Route path="/account" element={<Account />} />
+          <Route path="/account/sign-in" element={<AccountSignIn />} />
+          <Route path="/account/register" element={<AccountRegister />} />
+        </>
+      ) : (
+        <Route path="/account/*" element={<Navigate to="/" replace />} />
+      )}
       <Route path="/admin" element={<AdminLogin />} />
       <Route path="/admin" element={<AdminGuard />}>
         <Route path="sandbox" element={<AdminSandbox />} />

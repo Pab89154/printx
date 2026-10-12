@@ -128,10 +128,6 @@ export function CustomPrinting() {
       window.location.href = url
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Checkout failed'
-      if (/sign in/i.test(msg)) {
-        window.location.href = `/account/sign-in?next=${encodeURIComponent('/#custom')}`
-        return
-      }
       setError(msg)
       setPayBusy(false)
     }
