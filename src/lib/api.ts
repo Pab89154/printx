@@ -688,6 +688,7 @@ export const api = {
           ownedPrinterId: string | null
           filledMissingQuotes?: number
           fillWarnings?: string[]
+          quotingInBackground?: boolean
         }>('/api/admin/settings/cloud-slicer', {
           method: 'PATCH',
           body: JSON.stringify(body),

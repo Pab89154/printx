@@ -760,39 +760,79 @@ const GRAMS_COLUMN: Record<string, string> = {
   josh_kobra: 'grams_josh_kobra',
 }
 
+/** Serialize long local/cloud quote jobs so the Postgres session pool (max 1) stays usable. */
+let quoteJobChain: Promise<void> = Promise.resolve()
+
+function enqueueQuoteJob(label: string, work: () => Promise<void>): void {
+  quoteJobChain = quoteJobChain
+    .then(async () => {
+      try {
+        await work()
+      } catch (err) {
+        console.error(`[catalog] quote job "${label}" failed:`, err)
+      }
+    })
+    .catch((err) => {
+      console.error(`[catalog] quote job chain error after "${label}":`, err)
+    })
+}
+
 /** After an admin finishes Cloud Slicer setup, quote only the printers still missing. */
 export async function fillMissingQuotesForPrinter(
-  db: Awaited<ReturnType<typeof getDb>>,
   printxPrinterId: string,
 ): Promise<{ updated: number; warnings: string[] }> {
   const col = GRAMS_COLUMN[printxPrinterId]
   if (!col) return { updated: 0, warnings: [] }
 
+  const db = await getDb()
   const rows = await db.all<Record<string, unknown>>(
-    `SELECT * FROM designs
+    `SELECT id, stl_path, name FROM designs
      WHERE TRIM(stl_path) != ''
        AND ${col} IS NULL
        AND status IN ('draft', 'pending_review', 'approved', 'rejected')
      ORDER BY updated_at DESC
-     LIMIT 40`,
+     LIMIT 12`,
   )
 
   let updated = 0
   const warnings: string[] = []
   for (const row of rows) {
-    const design = rowToDesign(row)
-    if (!SLICEABLE_EXTS.has(path.extname(design.stlPath).toLowerCase())) continue
-    const sliced = await sliceDesignWithCloudSlicer(db, design.id, design.stlPath, {
+    const designId = String(row.id || '')
+    const stlPath = String(row.stl_path || '')
+    const name = String(row.name || designId)
+    if (!designId || !stlPath) continue
+    if (!SLICEABLE_EXTS.has(path.extname(stlPath).toLowerCase())) continue
+    // Re-acquire DB per design so idle pool time stays available to the site.
+    const sliceDb = await getDb()
+    const sliced = await sliceDesignWithCloudSlicer(sliceDb, designId, stlPath, {
       fillMissingOnly: true,
     })
     if (sliced.ok) {
       if (printerHasQuote(sliced.design, printxPrinterId)) updated++
-      if (sliced.warning) warnings.push(`${design.name}: ${sliced.warning}`)
+      if (sliced.warning) warnings.push(`${name}: ${sliced.warning}`)
     } else {
-      warnings.push(`${design.name}: ${sliced.error}`)
+      warnings.push(`${name}: ${sliced.error}`)
     }
   }
   return { updated, warnings }
+}
+
+/** Non-blocking: keep Settings save fast; quoting runs after credentials are stored. */
+export function scheduleFillMissingQuotesForPrinter(printxPrinterId: string): void {
+  enqueueQuoteJob(`fill-missing:${printxPrinterId}`, async () => {
+    const result = await fillMissingQuotesForPrinter(printxPrinterId)
+    console.warn(
+      `[catalog] fill-missing for ${printxPrinterId}: updated=${result.updated}` +
+        (result.warnings.length ? `; warnings=${result.warnings.length}` : ''),
+    )
+  })
+}
+
+export function scheduleDesignSlice(designId: string, stlPath: string): void {
+  enqueueQuoteJob(`design-slice:${designId}`, async () => {
+    const bg = await getDb()
+    await sliceDesignWithCloudSlicer(bg, designId, stlPath, { fillMissingOnly: true })
+  })
 }
 
 function send(res: ServerResponse, status: number, body: unknown) {
@@ -2017,16 +2057,8 @@ export async function handleCatalogApi(
           now,
           designId,
         )
-        const stlPath = design.stlPath
-        void (async () => {
-          try {
-            const bg = await getDb()
-            await sliceDesignWithCloudSlicer(bg, designId, stlPath, { fillMissingOnly: true })
-          } catch (err) {
-            console.error('[catalog] background slice after submit failed:', err)
-          }
-        })()
-        sliceWarning = 'Cloud Slicer quoting in the background — refresh Approvals shortly.'
+        scheduleDesignSlice(designId, design.stlPath)
+        sliceWarning = 'Quoting in the background — refresh Approvals shortly.'
       } else {
         sliceWarning =
           'Model is not .stl/.3mf — Cloud Slicer could not auto-quote. Convert and re-quote before approving.'

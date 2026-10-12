@@ -214,10 +214,9 @@ export function AdminSettings() {
       setCsOwnedPrinterId(result.ownedPrinterId ?? '')
       setCsToken('')
       if (result.hasToken && result.printerId && result.filamentId && result.ownedPrinterId) {
-        const filled = result.filledMissingQuotes ?? 0
         setCsMessage(
-          filled > 0
-            ? `Cloud Slicer saved. Quoted ${filled} design(s) that were missing this printer (others kept).`
+          result.quotingInBackground
+            ? 'Cloud Slicer settings saved. Missing design quotes will fill in the background — Designs stays usable while that runs.'
             : 'Cloud Slicer settings saved. Your printer will be quoted for new submits and any designs still missing this machine.',
         )
       } else {

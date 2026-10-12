@@ -2237,10 +2237,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       admin.id,
     )
 
-    let fillIn: { updated: number; warnings: string[] } | null = null
+    // Never await slicing here — local quotes can take many minutes and exhaust the
+    // Postgres session pool (pool max 1), which makes Designs/Settings look broken.
     if (configured && token.trim() && printerIdCs.trim() && filamentId.trim()) {
-      const { fillMissingQuotesForPrinter } = await import('./catalogApi.ts')
-      fillIn = await fillMissingQuotesForPrinter(db, printxPrinterId)
+      const { scheduleFillMissingQuotesForPrinter } = await import('./catalogApi.ts')
+      scheduleFillMissingQuotesForPrinter(printxPrinterId)
     }
 
     const { maskCloudSlicerToken } = await import('./cloudSlicer.ts')
@@ -2252,8 +2253,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       filamentId,
       configuredAt: configured,
       ownedPrinterId: printxPrinterId,
-      filledMissingQuotes: fillIn?.updated ?? 0,
-      fillWarnings: fillIn?.warnings ?? [],
+      filledMissingQuotes: 0,
+      fillWarnings: [],
+      quotingInBackground: Boolean(configured && token.trim() && printerIdCs.trim() && filamentId.trim()),
     })
     return true
   }
