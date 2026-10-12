@@ -843,6 +843,92 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
   }
 }
 
+/** What the customer actually paid for items (excludes shipping), after discounts. */
+function orderItemsPaidUsd(order: Record<string, unknown>): number {
+  const total = Number(order.total_usd) || 0
+  const shipping = Number(order.shipping_usd) || 0
+  const subtotal = Number(order.subtotal_usd) || 0
+  // Prefer total − shipping (post-discount). If subtotal was already corrected to paid items, use the min
+  // so pre-discount catalog subtotals cannot inflate printer pay.
+  const fromTotal = Math.max(0, total - shipping)
+  if (subtotal > 0) return roundMoney(Math.min(subtotal, fromTotal))
+  return roundMoney(fromTotal)
+}
+
+async function itemPaidShareUsd(
+  database: Awaited<ReturnType<typeof getDb>>,
+  item: Record<string, unknown>,
+): Promise<number> {
+  const orderId = String(item.order_id || '')
+  const order = await database.get<Record<string, unknown>>(
+    'SELECT total_usd, subtotal_usd, shipping_usd FROM orders WHERE id = ?',
+    orderId,
+  )
+  if (!order) return 0
+  const itemsPaid = orderItemsPaidUsd(order)
+  if (itemsPaid <= 0) return 0
+
+  const siblings = await database.all<{ line_total_usd: number | string | null }>(
+    'SELECT line_total_usd FROM order_items WHERE order_id = ?',
+    orderId,
+  )
+  const lineSum = siblings.reduce((s, r) => s + (Number(r.line_total_usd) || 0), 0)
+  const line = Number(item.line_total_usd) || 0
+  if (lineSum <= 0) {
+    // Equal split if line totals missing
+    const n = Math.max(1, siblings.length)
+    return roundMoney(itemsPaid / n)
+  }
+  return roundMoney(itemsPaid * (line / lineSum))
+}
+
+/** Fix pre-discount subtotals and shrink ledger payouts above what the customer paid. */
+async function repairDiscountCappedPayouts(database: Awaited<ReturnType<typeof getDb>>) {
+  await database.run(
+    `UPDATE orders
+     SET subtotal_usd = CASE
+       WHEN COALESCE(total_usd, 0) < COALESCE(subtotal_usd, 0)
+       THEN GREATEST(0, COALESCE(total_usd, 0) - COALESCE(shipping_usd, 0))
+       ELSE subtotal_usd
+     END
+     WHERE paid_at IS NOT NULL
+       AND COALESCE(total_usd, 0) < COALESCE(subtotal_usd, 0)`,
+  )
+  const oversized = await database.all<Record<string, unknown>>(
+    `SELECT l.id, l.amount_usd, l.order_item_id, oi.order_id, oi.line_total_usd, oi.qty,
+            oi.worst_cost_unit_usd
+     FROM profit_ledger l
+     JOIN order_items oi ON oi.id = l.order_item_id
+     WHERE l.entry_type = 'reimburse'`,
+  )
+  for (const row of oversized) {
+    const paidShare = await itemPaidShareUsd(database, {
+      order_id: row.order_id,
+      line_total_usd: row.line_total_usd,
+    })
+    const worstPay = roundMoney(
+      Math.max(0, (Number(row.worst_cost_unit_usd) || 0) * (Number(row.qty) || 1)),
+    )
+    const correct = roundMoney(Math.min(worstPay, paidShare))
+    const current = roundMoney(Number(row.amount_usd) || 0)
+    if (Math.abs(current - correct) < 0.005) continue
+    await database.run(
+      `UPDATE profit_ledger SET amount_usd = ?, note = ? WHERE id = ?`,
+      correct,
+      paidShare <= 0
+        ? 'No printer pay — customer paid $0 after discounts'
+        : 'Manufacturing reimbursement (capped by amount customer paid)',
+      String(row.id),
+    )
+    await database.run(
+      `UPDATE order_items SET reimburse_usd = ?, profit_usd = ? WHERE id = ?`,
+      correct,
+      roundMoney(Math.max(0, paidShare - correct)),
+      String(row.order_item_id),
+    )
+  }
+}
+
 async function settleOrderItem(
   database: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
@@ -860,9 +946,10 @@ async function settleOrderItem(
 
   const qty = Number(item.qty) || 1
   const worst = Number(item.worst_cost_unit_usd) || 0
-  const unit = Number(item.unit_price_usd) || 0
-  const reimburse = roundMoney(worst * qty)
-  const profit = roundMoney(Math.max(0, (unit - worst) * qty))
+  const paidShare = await itemPaidShareUsd(database, item)
+  // Never reimburse more than the customer actually paid for this line (discounts / free orders).
+  const reimburse = roundMoney(Math.min(Math.max(0, worst * qty), paidShare))
+  const profit = roundMoney(Math.max(0, paidShare - reimburse))
   const now = new Date().toISOString()
 
   await database.run(
@@ -883,7 +970,9 @@ async function settleOrderItem(
     adminUserId,
     'reimburse',
     reimburse,
-    'Worst-case manufacturing reimbursement',
+    paidShare <= 0
+      ? 'No printer pay — customer paid $0 after discounts'
+      : 'Manufacturing reimbursement (capped by amount customer paid)',
     now,
   )
 
@@ -1301,6 +1390,7 @@ export async function handleCatalogApi(
               shipping_country = ?,
               shipping_method = ?,
               shipping_usd = ?,
+              subtotal_usd = COALESCE(?, subtotal_usd),
               total_usd = COALESCE(?, total_usd),
               stripe_session_id = COALESCE(stripe_session_id, ?),
               stripe_payment_intent = ?,
@@ -1321,6 +1411,10 @@ export async function handleCatalogApi(
             ship.shippingCountry,
             shippingMethod,
             ship.shippingUsd,
+            // Items actually paid after discounts (not pre-discount catalog subtotal).
+            ship.amountTotalUsd != null
+              ? Math.max(0, roundMoney(ship.amountTotalUsd - (ship.shippingUsd || 0)))
+              : null,
             ship.amountTotalUsd,
             session.id,
             paymentIntent,
@@ -1911,6 +2005,7 @@ export async function handleCatalogApi(
   }
 
   async function loadAdminOrdersPayload(opts?: { backfillMissingShipping?: boolean }) {
+    await repairDiscountCappedPayouts(db)
     const rows = await db.all<Record<string, unknown>>(
       `SELECT * FROM orders WHERE status IN ('paid', 'in_production', 'ready', 'fulfilled', 'refunded')
        ORDER BY COALESCE(paid_at, created_at) DESC LIMIT 200`,
@@ -2950,10 +3045,11 @@ export async function handleCatalogApi(
     const yearEnd = new Date(Date.UTC(calendarYear + 1, 0, 1, 0, 0, 0, 0)).toISOString()
 
     // Item revenue only — shipping is pass-through to UPS and must not count as earnings.
-    const shopItemEarningsSql = `CASE
-      WHEN COALESCE(subtotal_usd, 0) > 0 THEN subtotal_usd
-      ELSE GREATEST(0, COALESCE(total_usd, 0) - COALESCE(shipping_usd, 0))
-    END`
+    // Item revenue after discounts. Never use a pre-discount catalog subtotal above what Stripe collected.
+    const shopItemEarningsSql = `LEAST(
+      CASE WHEN COALESCE(subtotal_usd, 0) > 0 THEN subtotal_usd ELSE 1e18 END,
+      GREATEST(0, COALESCE(total_usd, 0) - COALESCE(shipping_usd, 0))
+    )`
 
     const sumStripeInRange = async (start: string | null, end: string | null) => {
       const shopParams: unknown[] = []
@@ -3008,6 +3104,8 @@ export async function handleCatalogApi(
       const row = await db.get<{ total: number | string | null }>(sql, ...params)
       return roundMoney(Number(row?.total) || 0)
     }
+
+    await repairDiscountCappedPayouts(db)
 
     const shopOrders = await db.all<Record<string, unknown>>(
       `SELECT id, customer_name, customer_email, total_usd, subtotal_usd, shipping_usd,
@@ -3149,19 +3247,32 @@ export async function handleCatalogApi(
 
     // What admins/printers earn (all combined): use ledger reimbursements when present,
     // otherwise worst-case print cost on paid items so profit is right before settle.
-    const shopPrinterCostRow = await db.get<{ total: number | string | null }>(
-      `SELECT COALESCE(SUM(oi.worst_cost_unit_usd * oi.qty), 0) as total
-       FROM order_items oi
-       JOIN orders o ON o.id = oi.order_id
+    // Cap printer pay by what customers actually paid for items (discounts / free orders).
+    const shopOrdersForCost = await db.all<Record<string, unknown>>(
+      `SELECT o.id, o.total_usd, o.subtotal_usd, o.shipping_usd,
+              COALESCE((
+                SELECT SUM(oi.worst_cost_unit_usd * oi.qty) FROM order_items oi WHERE oi.order_id = o.id
+              ), 0) as printer_cost_usd
+       FROM orders o
        WHERE o.paid_at IS NOT NULL
          AND o.paid_at >= ? AND o.paid_at < ?
          AND o.status IN ('paid', 'in_production', 'ready', 'fulfilled')`,
       rangeStart,
       rangeEnd,
     )
-    const shopPrinterCostUsd = roundMoney(Number(shopPrinterCostRow?.total) || 0)
+    const shopPrinterCostUsd = roundMoney(
+      shopOrdersForCost.reduce((sum, o) => {
+        const itemsPaid = orderItemsPaidUsd(o)
+        const printerCost = Math.max(0, Number(o.printer_cost_usd) || 0)
+        return sum + Math.min(printerCost, itemsPaid)
+      }, 0),
+    )
     const customPrinterCostUsd = roundMoney(
-      customPaid.reduce((sum, o) => sum + (Number(o.worst_cost_usd) || 0), 0),
+      customPaid.reduce((sum, o) => {
+        const paid = Math.max(0, Number(o.catalog_price_usd) || 0)
+        const cost = Math.max(0, Number(o.worst_cost_usd) || 0)
+        return sum + Math.min(cost, paid)
+      }, 0),
     )
     const estimatedAdminsEarnUsd = roundMoney(shopPrinterCostUsd + customPrinterCostUsd)
     const adminsEarnAllUsd = roundMoney(

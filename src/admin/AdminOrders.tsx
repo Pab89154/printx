@@ -7,6 +7,27 @@ function money(n: number | null | undefined): string {
   return (Number(n) || 0).toFixed(2)
 }
 
+/** Printer pay is capped by what the customer paid for items after discounts. */
+function expectedPrinterPayUsd(
+  order: OrderDto,
+  item: NonNullable<OrderDto['items']>[number],
+): number {
+  const fromTotal = Math.max(0, (Number(order.totalUsd) || 0) - (Number(order.shippingUsd) || 0))
+  const subtotal = Number(order.subtotalUsd) || 0
+  const itemsPaid = subtotal > 0 ? Math.min(subtotal, fromTotal) : fromTotal
+  const siblings = order.items ?? []
+  const lineSum = siblings.reduce((s, r) => s + (Number(r.lineTotalUsd) || 0), 0)
+  const line = Number(item.lineTotalUsd) || 0
+  const paidShare =
+    itemsPaid <= 0
+      ? 0
+      : lineSum <= 0
+        ? itemsPaid / Math.max(1, siblings.length)
+        : itemsPaid * (line / lineSum)
+  const worst = Math.max(0, (Number(item.worstCostUnitUsd) || 0) * (Number(item.qty) || 1))
+  return Math.round(Math.min(worst, paidShare) * 100) / 100
+}
+
 export function AdminOrders() {
   const { label } = useAdminAuth()
   const [orders, setOrders] = useState<OrderDto[]>([])
@@ -309,7 +330,9 @@ export function AdminOrders() {
           </div>
 
           <div className="mt-4 space-y-3">
-            {(order.items ?? []).map((item) => (
+            {(order.items ?? []).map((item) => {
+              const printerPayUsd = expectedPrinterPayUsd(order, item)
+              return (
               <div
                 key={item.id}
                 className="rounded-xl border border-slate-100 px-4 py-3 text-sm"
@@ -320,7 +343,7 @@ export function AdminOrders() {
                       {item.designName ?? 'Design'} · {item.colorName} × {item.qty}
                     </p>
                     <p className="text-xs text-muted">
-                      SKU {item.sku} · unit ${money(item.unitPriceUsd)} · worst cost $
+                      SKU {item.sku} · unit ${money(item.unitPriceUsd)} · print cost $
                       {money(item.worstCostUnitUsd)}
                     </p>
                     <p className="text-xs text-muted">
@@ -329,12 +352,19 @@ export function AdminOrders() {
                         ? ` · printer ${printers.find((p) => p.id === item.assignedPrinterId)?.ownerLabel ?? item.assignedPrinterId}`
                         : ''}
                     </p>
-                    {item.printStatus === 'done' && (
+                    {item.printStatus === 'done' ? (
                       <p className="mt-1 text-xs text-electric">
                         Pay printer ${money(item.reimburseUsd)}
                         {item.profitUsd != null
                           ? ` · PrintX profit $${money(item.profitUsd)}`
                           : ''}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-xs text-muted">
+                        Printer pay ${money(printerPayUsd)}
+                        {printerPayUsd <= 0
+                          ? ' (customer paid $0 after discounts)'
+                          : ' (capped by amount customer paid)'}
                       </p>
                     )}
                   </div>
@@ -422,7 +452,8 @@ export function AdminOrders() {
                     )}
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         </section>
       ))}
