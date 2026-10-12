@@ -115,12 +115,12 @@ export function AdminMoney() {
             </div>
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                Business kept
+                PrintX profit
               </p>
               <p className="mt-2 text-2xl font-bold text-electric">
                 ${data.businessKeptUsd.toFixed(2)}
               </p>
-              <p className="mt-1 text-xs text-muted">Earnings minus all print costs</p>
+              <p className="mt-1 text-xs text-muted">Customer paid minus what we owe printers</p>
             </div>
           </div>
 

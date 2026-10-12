@@ -149,8 +149,8 @@ export function AdminOrders() {
         <div>
           <h1 className="text-2xl font-bold text-navy">Orders</h1>
           <p className="mt-1 text-sm text-muted">
-            Claim a paid item with your printer. When done, you get the worst-case manufacturing cost
-            (tracked under Money). Leftover profit stays with PrintX in Stripe. Use Refund if the
+            Claim a paid item with your printer. When done, Money tracks what to pay the printer
+            (worst-case print cost). PrintX profit is the rest that stays in Stripe. Use Refund if the
             customer cancels or you cannot print.
           </p>
         </div>
@@ -331,9 +331,9 @@ export function AdminOrders() {
                     </p>
                     {item.printStatus === 'done' && (
                       <p className="mt-1 text-xs text-electric">
-                        Owed to printer ${money(item.reimburseUsd)}
+                        Pay printer ${money(item.reimburseUsd)}
                         {item.profitUsd != null
-                          ? ` · business kept $${money(item.profitUsd)}`
+                          ? ` · PrintX profit $${money(item.profitUsd)}`
                           : ''}
                       </p>
                     )}

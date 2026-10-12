@@ -169,7 +169,7 @@ export function AdminDashboard() {
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
-                Business kept
+                PrintX profit
               </p>
               <p className="mt-2 text-4xl font-extrabold tracking-tight tabular-nums text-electric sm:text-5xl">
                 {money ? `$${money.businessKeptUsd.toFixed(2)}` : '—'}
