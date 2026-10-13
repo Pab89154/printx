@@ -152,15 +152,21 @@ export function ShopProduct() {
               {multicolorOnly ? (
                 <div className="mt-6 space-y-4">
                   <div>
-                    <p className="text-sm font-semibold text-navy">Filament colors</p>
+                    <p className="text-sm font-semibold text-navy">Color for each part</p>
                     <p className="mt-1 text-xs text-muted">
-                      This is a multicolor print — pick each filament color before adding to cart.
+                      This print has separate models — pick a filament color for each one. The preview
+                      updates as you choose.
                     </p>
                   </div>
                   {slotColorIds.map((selectedId, index) => (
                     <div key={`slot-${index}`}>
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                         {slotLabels[index] || defaultMulticolorPartLabel(index)}
+                        {!selectedId ? (
+                          <span className="ml-1 font-normal normal-case text-amber-700">
+                            — pick a color
+                          </span>
+                        ) : null}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {solidChoices.map((c) => (

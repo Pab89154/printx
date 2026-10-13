@@ -111,6 +111,16 @@ export function AdminDesigns() {
   ]
 
   function toPayload() {
+    const parts = form.multicolorOnly
+      ? form.parts.map((p) => ({
+          label: p.label.trim() || 'Part',
+          ...(p.stlPath ? { stlPath: p.stlPath } : {}),
+        }))
+      : []
+    // Multicolor: no separate "main" upload — quote/slice uses the first part STL.
+    const mainStlPath =
+      form.stlPath ||
+      (form.multicolorOnly ? form.parts.find((p) => p.stlPath)?.stlPath || '' : '')
     return {
       name: form.name,
       skuBase: form.skuBase || undefined,
@@ -118,17 +128,16 @@ export function AdminDesigns() {
       category: form.category,
       imageUrl: '',
       // Only send when a new upload is pending — never send '' (that used to wipe stl_path).
-      ...(form.stlPath ? { stlPath: form.stlPath } : {}),
+      ...(mainStlPath ? { stlPath: mainStlPath } : {}),
       multicolorOnly: form.multicolorOnly,
       multicolorSlotCount: form.multicolorSlotCount,
       availableColorIds: form.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID),
-      parts: form.multicolorOnly
-        ? form.parts.map((p) => ({
-            label: p.label.trim() || 'Part',
-            ...(p.stlPath ? { stlPath: p.stlPath } : {}),
-          }))
-        : [],
+      parts,
     }
+  }
+
+  function partsReady() {
+    return form.parts.every((p) => Boolean(p.hasStl || p.stlPath))
   }
 
   function startEdit(d: Design) {
@@ -232,6 +241,9 @@ export function AdminDesigns() {
     ? localPreviewUrl ||
       (editingId && form.hasStl && !form.stlPath ? api.catalog.designs.stlUrl(editingId) : '')
     : ''
+  const canSave = form.multicolorOnly
+    ? partsReady() && form.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID).length >= form.multicolorSlotCount
+    : modelOnFile
 
   return (
     <div className="space-y-8">
@@ -250,7 +262,19 @@ export function AdminDesigns() {
         className="rounded-2xl border bg-white p-6"
         onSubmit={(e) => {
           e.preventDefault()
-          if (!modelOnFile) {
+          if (form.multicolorOnly) {
+            if (!partsReady()) {
+              setError('Upload an STL for every color part before saving.')
+              return
+            }
+            const solids = form.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
+            if (solids.length < form.multicolorSlotCount) {
+              setError(
+                `Pick at least ${form.multicolorSlotCount} solid filament options customers can choose from.`,
+              )
+              return
+            }
+          } else if (!modelOnFile) {
             setError('Upload a 3D model before saving.')
             return
           }
@@ -258,7 +282,9 @@ export function AdminDesigns() {
           setError('')
           setMessage('')
           const wasEditing = editingId
-          const pendingUpload = form.stlPath
+          const pendingUpload = Boolean(
+            form.stlPath || (form.multicolorOnly && form.parts.some((p) => p.stlPath)),
+          )
           const run = wasEditing
             ? api.catalog.designs.update(wasEditing, toPayload())
             : api.catalog.designs.create(toPayload())
@@ -270,6 +296,14 @@ export function AdminDesigns() {
                     ? 'Save completed but the model was not attached. Re-upload and save again.'
                     : 'This design has no model on file. Re-upload the model, then save.',
                 )
+              }
+              if (saved.multicolorOnly) {
+                const missing = (saved.parts ?? []).filter((p) => !p.hasStl)
+                if (missing.length || (saved.parts ?? []).length < (saved.multicolorSlotCount ?? 2)) {
+                  throw new Error(
+                    'Save completed but some part STLs were not attached. Re-upload each part and save again.',
+                  )
+                }
               }
               // Keep editing so Submit for approval is available after first save.
               setEditingId(saved.id)
@@ -302,8 +336,12 @@ export function AdminDesigns() {
               })
               setMessage(
                 wasEditing
-                  ? 'Design updated (model on file). Click Submit for approval to send it to the main admin.'
-                  : 'Draft saved (model on file). Click Submit for approval to send it to the main admin.',
+                  ? saved.multicolorOnly
+                    ? 'Multicolor design updated. Customers pick a filament color for each part. Submit for approval when ready.'
+                    : 'Design updated (model on file). Click Submit for approval to send it to the main admin.'
+                  : saved.multicolorOnly
+                    ? 'Multicolor draft saved. Customers pick a filament color for each part. Submit for approval when ready.'
+                    : 'Draft saved (model on file). Click Submit for approval to send it to the main admin.',
               )
               return load()
             })
@@ -342,67 +380,7 @@ export function AdminDesigns() {
           />
         </label>
 
-        <div className="mt-4">
-          <p className="text-sm font-medium">3D model (required)</p>
-          <p className="mt-1 text-xs text-muted">
-            Shop catalog shows this model (no photo upload). Customers open the product page to rotate it.
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <input
-              ref={modelInputRef}
-              type="file"
-              accept={MODEL_ACCEPT}
-              className="sr-only"
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) void uploadModel(f)
-                e.target.value = ''
-              }}
-            />
-            <button
-              type="button"
-              className="btn btn-secondary inline-flex items-center gap-2"
-              disabled={uploadingStl}
-              onClick={() => modelInputRef.current?.click()}
-            >
-              <Upload size={16} aria-hidden />
-              {uploadingStl ? 'Uploading…' : 'Upload model'}
-            </button>
-            {modelOnFile ? (
-              <span className="rounded-full bg-electric/10 px-2.5 py-1 text-xs font-semibold text-electric">
-                {form.stlPath
-                  ? `${modelLabel(form.modelExt || '.stl')} uploaded — save to attach`
-                  : `${modelLabel(form.modelExt || '.stl')} on file`}
-              </span>
-            ) : (
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-muted">
-                No model yet
-              </span>
-            )}
-          </div>
-          <p className="mt-2 text-xs text-muted">
-            {uploadingStl
-              ? 'Uploading…'
-              : modelOnFile
-                ? form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
-                  ? previewStlUrl
-                    ? '3D preview below. Save draft if you just uploaded, then submit for approval.'
-                    : 'Model attached. Save draft, then open Edit again if the preview does not appear.'
-                  : SLICEABLE_EXTS.has(form.modelExt)
-                    ? 'Ready for Cloud Slicer quote on submit (shop preview is STL-only).'
-                    : 'Stored on this design. Use .stl for shop preview and .stl/.3mf to auto-quote.'
-                : 'Accepts .stl, .obj, .3mf, .step, .stp — max 50MB. Prefer .stl for the shop.'}
-          </p>
-          {previewStlUrl ? (
-            <StlViewer
-              url={previewStlUrl}
-              className="mt-3 max-w-xl"
-              credentials={localPreviewUrl ? 'omit' : 'include'}
-            />
-          ) : null}
-        </div>
-
-        <h3 className="mt-6 text-sm font-semibold text-navy">Colors</h3>
+        <h3 className="mt-6 text-sm font-semibold text-navy">Print type</h3>
         <label className="mt-2 flex items-start gap-2 text-sm text-navy">
           <input
             type="checkbox"
@@ -410,28 +388,109 @@ export function AdminDesigns() {
             checked={form.multicolorOnly}
             onChange={(e) => {
               const on = e.target.checked
-              setForm((f) => ({
-                ...f,
-                multicolorOnly: on,
-                availableColorIds: f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
-                  .length
-                  ? f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
-                  : ['black', 'white', 'red', 'blue'],
-                parts: on ? emptyParts(f.multicolorSlotCount, f.parts) : emptyParts(f.multicolorSlotCount),
-              }))
+              if (on) {
+                clearLocalPreview()
+                setForm((f) => ({
+                  ...f,
+                  multicolorOnly: true,
+                  stlPath: '',
+                  hasStl: false,
+                  modelExt: '',
+                  availableColorIds: f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
+                    .length
+                    ? f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
+                    : ['black', 'white', 'red', 'blue'],
+                  parts: emptyParts(f.multicolorSlotCount, f.parts),
+                }))
+                return
+              }
+              setForm((f) => {
+                revokePartPreviews(f.parts)
+                return {
+                  ...f,
+                  multicolorOnly: false,
+                  parts: emptyParts(f.multicolorSlotCount),
+                }
+              })
             }}
           />
           <span>
             <span className="font-medium">Multicolor print</span>
             <span className="mt-0.5 block text-xs text-muted">
-              Shop asks the customer to pick each filament color (SKU stays MLT).
+              Upload one STL per color region. Shop customers pick a filament color for each part (SKU
+              stays MLT). Single-color model upload is hidden in this mode.
             </span>
           </span>
         </label>
+
+        {!form.multicolorOnly ? (
+          <div className="mt-4">
+            <p className="text-sm font-medium">3D model (required)</p>
+            <p className="mt-1 text-xs text-muted">
+              Shop catalog shows this model (no photo upload). Customers open the product page to rotate
+              it. For multicolor, turn on Multicolor print above instead.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <input
+                ref={modelInputRef}
+                type="file"
+                accept={MODEL_ACCEPT}
+                className="sr-only"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void uploadModel(f)
+                  e.target.value = ''
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary inline-flex items-center gap-2"
+                disabled={uploadingStl}
+                onClick={() => modelInputRef.current?.click()}
+              >
+                <Upload size={16} aria-hidden />
+                {uploadingStl ? 'Uploading…' : 'Upload model'}
+              </button>
+              {modelOnFile ? (
+                <span className="rounded-full bg-electric/10 px-2.5 py-1 text-xs font-semibold text-electric">
+                  {form.stlPath
+                    ? `${modelLabel(form.modelExt || '.stl')} uploaded — save to attach`
+                    : `${modelLabel(form.modelExt || '.stl')} on file`}
+                </span>
+              ) : (
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-muted">
+                  No model yet
+                </span>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-muted">
+              {uploadingStl
+                ? 'Uploading…'
+                : modelOnFile
+                  ? form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
+                    ? previewStlUrl
+                      ? '3D preview below. Save draft if you just uploaded, then submit for approval.'
+                      : 'Model attached. Save draft, then open Edit again if the preview does not appear.'
+                    : SLICEABLE_EXTS.has(form.modelExt)
+                      ? 'Ready for Cloud Slicer quote on submit (shop preview is STL-only).'
+                      : 'Stored on this design. Use .stl for shop preview and .stl/.3mf to auto-quote.'
+                  : 'Accepts .stl, .obj, .3mf, .step, .stp — max 50MB. Prefer .stl for the shop.'}
+            </p>
+            {previewStlUrl ? (
+              <StlViewer
+                url={previewStlUrl}
+                className="mt-3 max-w-xl"
+                credentials={localPreviewUrl ? 'omit' : 'include'}
+              />
+            ) : null}
+          </div>
+        ) : null}
+
+        <h3 className="mt-6 text-sm font-semibold text-navy">Colors</h3>
         {form.multicolorOnly ? (
           <>
             <label className="mt-3 flex items-center gap-3 text-sm text-navy">
-              <span className="font-medium">Colors to pick</span>
+              <span className="font-medium">Parts / colors to pick</span>
               <select
                 className="rounded-lg border px-2 py-1.5"
                 value={form.multicolorSlotCount}
@@ -458,8 +517,8 @@ export function AdminDesigns() {
               <div>
                 <p className="text-sm font-semibold text-navy">Part STLs (one per color region)</p>
                 <p className="mt-0.5 text-xs text-muted">
-                  Shop preview tints each part with the customer’s filament pick. Keep the main model
-                  above for slicing.
+                  Upload each separate model. Shop customers pick a filament color for each part; the
+                  preview tints that part. Quoting uses the first part (Body) file.
                 </p>
               </div>
               {form.parts.map((part, index) => {
@@ -581,7 +640,11 @@ export function AdminDesigns() {
         ) : null}
 
         <div className="mt-6 flex flex-wrap gap-3">
-          <button type="submit" className="btn btn-secondary" disabled={busy || uploadingStl}>
+          <button
+            type="submit"
+            className="btn btn-secondary"
+            disabled={busy || uploadingStl || !canSave}
+          >
             {busy ? 'Saving…' : editingId ? 'Update draft' : 'Save draft'}
           </button>
           {editingId && (

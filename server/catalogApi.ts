@@ -1799,9 +1799,39 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'Name is required.' })
       return true
     }
-    const stlPath = safeStlPath(body.stlPath)
+    if (parsed.multicolorOnly) {
+      if (parsed.parts.length < parsed.multicolorSlotCount) {
+        send(res, 400, { error: 'Upload an STL for every multicolor part before saving.' })
+        return true
+      }
+      const missingPart = parsed.parts.findIndex((p) => !p.stlPath.trim())
+      if (missingPart >= 0) {
+        send(res, 400, {
+          error: `Upload an STL for part ${missingPart + 1} (${parsed.parts[missingPart]?.label || 'Part'}) before saving.`,
+        })
+        return true
+      }
+      if (parsed.availableColorIds.length < parsed.multicolorSlotCount) {
+        send(res, 400, {
+          error: `Pick at least ${parsed.multicolorSlotCount} solid filament options for customers.`,
+        })
+        return true
+      }
+    }
+    // Multicolor designs use part STLs only; quoting uses the first part as stl_path.
+    const stlPath =
+      safeStlPath(body.stlPath) ||
+      (parsed.multicolorOnly ? safeStlPath(parsed.parts[0]?.stlPath) : '')
     if (!stlPath) {
-      send(res, 400, { error: 'Upload a 3D model before saving the design.' })
+      send(
+        res,
+        400,
+        {
+          error: parsed.multicolorOnly
+            ? 'Upload an STL for every color part before saving.'
+            : 'Upload a 3D model before saving the design.',
+        },
+      )
       return true
     }
     const now = new Date().toISOString()
@@ -1839,8 +1869,10 @@ export async function handleCatalogApi(
         now,
         now,
       )
-    } catch {
-      send(res, 400, { error: 'Could not create design (SKU may already exist).' })
+    } catch (err) {
+      send(res, 400, {
+        error: err instanceof Error ? err.message : 'Could not create design (SKU may already exist).',
+      })
       return true
     }
     const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', id)
@@ -1956,9 +1988,39 @@ export async function handleCatalogApi(
     if (method === 'PATCH' && !action) {
       const body = await readJson(req)
       const parsed = parseDesignBody(body, design)
+      if (parsed.multicolorOnly) {
+        if (parsed.parts.length < parsed.multicolorSlotCount) {
+          send(res, 400, { error: 'Upload an STL for every multicolor part before saving.' })
+          return true
+        }
+        const missingPart = parsed.parts.findIndex((p) => !p.stlPath.trim())
+        if (missingPart >= 0) {
+          send(res, 400, {
+            error: `Upload an STL for part ${missingPart + 1} (${parsed.parts[missingPart]?.label || 'Part'}) before saving.`,
+          })
+          return true
+        }
+        if (parsed.availableColorIds.length < parsed.multicolorSlotCount) {
+          send(res, 400, {
+            error: `Pick at least ${parsed.multicolorSlotCount} solid filament options for customers.`,
+          })
+          return true
+        }
+      }
       // Ignore empty stlPath so a stale client field cannot wipe an existing model.
       const incomingStl = body.stlPath !== undefined ? safeStlPath(body.stlPath) : ''
-      const stlPath = incomingStl || design.stlPath
+      const stlPath =
+        incomingStl ||
+        design.stlPath ||
+        (parsed.multicolorOnly ? safeStlPath(parsed.parts[0]?.stlPath) : '')
+      if (!stlPath) {
+        send(res, 400, {
+          error: parsed.multicolorOnly
+            ? 'Upload an STL for every color part before saving.'
+            : 'Upload a 3D model before saving the design.',
+        })
+        return true
+      }
       const stlChanged = stlPath !== design.stlPath
       const now = new Date().toISOString()
       try {
@@ -1999,8 +2061,10 @@ export async function handleCatalogApi(
           now,
           designId,
         )
-      } catch {
-        send(res, 400, { error: 'Update failed (SKU conflict?).' })
+      } catch (err) {
+        send(res, 400, {
+          error: err instanceof Error ? err.message : 'Update failed (SKU conflict?).',
+        })
         return true
       }
       design = rowToDesign(
