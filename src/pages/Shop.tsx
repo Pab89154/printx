@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import { api } from '../lib/api'
-import { colorSwatchStyle } from '../../shared/colors'
+import { colorSwatchStyle, isMulticolorColorId } from '../../shared/colors'
 import type { CatalogColor, PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 import { CartLink } from '../components/CartLink'
-import { StlViewer } from '../components/StlViewer'
+import { MultiStlViewer, StlViewer } from '../components/StlViewer'
 
 function designMatchesQuery(design: PublicCatalogDesign, query: string): boolean {
   const q = query.trim().toLowerCase()
@@ -19,9 +19,25 @@ function designMatchesQuery(design: PublicCatalogDesign, query: string): boolean
 }
 
 function ShopCard({ design }: { design: PublicCatalogDesign }) {
+  const solidColors = design.availableColors.filter((c) => !isMulticolorColorId(c.id))
   const [previewColor, setPreviewColor] = useState<CatalogColor | undefined>(
-    () => design.availableColors[0],
+    () => solidColors[0] ?? design.availableColors[0],
   )
+
+  const multiParts = (design.parts ?? [])
+    .map((p, i) => ({
+      url: p.modelUrl || '',
+      // Cycle solids so the shop tile shows a distinct multi-part preview.
+      colorHex: solidColors[i % Math.max(solidColors.length, 1)]?.hex ?? '#94A3B8',
+    }))
+    .filter((p) => p.url.trim())
+  const useMultiPreview =
+    (Boolean(design.multicolorOnly) ||
+      (design.availableColors.length === 1 && isMulticolorColorId(design.availableColors[0]?.id))) &&
+    multiParts.length >= 2
+
+  const viewerClass =
+    'absolute inset-0 [&_>div]:h-full [&_>div]:min-h-0 [&_>div]:rounded-none [&_>div]:border-0 [&_>div]:border-transparent'
 
   return (
     <article className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition hover:shadow-md">
@@ -30,7 +46,16 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
         className="group block"
       >
         <div className="relative aspect-square overflow-hidden bg-slate-100">
-          {design.modelUrl ? (
+          {useMultiPreview ? (
+            <MultiStlViewer
+              parts={multiParts}
+              credentials="same-origin"
+              interactive={false}
+              eager={false}
+              height="100%"
+              className={viewerClass}
+            />
+          ) : design.modelUrl ? (
             <StlViewer
               url={design.modelUrl}
               credentials="same-origin"
@@ -38,7 +63,7 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
               eager={false}
               height="100%"
               colorHex={previewColor?.hex}
-              className="absolute inset-0 [&_>div]:h-full [&_>div]:min-h-0 [&_>div]:rounded-none [&_>div]:border-0 [&_>div]:border-transparent"
+              className={viewerClass}
             />
           ) : (
             <div className="flex h-full min-h-[12rem] items-center justify-center text-sm text-muted">
