@@ -13,6 +13,7 @@ import {
 } from '../../shared/colors'
 import { MODEL_ACCEPT, modelLabel, SLICEABLE_EXTS } from '../../shared/modelFormats'
 import type { Design } from '../types/catalog'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MultiStlViewer, StlViewer } from '../components/StlViewer'
 
 type PartForm = {
@@ -63,6 +64,8 @@ export function AdminDesigns() {
   const [uploadingStl, setUploadingStl] = useState(false)
   /** Local blob preview for a just-uploaded STL (server preview only works after save). */
   const [localPreviewUrl, setLocalPreviewUrl] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const modelInputRef = useRef<HTMLInputElement>(null)
   const localPreviewUrlRef = useRef('')
 
@@ -753,22 +756,7 @@ export function AdminDesigns() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-compact text-red-600"
-                  onClick={() => {
-                    if (!window.confirm(`Delete “${d.name}”?`)) return
-                    setError('')
-                    setMessage('')
-                    void api.catalog.designs
-                      .remove(d.id)
-                      .then((res) => {
-                        setMessage(
-                          res.archived
-                            ? 'Archived (linked to orders) — hidden from this list.'
-                            : 'Deleted.',
-                        )
-                        return load()
-                      })
-                      .catch((err) => setError(err instanceof Error ? err.message : 'Delete failed'))
-                  }}
+                  onClick={() => setPendingDelete({ id: d.id, name: d.name })}
                 >
                   Delete
                 </button>
@@ -781,6 +769,38 @@ export function AdminDesigns() {
           )}
         </div>
       </section>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="Delete design?"
+        message={pendingDelete ? `Delete “${pendingDelete.name}”?` : ''}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        busy={deleting}
+        onCancel={() => {
+          if (!deleting) setPendingDelete(null)
+        }}
+        onConfirm={() => {
+          if (!pendingDelete) return
+          setDeleting(true)
+          setError('')
+          setMessage('')
+          void api.catalog.designs
+            .remove(pendingDelete.id)
+            .then((res) => {
+              setPendingDelete(null)
+              setMessage(
+                res.archived
+                  ? 'Archived (linked to orders) — hidden from this list.'
+                  : 'Deleted.',
+              )
+              return load()
+            })
+            .catch((err) => setError(err instanceof Error ? err.message : 'Delete failed'))
+            .finally(() => setDeleting(false))
+        }}
+      />
     </div>
   )
 }

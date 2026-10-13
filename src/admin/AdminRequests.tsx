@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { useAdminAuth } from '../context/AdminAuthContext'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import type { CustomRequest, RequestStatus } from '../types/api'
 
 const statuses: RequestStatus[] = ['new', 'reviewing', 'approved', 'declined', 'completed']
@@ -36,6 +37,7 @@ export function AdminRequests() {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [shipTracking, setShipTracking] = useState<Record<string, string>>({})
   const [gcodePrinter, setGcodePrinter] = useState<Record<string, string>>({})
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null)
 
   async function load() {
     setRequests(await api.admin.requests.list())
@@ -86,12 +88,13 @@ export function AdminRequests() {
     }
   }
 
-  async function remove(id: string, name: string) {
-    if (!window.confirm(`Delete custom print request from ${name}? This cannot be undone.`)) return
-    setBusyId(id)
+  async function confirmRemove() {
+    if (!pendingDelete) return
+    setBusyId(pendingDelete.id)
     setError('')
     try {
-      await api.admin.requests.delete(id)
+      await api.admin.requests.delete(pendingDelete.id)
+      setPendingDelete(null)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delete failed')
@@ -332,7 +335,7 @@ export function AdminRequests() {
                   type="button"
                   className="btn btn-ghost btn-compact text-red-600"
                   disabled={busyId === req.id}
-                  onClick={() => void remove(req.id, req.name)}
+                  onClick={() => setPendingDelete({ id: req.id, name: req.name })}
                 >
                   Delete
                 </button>
@@ -341,6 +344,24 @@ export function AdminRequests() {
           </div>
         ))}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="Delete custom print request?"
+        message={
+          pendingDelete
+            ? `Delete custom print request from ${pendingDelete.name}? This cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        busy={busyId === pendingDelete?.id}
+        onCancel={() => {
+          if (busyId !== pendingDelete?.id) setPendingDelete(null)
+        }}
+        onConfirm={() => void confirmRemove()}
+      />
     </div>
   )
 }

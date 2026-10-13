@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useId, useState } from 'react'
 
 type ConfirmDialogProps = {
   open: boolean
@@ -8,7 +8,14 @@ type ConfirmDialogProps = {
   cancelLabel?: string
   danger?: boolean
   busy?: boolean
-  onConfirm: () => void
+  /** Optional text field (replaces window.prompt). */
+  prompt?: {
+    label?: string
+    placeholder?: string
+    defaultValue?: string
+    required?: boolean
+  }
+  onConfirm: (promptValue?: string) => void
   onCancel: () => void
 }
 
@@ -20,9 +27,20 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   danger = true,
   busy = false,
+  prompt,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const titleId = useId()
+  const descId = useId()
+  const promptId = useId()
+  const [promptValue, setPromptValue] = useState(prompt?.defaultValue ?? '')
+
+  useEffect(() => {
+    if (!open) return
+    setPromptValue(prompt?.defaultValue ?? '')
+  }, [open, prompt?.defaultValue])
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -39,6 +57,9 @@ export function ConfirmDialog({
 
   if (!open) return null
 
+  const promptRequired = Boolean(prompt?.required)
+  const canConfirm = !busy && (!promptRequired || promptValue.trim().length > 0)
+
   return (
     <div className="fixed inset-0 z-[100] flex items-end justify-center p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:items-center">
       <button
@@ -53,25 +74,40 @@ export function ConfirmDialog({
       <div
         role="alertdialog"
         aria-modal="true"
-        aria-labelledby="printx-confirm-title"
-        aria-describedby="printx-confirm-desc"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
         className="relative z-10 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6"
       >
-        <h2 id="printx-confirm-title" className="text-lg font-bold text-navy">
+        <h2 id={titleId} className="text-lg font-bold text-navy">
           {title}
         </h2>
-        <p id="printx-confirm-desc" className="mt-2 text-sm leading-relaxed text-muted">
+        <p id={descId} className="mt-2 text-sm leading-relaxed text-muted">
           {message}
         </p>
+        {prompt ? (
+          <label className="mt-4 block text-sm font-medium text-navy" htmlFor={promptId}>
+            {prompt.label || 'Note'}
+            <textarea
+              id={promptId}
+              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+              rows={3}
+              autoFocus
+              disabled={busy}
+              placeholder={prompt.placeholder}
+              value={promptValue}
+              onChange={(e) => setPromptValue(e.target.value)}
+            />
+          </label>
+        ) : null}
         <div className="mt-6 flex flex-wrap justify-end gap-2">
           <button type="button" disabled={busy} className="btn btn-ghost" onClick={onCancel}>
             {cancelLabel}
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={!canConfirm}
             className={danger ? 'btn btn-danger-solid' : 'btn btn-primary'}
-            onClick={onConfirm}
+            onClick={() => onConfirm(prompt ? promptValue : undefined)}
           >
             {busy ? 'Working…' : confirmLabel}
           </button>

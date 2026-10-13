@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { api } from '../lib/api'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import type { OrderDto, PrinterDto } from '../types/catalog'
 
 function money(n: number | null | undefined): string {
@@ -40,6 +41,10 @@ export function AdminOrders() {
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [shipTracking, setShipTracking] = useState<Record<string, string>>({})
   const [shipBusyId, setShipBusyId] = useState<string | null>(null)
+  const [pendingRefund, setPendingRefund] = useState<OrderDto | null>(null)
+  const [pendingDeleteOrder, setPendingDeleteOrder] = useState<OrderDto | null>(null)
+  const [pendingDeclineRefund, setPendingDeclineRefund] = useState<{ id: string } | null>(null)
+  const [declineBusy, setDeclineBusy] = useState(false)
   const [refundRequests, setRefundRequests] = useState<
     {
       id: string
@@ -96,17 +101,34 @@ export function AdminOrders() {
   }
 
   async function decideRefund(id: string, action: 'approve' | 'decline') {
-    const note =
-      action === 'decline'
-        ? window.prompt('Note for customer (e.g. already printed/shipped):') ?? ''
-        : ''
+    if (action === 'decline') {
+      setPendingDeclineRefund({ id })
+      return
+    }
     setError('')
     try {
-      if (action === 'approve') await api.catalog.orders.approveRefundRequest(id)
-      else await api.catalog.orders.declineRefundRequest(id, note || 'Declined')
+      await api.catalog.orders.approveRefundRequest(id)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not update refund request')
+    }
+  }
+
+  async function confirmDeclineRefund(note?: string) {
+    if (!pendingDeclineRefund) return
+    setDeclineBusy(true)
+    setError('')
+    try {
+      await api.catalog.orders.declineRefundRequest(
+        pendingDeclineRefund.id,
+        (note || '').trim() || 'Declined',
+      )
+      setPendingDeclineRefund(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update refund request')
+    } finally {
+      setDeclineBusy(false)
     }
   }
 
@@ -124,19 +146,17 @@ export function AdminOrders() {
     }
   }
 
-  async function refundOrder(order: OrderDto) {
-    const who = order.customerName || order.customerEmail || 'this customer'
-    if (
-      !window.confirm(
-        `Refund $${money(order.totalUsd)} to ${who}? Money returns through Stripe to their original payment method.`,
-      )
-    ) {
-      return
-    }
-    setRefundBusyId(order.id)
+  function refundOrder(order: OrderDto) {
+    setPendingRefund(order)
+  }
+
+  async function confirmRefundOrder() {
+    if (!pendingRefund) return
+    setRefundBusyId(pendingRefund.id)
     setError('')
     try {
-      await api.catalog.orders.refund(order.id)
+      await api.catalog.orders.refund(pendingRefund.id)
+      setPendingRefund(null)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Refund failed')
@@ -145,17 +165,17 @@ export function AdminOrders() {
     }
   }
 
-  async function deleteOrder(order: OrderDto) {
-    const who = order.customerName || order.customerEmail || 'this order'
-    const warn =
-      order.status === 'refunded'
-        ? `Delete order for ${who}? This removes it from the portal permanently.`
-        : `Delete order for ${who} ($${money(order.totalUsd)}, ${order.status})? This does not refund Stripe — refund first if needed. Removes the order from the portal permanently.`
-    if (!window.confirm(warn)) return
-    setDeleteBusyId(order.id)
+  function deleteOrder(order: OrderDto) {
+    setPendingDeleteOrder(order)
+  }
+
+  async function confirmDeleteOrder() {
+    if (!pendingDeleteOrder) return
+    setDeleteBusyId(pendingDeleteOrder.id)
     setError('')
     try {
-      await api.catalog.orders.delete(order.id)
+      await api.catalog.orders.delete(pendingDeleteOrder.id)
+      setPendingDeleteOrder(null)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delete failed')
@@ -457,6 +477,73 @@ export function AdminOrders() {
           </div>
         </section>
       ))}
+
+      <ConfirmDialog
+        open={Boolean(pendingRefund)}
+        title="Refund order?"
+        message={
+          pendingRefund
+            ? `Refund $${money(pendingRefund.totalUsd)} to ${
+                pendingRefund.customerName || pendingRefund.customerEmail || 'this customer'
+              }? Money returns through Stripe to their original payment method.`
+            : ''
+        }
+        confirmLabel="Refund"
+        cancelLabel="Cancel"
+        danger
+        busy={refundBusyId === pendingRefund?.id}
+        onCancel={() => {
+          if (refundBusyId !== pendingRefund?.id) setPendingRefund(null)
+        }}
+        onConfirm={() => void confirmRefundOrder()}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteOrder)}
+        title="Delete order?"
+        message={
+          pendingDeleteOrder
+            ? pendingDeleteOrder.status === 'refunded'
+              ? `Delete order for ${
+                  pendingDeleteOrder.customerName ||
+                  pendingDeleteOrder.customerEmail ||
+                  'this order'
+                }? This removes it from the portal permanently.`
+              : `Delete order for ${
+                  pendingDeleteOrder.customerName ||
+                  pendingDeleteOrder.customerEmail ||
+                  'this order'
+                } ($${money(pendingDeleteOrder.totalUsd)}, ${pendingDeleteOrder.status})? This does not refund Stripe — refund first if needed. Removes the order from the portal permanently.`
+            : ''
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        busy={deleteBusyId === pendingDeleteOrder?.id}
+        onCancel={() => {
+          if (deleteBusyId !== pendingDeleteOrder?.id) setPendingDeleteOrder(null)
+        }}
+        onConfirm={() => void confirmDeleteOrder()}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingDeclineRefund)}
+        title="Decline refund request?"
+        message="Add a short note for the customer (optional)."
+        confirmLabel="Decline"
+        cancelLabel="Cancel"
+        danger
+        busy={declineBusy}
+        prompt={{
+          label: 'Note for customer',
+          placeholder: 'e.g. already printed/shipped',
+          defaultValue: '',
+        }}
+        onCancel={() => {
+          if (!declineBusy) setPendingDeclineRefund(null)
+        }}
+        onConfirm={(note) => void confirmDeclineRefund(note)}
+      />
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { api } from '../lib/api'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 type Discount = {
   id: string
@@ -48,6 +49,8 @@ export function AdminDiscounts() {
   const [amountDollars, setAmountDollars] = useState('5')
   const [maxRedemptions, setMaxRedemptions] = useState('')
   const [visibleToCustomers, setVisibleToCustomers] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; code: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   async function load() {
     const data = await api.catalog.orders.discounts.list()
@@ -106,14 +109,18 @@ export function AdminDiscounts() {
     }
   }
 
-  async function remove(id: string, code: string) {
-    if (!window.confirm(`Delete promo code ${code}? This cannot be undone.`)) return
+  async function confirmRemove() {
+    if (!pendingDelete) return
+    setDeleting(true)
     setError('')
     try {
-      await api.catalog.orders.discounts.remove(id)
+      await api.catalog.orders.discounts.remove(pendingDelete.id)
+      setPendingDelete(null)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -281,7 +288,7 @@ export function AdminDiscounts() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-compact text-red-600"
-                    onClick={() => void remove(d.id, d.code)}
+                    onClick={() => setPendingDelete({ id: d.id, code: d.code })}
                   >
                     Delete
                   </button>
@@ -291,6 +298,24 @@ export function AdminDiscounts() {
           </ul>
         )}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="Delete promo code?"
+        message={
+          pendingDelete
+            ? `Delete promo code ${pendingDelete.code}? This cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        busy={deleting}
+        onCancel={() => {
+          if (!deleting) setPendingDelete(null)
+        }}
+        onConfirm={() => void confirmRemove()}
+      />
     </div>
   )
 }
