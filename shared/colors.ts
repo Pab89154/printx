@@ -57,9 +57,9 @@ export function formatMulticolorSelection(names: string[], labels?: string[]): s
   return `${MULTICOLOR_COLOR.name} · ${clean.join(' + ')}`
 }
 
-/** CSS background for multicolor swatches (one option that reads as multi). */
+/** CSS background for multicolor swatches — horizontal rainbow stripes. */
 export const MULTICOLOR_SWATCH_BACKGROUND =
-  'conic-gradient(from 180deg, #E11D48, #EAB308, #16A34A, #2563EB, #7C3AED, #E11D48)'
+  'linear-gradient(180deg, #E11D48 0% 16.67%, #EA580C 16.67% 33.33%, #EAB308 33.33% 50%, #16A34A 50% 66.67%, #2563EB 66.67% 83.33%, #7C3AED 83.33% 100%)'
 
 export function isMulticolorColorId(id: string | null | undefined): boolean {
   return id === MULTICOLOR_COLOR_ID

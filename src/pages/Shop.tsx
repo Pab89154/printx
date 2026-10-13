@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import { api } from '../lib/api'
-import { colorSwatchStyle, isMulticolorColorId } from '../../shared/colors'
+import { colorSwatchStyle, isMulticolorColorId, MULTICOLOR_COLOR } from '../../shared/colors'
 import type { CatalogColor, PublicCatalogDesign } from '../types/catalog'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
@@ -83,7 +83,7 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
           <div className="flex flex-wrap items-center gap-2">
             <span
               className="h-5 w-5 rounded-full border border-slate-200 shadow-sm"
-              style={colorSwatchStyle(design.availableColors[0] ?? { id: 'multicolor', hex: '#7C3AED' })}
+              style={colorSwatchStyle(MULTICOLOR_COLOR)}
               title="Multicolor"
               aria-hidden
             />
