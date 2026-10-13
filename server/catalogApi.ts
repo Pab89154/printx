@@ -793,7 +793,10 @@ export async function fillMissingQuotesForPrinter(
     `SELECT id, stl_path, name FROM designs
      WHERE TRIM(stl_path) != ''
        AND ${col} IS NULL
-       AND status IN ('draft', 'pending_review', 'approved', 'rejected')
+       AND (
+         status = 'approved'
+         OR (status = 'pending_review' AND slice_status IN ('slicing', 'ready', 'error'))
+       )
      ORDER BY updated_at DESC
      LIMIT 12`,
   )
@@ -2056,44 +2059,35 @@ export async function handleCatalogApi(
 
       const modelExt = path.extname(design.stlPath).toLowerCase()
       const now = new Date().toISOString()
-      // Queue for Approvals immediately — Cloud Slicer can take minutes and must not
-      // block the submit response (UI was freezing waiting on quotes).
-      let sliceWarning = ''
-      if (SLICEABLE_EXTS.has(modelExt)) {
-        await db.run(
-          `UPDATE designs SET
-            status = 'pending_review', submitted_at = ?, updated_at = ?, review_note = '',
-            slice_status = 'slicing', slice_error = ''
-           WHERE id = ?`,
-          now,
-          now,
-          designId,
-        )
-        scheduleDesignSlice(designId, design.stlPath)
-        sliceWarning = 'Quoting in the background — refresh Approvals shortly.'
-      } else {
+      // Submit only queues for main-admin review — quoting starts after Approve.
+      let sliceWarning =
+        'Submitted for main admin review. Cloud Slicer quoting starts after they Approve.'
+      if (!SLICEABLE_EXTS.has(modelExt)) {
         sliceWarning =
-          'Model is not .stl/.3mf — Cloud Slicer could not auto-quote. Convert and re-quote before approving.'
-        await db.run(
-          `UPDATE designs SET
-            status = 'pending_review', submitted_at = ?, updated_at = ?, review_note = '',
-            slice_status = 'error', slice_error = ?
-           WHERE id = ?`,
-          now,
-          now,
-          sliceWarning.slice(0, 2000),
-          designId,
-        )
+          'Submitted for review. Convert to .stl/.3mf before the main admin approves so quoting can run.'
       }
+      await db.run(
+        `UPDATE designs SET
+          status = 'pending_review', submitted_at = ?, updated_at = ?, review_note = '',
+          slice_status = 'idle', slice_error = ''
+         WHERE id = ?`,
+        now,
+        now,
+        designId,
+      )
 
       design = rowToDesign(
         (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
       )
-      send(res, 200, { ...designDto(design), sliceWarning: sliceWarning || undefined })
+      send(res, 200, { ...designDto(design), sliceWarning })
       return true
     }
 
     if (method === 'POST' && action === 'requote') {
+      if (!admin.isMainAdmin) {
+        send(res, 403, { error: 'Only the main admin can start quoting.' })
+        return true
+      }
       if (!design.hasStl || !design.stlPath) {
         send(res, 400, { error: 'Upload a 3D model before quoting.' })
         return true
@@ -2105,7 +2099,14 @@ export async function handleCatalogApi(
         })
         return true
       }
-      // Do not await slicing here — local/CS quotes can take minutes and freeze Approvals.
+      // Quoting only after the main admin has accepted the design (or it is already approved).
+      if (design.status === 'pending_review' && design.sliceStatus === 'idle') {
+        send(res, 400, {
+          error: 'Approve the design first — quoting starts after main admin approval.',
+        })
+        return true
+      }
+      // Do not await slicing here — CS quotes can take minutes and freeze Approvals.
       await db.run(
         `UPDATE designs SET slice_status = 'slicing', slice_error = '', updated_at = ? WHERE id = ?`,
         new Date().toISOString(),
@@ -2127,10 +2128,49 @@ export async function handleCatalogApi(
         send(res, 403, { error: 'Only the main admin can approve designs.' })
         return true
       }
+
+      // First approve on a pending design: accept the model and start quoting (no shop price yet).
+      if (action === 'approve' && design.status === 'pending_review' && !designHasPricableInputs(design)) {
+        if (!design.hasStl || !design.stlPath) {
+          send(res, 400, { error: 'Upload a 3D model before approving.' })
+          return true
+        }
+        const modelExt = path.extname(design.stlPath).toLowerCase()
+        if (!SLICEABLE_EXTS.has(modelExt)) {
+          send(res, 400, {
+            error: 'Convert to .stl or .3mf before approving so Cloud Slicer can quote.',
+          })
+          return true
+        }
+        const now = new Date().toISOString()
+        await db.run(
+          `UPDATE designs SET
+            reviewed_by = ?, reviewed_at = ?, review_note = ?,
+            slice_status = 'slicing', slice_error = '', updated_at = ?
+           WHERE id = ?`,
+          admin.id,
+          now,
+          'Accepted — quoting',
+          now,
+          designId,
+        )
+        scheduleDesignSlice(designId, design.stlPath)
+        design = rowToDesign(
+          (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
+        )
+        send(res, 200, {
+          design: designDto(design),
+          quotingStarted: true,
+          sliceWarning:
+            'Design accepted. Quoting via Cloud Slicer in the background — refresh, then Publish to shop when grams/hours appear.',
+        })
+        return true
+      }
+
       if (!designHasPricableInputs(design)) {
         send(res, 400, {
           error:
-            'Need colors and at least one printer quote. Link Cloud Slicer and use Re-quote missing.',
+            'Need colors and at least one printer quote. Wait for quoting to finish, or use Re-quote missing.',
         })
         return true
       }

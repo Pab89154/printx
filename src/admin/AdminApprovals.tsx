@@ -148,13 +148,15 @@ export function AdminApprovals() {
                         {!ready ? (
                           <p className="mt-2 text-xs text-amber-700">
                             {d.sliceStatus === 'slicing'
-                              ? 'Quoting via Cloud Slicer in the background — refresh shortly (usually under a minute per printer with a key).'
-                              : 'No printer quotes yet — click Re-quote missing (uses your Cloud Slicer API key; local slicer only if no key). Approve once any printer has grams/hours.'}
+                              ? 'Quoting via Cloud Slicer in the background — refresh shortly, then Publish to shop.'
+                              : d.sliceStatus === 'idle'
+                                ? 'Review the model first. Approve starts Cloud Slicer quoting (no shop listing until you Publish).'
+                                : 'No printer quotes yet — use Re-quote missing after Approve, then Publish to shop when grams/hours appear.'}
                           </p>
                         ) : !designHasAllThree(d) ? (
                           <p className="mt-2 text-xs text-muted">
                             Pricing uses the worst quoted printer so far. Missing printers can fill in
-                            later when their slicer/API key is set up.
+                            later when their Cloud Slicer key is set up.
                           </p>
                         ) : null}
                         {d.description ? (
@@ -165,23 +167,37 @@ export function AdminApprovals() {
                         <button
                           type="button"
                           className="btn btn-primary btn-compact"
-                          disabled={!ready || busyId === d.id}
+                          disabled={busyId === d.id || (ready ? false : d.sliceStatus === 'slicing')}
                           onClick={() => {
                             setBusyId(d.id)
                             setError('')
+                            setMessage('')
                             void api.catalog.designs
                               .approve(d.id)
-                              .then(() => load())
+                              .then((res) => {
+                                if (res.quotingStarted || res.sliceWarning) {
+                                  setMessage(
+                                    res.sliceWarning ||
+                                      'Accepted — quoting started. Refresh when grams/hours appear, then Publish to shop.',
+                                  )
+                                }
+                                return load()
+                              })
                               .catch((e) => setError(e instanceof Error ? e.message : 'Approve failed'))
                               .finally(() => setBusyId(null))
                           }}
                         >
-                          Approve + price
+                          {ready ? 'Publish to shop' : 'Approve & quote'}
                         </button>
                         <button
                           type="button"
                           className="btn btn-secondary btn-compact"
-                          disabled={busyId === d.id}
+                          disabled={busyId === d.id || d.sliceStatus === 'idle'}
+                          title={
+                            d.sliceStatus === 'idle'
+                              ? 'Approve the design first to start quoting'
+                              : undefined
+                          }
                           onClick={() => {
                             setBusyId(d.id)
                             setError('')

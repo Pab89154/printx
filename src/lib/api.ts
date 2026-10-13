@@ -254,10 +254,12 @@ export const api = {
           },
         ),
       approve: (id: string) =>
-        request<{ design: import('../types/catalog.ts').Design; pricing: unknown }>(
-          `/api/admin/designs/${id}/approve`,
-          { method: 'POST', body: '{}' },
-        ),
+        request<{
+          design: import('../types/catalog.ts').Design
+          pricing?: unknown
+          quotingStarted?: boolean
+          sliceWarning?: string
+        }>(`/api/admin/designs/${id}/approve`, { method: 'POST', body: '{}' }),
       reprice: (id: string) =>
         request<{ design: import('../types/catalog.ts').Design; pricing: unknown }>(
           `/api/admin/designs/${id}/reprice`,
