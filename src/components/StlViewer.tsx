@@ -22,23 +22,77 @@ const MAX_LIVE_VIEWERS = 2
 let liveViewers = 0
 const viewerWaitQueue: Array<() => void> = []
 
-function acquireViewerSlot(): Promise<boolean> {
-  if (liveViewers < MAX_LIVE_VIEWERS) {
-    liveViewers += 1
-    return Promise.resolve(true)
-  }
-  return new Promise((resolve) => {
-    viewerWaitQueue.push(() => {
+type ViewerSlot = {
+  promise: Promise<void>
+  /** Call if the component unmounts before/while waiting — avoids permanent slot leaks. */
+  cancel: () => void
+}
+
+function acquireViewerSlot(): ViewerSlot {
+  let cancelled = false
+  let acquired = false
+  let queued: (() => void) | null = null
+
+  const promise = new Promise<void>((resolve) => {
+    const take = () => {
+      if (cancelled) {
+        // Slot opened but this waiter is gone — pass through to the next queued viewer.
+        const next = viewerWaitQueue.shift()
+        if (next) next()
+        return
+      }
       liveViewers += 1
-      resolve(true)
-    })
+      acquired = true
+      resolve()
+    }
+    if (liveViewers < MAX_LIVE_VIEWERS) {
+      take()
+      return
+    }
+    queued = take
+    viewerWaitQueue.push(take)
   })
+
+  return {
+    promise,
+    cancel: () => {
+      cancelled = true
+      if (!acquired && queued) {
+        const idx = viewerWaitQueue.indexOf(queued)
+        if (idx >= 0) viewerWaitQueue.splice(idx, 1)
+      }
+    },
+  }
 }
 
 function releaseViewerSlot() {
   liveViewers = Math.max(0, liveViewers - 1)
   const next = viewerWaitQueue.shift()
   if (next) next()
+}
+
+/** Shop tiles: paint once to a static image and free the WebGL slot for the next card. */
+function freezeViewerToImage(
+  host: HTMLElement,
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  camera: THREE.Camera,
+) {
+  renderer.render(scene, camera)
+  let dataUrl = ''
+  try {
+    dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.88)
+  } catch {
+    /* WebGL context lost / blocked */
+  }
+  host.replaceChildren()
+  if (!dataUrl) return
+  const img = document.createElement('img')
+  img.src = dataUrl
+  img.alt = ''
+  img.draggable = false
+  img.className = 'h-full w-full object-cover'
+  host.appendChild(img)
 }
 
 function parseHex(hex: string | undefined, fallback: number): number {
@@ -142,22 +196,19 @@ export function StlViewer({
     camera.position.set(80, 60, 100)
     cameraRef.current = camera
 
+    const slot = acquireViewerSlot()
+
     void (async () => {
-      const ok = await acquireViewerSlot()
-      if (ok) acquired = true
-      if (cancelled) {
-        if (acquired) {
-          releaseViewerSlot()
-          acquired = false
-        }
-        return
-      }
-      if (!ok) return
+      await slot.promise
+      if (cancelled) return
+      acquired = true
 
       try {
         renderer = new THREE.WebGLRenderer({
           antialias: false,
           alpha: false,
+          // Needed so shop tiles can snapshot to a JPEG and free the WebGL slot.
+          preserveDrawingBuffer: !interactive,
           powerPreference: 'default',
           failIfMajorPerformanceCaveat: false,
         })
@@ -271,6 +322,29 @@ export function StlViewer({
         }
         syncSize()
         renderer.render(scene, camera)
+
+        // Catalog tiles: keep a JPEG preview and free the WebGL context so the rest of the grid can load.
+        if (!interactive && !cancelled) {
+          ro?.disconnect()
+          ro = null
+          freezeViewerToImage(host, renderer, scene, camera)
+          materialRef.current = null
+          if (rendererRef.current === renderer) rendererRef.current = null
+          if (sceneRef.current === scene) sceneRef.current = null
+          if (cameraRef.current === camera) cameraRef.current = null
+          if (mesh) {
+            mesh.geometry.dispose()
+            ;(mesh.material as THREE.Material).dispose()
+            mesh = null
+          }
+          renderer.dispose()
+          renderer = null
+          if (acquired) {
+            releaseViewerSlot()
+            acquired = false
+          }
+        }
+
         if (!cancelled) setLoading(false)
       } catch (err) {
         if (!cancelled) {
@@ -282,6 +356,7 @@ export function StlViewer({
 
     return () => {
       cancelled = true
+      slot.cancel()
       cancelAnimationFrame(frame)
       ro?.disconnect()
       controls?.dispose()
@@ -295,13 +370,14 @@ export function StlViewer({
       }
       renderer?.dispose()
       renderer = null
-      host.replaceChildren()
+      // Keep freeze JPEG if we already snapshotted (host has <img>, no live renderer).
       if (acquired) {
+        host.replaceChildren()
         releaseViewerSlot()
         acquired = false
       }
     }
-  }, [activeUrl, height, credentials, interactive])
+  }, [activeUrl, height, credentials, interactive, interactive ? '' : colorHex || ''])
 
   const fillParent = height === '100%'
   const hostStyle = fillParent ? ({ height: '100%', minHeight: 0 } as const) : { height }
@@ -427,22 +503,18 @@ export function MultiStlViewer({
     camera.position.set(80, 60, 100)
     cameraRef.current = camera
 
+    const slot = acquireViewerSlot()
+
     void (async () => {
-      const ok = await acquireViewerSlot()
-      if (ok) acquired = true
-      if (cancelled) {
-        if (acquired) {
-          releaseViewerSlot()
-          acquired = false
-        }
-        return
-      }
-      if (!ok) return
+      await slot.promise
+      if (cancelled) return
+      acquired = true
 
       try {
         renderer = new THREE.WebGLRenderer({
           antialias: false,
           alpha: false,
+          preserveDrawingBuffer: !interactive,
           powerPreference: 'default',
           failIfMajorPerformanceCaveat: false,
         })
@@ -574,6 +646,28 @@ export function MultiStlViewer({
         }
         syncSize()
         renderer.render(scene, camera)
+
+        if (!interactive && !cancelled) {
+          ro?.disconnect()
+          ro = null
+          freezeViewerToImage(host, renderer, scene, camera)
+          materialsRef.current = []
+          if (rendererRef.current === renderer) rendererRef.current = null
+          if (sceneRef.current === scene) sceneRef.current = null
+          if (cameraRef.current === camera) cameraRef.current = null
+          for (const m of meshes) {
+            m.geometry.dispose()
+            ;(m.material as THREE.Material).dispose()
+          }
+          meshes.length = 0
+          renderer.dispose()
+          renderer = null
+          if (acquired) {
+            releaseViewerSlot()
+            acquired = false
+          }
+        }
+
         if (!cancelled) setLoading(false)
       } catch (err) {
         if (!cancelled) {
@@ -585,6 +679,7 @@ export function MultiStlViewer({
 
     return () => {
       cancelled = true
+      slot.cancel()
       cancelAnimationFrame(frame)
       ro?.disconnect()
       controls?.dispose()
@@ -598,15 +693,15 @@ export function MultiStlViewer({
       }
       renderer?.dispose()
       renderer = null
-      host.replaceChildren()
       if (acquired) {
+        host.replaceChildren()
         releaseViewerSlot()
         acquired = false
       }
     }
-    // parts colors update via separate effect; reload only when URLs change
+    // Non-interactive tiles reload when colors change (after snapshot WebGL is gone).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey, height, credentials, interactive])
+  }, [activeKey, height, credentials, interactive, interactive ? '' : colorsKey])
 
   const fillParent = height === '100%'
   const hostStyle = fillParent ? ({ height: '100%', minHeight: 0 } as const) : { height }
