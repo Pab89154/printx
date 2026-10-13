@@ -828,6 +828,10 @@ function startOrderGcodePrep(itemId: string) {
     console.warn('[gcode] restarting stale prepare job', itemId)
   }
   if (current?.status === 'ready') return
+  // error / idle → start fresh (client retries after timeouts)
+  if (current?.status === 'error') {
+    console.warn('[gcode] retrying after previous error', itemId, current.error)
+  }
   orderGcodeJobs.set(itemId, { status: 'running', updatedAt: Date.now() })
   const heartbeat = setInterval(() => {
     const job = orderGcodeJobs.get(itemId)

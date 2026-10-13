@@ -464,8 +464,8 @@ export const api = {
           'Could not check G-code status. Try again.',
         )
         if (st.status !== 'ready') {
-          if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
-          // idle / running — start (or join) a background prepare job.
+          // idle / error — start a fresh prepare. Do not stick on a previous failure
+          // (in-memory error jobs otherwise block Download until the next deploy).
           if (st.status !== 'running') {
             st = await withTimeout(
               request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' }),
@@ -475,8 +475,9 @@ export const api = {
           }
           if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
           // Free-plan local slice can take several minutes; fail with a clear error.
-          const deadline = Date.now() + 12 * 60_000
+          const deadline = Date.now() + 14 * 60_000
           let idleRestarts = 0
+          let errorRestarts = 0
           while (Date.now() < deadline) {
             await new Promise((r) => setTimeout(r, 2500))
             st = await withTimeout(
@@ -485,7 +486,18 @@ export const api = {
               'G-code status check timed out. Try Download again.',
             )
             if (st.status === 'ready') break
-            if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
+            if (st.status === 'error') {
+              // One automatic retry after a slice failure (timeout / OOM), then surface it.
+              errorRestarts += 1
+              if (errorRestarts > 1) throw new Error(st.error || 'G-code prepare failed')
+              st = await withTimeout(
+                request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' }),
+                20_000,
+                'Could not restart G-code prepare. Try again.',
+              )
+              if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
+              continue
+            }
             if (st.status === 'idle') {
               // Server restart mid-slice clears in-memory jobs. Retry a couple times, then stop.
               idleRestarts += 1
@@ -504,7 +516,7 @@ export const api = {
           }
           if (st.status !== 'ready') {
             throw new Error(
-              'Timed out preparing G-code after ~12 minutes. Tap Download again — PrintX will start a fresh slice.',
+              'Timed out preparing G-code after ~14 minutes. Tap Download again — PrintX will start a fresh slice.',
             )
           }
         }

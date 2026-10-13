@@ -11,9 +11,18 @@ MARKER="$SLICER_DIR/.printx-slicer-ready"
 log() { echo "==> $*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
+profiles_ok() {
+  [[ -d "$SLICER_DIR/resources/profiles/BBL/machine" ]] \
+    || [[ -d "$SLICER_DIR/usr/share/BambuStudio/profiles/BBL/machine" ]]
+}
+
 if [[ -f "$MARKER" ]] && [[ -x "$SLICER_DIR/AppRun" || -x "$SLICER_DIR/bambu-studio" ]]; then
-  log "Local slicer already installed at $SLICER_DIR"
-  exit 0
+  if profiles_ok; then
+    log "Local slicer already installed at $SLICER_DIR"
+    exit 0
+  fi
+  log "Marker present but BBL profiles missing — reinstalling"
+  rm -f "$MARKER"
 fi
 
 if [[ "$(uname -s)" != "Linux" ]]; then
@@ -95,27 +104,32 @@ PROFILES=""
 for cand in \
   "resources/profiles" \
   "usr/share/BambuStudio/profiles"; do
-  if [[ -d "$cand/BBL" ]]; then PROFILES="$cand"; break; fi
+  if [[ -d "$cand/BBL/machine" ]]; then PROFILES="$cand"; break; fi
 done
-if [[ -n "$PROFILES" ]]; then
-  log "Trimming profiles under $PROFILES (keep BBL, Creality, Anycubic)"
-  shopt -s nullglob
-  for d in "$PROFILES"/*/; do
-    name="$(basename "$d")"
-    case "$name" in
-      BBL|Creality|Anycubic) ;;
-      *) rm -rf "$d" ;;
-    esac
-  done
-  # Drop heavy cover art / bed models we don't need for CLI
-  find "$PROFILES" -type f \( -name '*.png' -o -name '*_cover.*' -o -name '*buildplate*' \) -delete 2>/dev/null || true
-fi
+[[ -n "$PROFILES" ]] || fail "BBL/machine profiles missing after extract (looked under resources/profiles and usr/share/BambuStudio/profiles)"
+
+log "Trimming profiles under $PROFILES (keep BBL, Creality, Anycubic)"
+shopt -s nullglob
+for d in "$PROFILES"/*/; do
+  name="$(basename "$d")"
+  case "$name" in
+    BBL|Creality|Anycubic) ;;
+    *) rm -rf "$d" ;;
+  esac
+done
+# Drop heavy cover art / bed models we don't need for CLI
+find "$PROFILES" -type f \( -name '*.png' -o -name '*_cover.*' -o -name '*buildplate*' \) -delete 2>/dev/null || true
+
+# Required files for pablo_p1s (fail the Docker build early if the AppImage layout changed).
+for req in \
+  "machine/Bambu Lab P1S 0.4 nozzle.json" \
+  "process/0.20mm Standard @BBL X1C.json" \
+  "process/0.28mm Extra Draft @BBL X1C.json" \
+  "filament/Bambu PLA Basic @BBL P1S 0.4 nozzle.json"; do
+  [[ -f "$PROFILES/BBL/$req" ]] || fail "missing required profile: $PROFILES/BBL/$req"
+done
 
 rm -f BambuStudio.AppImage extract.log extract2.log
 touch "$MARKER"
 log "Slicer ready at $SLICER_DIR"
-if [[ -d resources/profiles/BBL ]]; then
-  log "Profiles: resources/profiles/BBL"
-elif [[ -d usr/share/BambuStudio/profiles/BBL ]]; then
-  log "Profiles: usr/share/BambuStudio/profiles/BBL"
-fi
+log "Profiles: $PROFILES/BBL"

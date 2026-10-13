@@ -257,8 +257,25 @@ export async function sliceStlLocally(
       )
     }
 
+    let stlBytes = 0
+    try {
+      stlBytes = fs.statSync(localPath).size
+    } catch {
+      /* ignore */
+    }
+
+    // Large meshes (Ghost Fidget ~40MB) — Extra Draft finishes on free-tier RAM;
+    // shop pricing still uses Cloud Slicer grams/hours, not this process.
+    const draftRel = 'process/0.28mm Extra Draft @BBL X1C.json'
+    const processRel =
+      profile.vendor === 'BBL' &&
+      stlBytes > 12 * 1024 * 1024 &&
+      fs.existsSync(path.join(root, draftRel))
+        ? draftRel
+        : profile.process
+
     const machine = path.join(root, profile.machine)
-    const processFile = path.join(root, profile.process)
+    const processFile = path.join(root, processRel)
     const filament = path.join(root, profile.filament)
     for (const f of [machine, processFile, filament, localPath]) {
       if (!fs.existsSync(f)) throw new Error(`Slicer input missing: ${f}`)
@@ -266,15 +283,17 @@ export async function sliceStlLocally(
 
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'printx-slice-'))
     try {
+      // Skip auto-orient / arrange — they hang or OOM free-tier hosts on large STLs
+      // (e.g. 40MB multi-part meshes) and are unnecessary for shop downloads.
       const args = [
         '--load-settings',
         `${machine};${processFile}`,
         '--load-filaments',
         filament,
         '--orient',
-        '1',
+        '0',
         '--arrange',
-        '1',
+        '0',
         '--slice',
         '0',
         '--no-check',
@@ -282,8 +301,15 @@ export async function sliceStlLocally(
         outDir,
         localPath,
       ]
-      console.warn('[local-slicer] slicing', printxPrinterId, path.basename(localPath))
-      const { code, log } = await run(bin, args, 10 * 60_000)
+      console.warn(
+        '[local-slicer] slicing',
+        printxPrinterId,
+        path.basename(localPath),
+        stlBytes ? `${Math.round(stlBytes / 1024)}KB` : '',
+        path.basename(processRel),
+      )
+      // Cap wall time so a hung CLI frees the queue; client will retry once.
+      const { code, log } = await run(bin, args, 12 * 60_000)
       const gcodePath =
         fs.readdirSync(outDir)
           .filter((n) => n.endsWith('.gcode'))
