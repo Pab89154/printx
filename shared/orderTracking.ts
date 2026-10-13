@@ -18,9 +18,10 @@ export function businessDaysForShippingMethod(method: string | null | undefined)
   const m = String(method || '')
     .trim()
     .toLowerCase()
-  if (m.includes('express')) return 2
-  if (m.includes('priority')) return 4
-  return 9
+  // Match Checkout delivery_estimate maxima (UPS Ground / 3 Day Select / Next Day Air Saver).
+  if (m.includes('express')) return 1
+  if (m.includes('priority')) return 3
+  return 5
 }
 
 /** Add N business days (Mon–Fri) to a UTC/ISO date. */

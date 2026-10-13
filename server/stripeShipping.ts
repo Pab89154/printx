@@ -2,33 +2,19 @@ import type Stripe from 'stripe'
 
 /**
  * Flat US shipping options for PrintX Checkout (pay UPS at the counter later).
- * Defaults match 2026 UPS® Simple Rate (Extra Small, ≤100 cu in) between the
- * contiguous 48 — same price from SHIP_FROM_POSTAL regardless of destination zone.
- * @see UPS Rate and Service Guide — Simple Rate (Ground / 3 Day Select / Next Day Air Saver)
+ * Prices stay customer-friendly; delivery windows match UPS Ground / 3 Day Select /
+ * Next Day Air Saver from SHIP_FROM_POSTAL (75072).
  */
 
 export const SHIP_FROM_POSTAL = '75072'
 
-/** UPS Simple Rate Extra Small — Ground */
-const UPS_SIMPLE_XS_GROUND_CENTS = 1300
-/** UPS Simple Rate Extra Small — 3 Day Select */
-const UPS_SIMPLE_XS_3DAY_CENTS = 2125
-/** UPS Simple Rate Extra Small — Next Day Air Saver */
-const UPS_SIMPLE_XS_NEXTDAY_SAVER_CENTS = 4445
-
-const STANDARD_CENTS = Number(
-  process.env.PRINTX_SHIP_STANDARD_CENTS || UPS_SIMPLE_XS_GROUND_CENTS,
-)
-const PRIORITY_CENTS = Number(
-  process.env.PRINTX_SHIP_PRIORITY_CENTS || UPS_SIMPLE_XS_3DAY_CENTS,
-)
-const EXPRESS_CENTS = Number(
-  process.env.PRINTX_SHIP_EXPRESS_CENTS || UPS_SIMPLE_XS_NEXTDAY_SAVER_CENTS,
-)
+const STANDARD_CENTS = Number(process.env.PRINTX_SHIP_STANDARD_CENTS || 599)
+const PRIORITY_CENTS = Number(process.env.PRINTX_SHIP_PRIORITY_CENTS || 1199)
+const EXPRESS_CENTS = Number(process.env.PRINTX_SHIP_EXPRESS_CENTS || 1999)
 
 /** Standard flat rate in cents — used for free-shipping promo credit at Checkout. */
 export function standardShippingCents(): number {
-  return cents(STANDARD_CENTS, UPS_SIMPLE_XS_GROUND_CENTS)
+  return cents(STANDARD_CENTS, 599)
 }
 
 function cents(n: number, fallback: number): number {
@@ -68,9 +54,7 @@ export function stripeCheckoutShippingFields(opts?: {
   | 'billing_address_collection'
   | 'customer_update'
 > {
-  const standardAmount = opts?.freeStandard
-    ? 0
-    : cents(STANDARD_CENTS, UPS_SIMPLE_XS_GROUND_CENTS)
+  const standardAmount = opts?.freeStandard ? 0 : cents(STANDARD_CENTS, 599)
   return {
     // Always collect a billing address so we have a street even if ship-to is missing in API.
     billing_address_collection: 'required',
@@ -93,37 +77,34 @@ export function stripeCheckoutShippingFields(opts?: {
           type: 'fixed_amount',
           fixed_amount: { amount: standardAmount, currency: 'usd' },
           display_name: opts?.freeStandard ? 'Standard (free with promo)' : 'Standard',
-          delivery_estimate: {
-            minimum: { unit: 'business_day', value: 5 },
-            maximum: { unit: 'business_day', value: 9 },
-          },
-        },
-      },
-      {
-        shipping_rate_data: {
-          type: 'fixed_amount',
-          fixed_amount: {
-            amount: cents(PRIORITY_CENTS, UPS_SIMPLE_XS_3DAY_CENTS),
-            currency: 'usd',
-          },
-          display_name: 'Priority',
-          delivery_estimate: {
-            minimum: { unit: 'business_day', value: 2 },
-            maximum: { unit: 'business_day', value: 4 },
-          },
-        },
-      },
-      {
-        shipping_rate_data: {
-          type: 'fixed_amount',
-          fixed_amount: {
-            amount: cents(EXPRESS_CENTS, UPS_SIMPLE_XS_NEXTDAY_SAVER_CENTS),
-            currency: 'usd',
-          },
-          display_name: 'Express',
+          // UPS Ground from 75072 — typically 1–5 business days in the contiguous US.
           delivery_estimate: {
             minimum: { unit: 'business_day', value: 1 },
-            maximum: { unit: 'business_day', value: 2 },
+            maximum: { unit: 'business_day', value: 5 },
+          },
+        },
+      },
+      {
+        shipping_rate_data: {
+          type: 'fixed_amount',
+          fixed_amount: { amount: cents(PRIORITY_CENTS, 1199), currency: 'usd' },
+          display_name: 'Priority',
+          // UPS 3 Day Select.
+          delivery_estimate: {
+            minimum: { unit: 'business_day', value: 3 },
+            maximum: { unit: 'business_day', value: 3 },
+          },
+        },
+      },
+      {
+        shipping_rate_data: {
+          type: 'fixed_amount',
+          fixed_amount: { amount: cents(EXPRESS_CENTS, 1999), currency: 'usd' },
+          display_name: 'Express',
+          // UPS Next Day Air Saver.
+          delivery_estimate: {
+            minimum: { unit: 'business_day', value: 1 },
+            maximum: { unit: 'business_day', value: 1 },
           },
         },
       },
@@ -366,13 +347,9 @@ export function parseCheckoutShipping(
   }
   if (!shippingMethod) {
     const centsPaid = Math.round(shippingUsd * 100)
-    if (centsPaid === cents(STANDARD_CENTS, UPS_SIMPLE_XS_GROUND_CENTS)) {
-      shippingMethod = 'Standard'
-    } else if (centsPaid === cents(PRIORITY_CENTS, UPS_SIMPLE_XS_3DAY_CENTS)) {
-      shippingMethod = 'Priority'
-    } else if (centsPaid === cents(EXPRESS_CENTS, UPS_SIMPLE_XS_NEXTDAY_SAVER_CENTS)) {
-      shippingMethod = 'Express'
-    }
+    if (centsPaid === cents(STANDARD_CENTS, 599)) shippingMethod = 'Standard'
+    else if (centsPaid === cents(PRIORITY_CENTS, 1199)) shippingMethod = 'Priority'
+    else if (centsPaid === cents(EXPRESS_CENTS, 1999)) shippingMethod = 'Express'
     else if (shippingUsd > 0) shippingMethod = 'Shipping'
   }
 
