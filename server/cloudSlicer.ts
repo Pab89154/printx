@@ -361,7 +361,7 @@ export async function quoteStlForPrinter(
   const captureGcode = opts?.captureGcode !== false
   const filename = path.basename(localPath) || 'design.stl'
   const fileId = await uploadStlFile(creds, localPath, filename)
-  const quoteId = await createQuote(creds, fileId)
+  const quoteId = await enqueueQuote(creds, fileId)
 
   let earlyGcode: { buffer: Buffer; filename: string } | null = null
   const deadline = Date.now() + 360_000
