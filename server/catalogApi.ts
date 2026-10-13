@@ -339,16 +339,16 @@ async function sliceDesignWithCloudSlicer(
         printerId: String(row?.cloud_slicer_printer_id || ''),
         filamentId: String(row?.cloud_slicer_filament_id || ''),
       }
-      const canLocal = localSlicerAvailable(id)
       const canCloud = cloudSlicerConfigured(creds)
-      if (!canLocal && !canCloud) {
+      // Pricing uses Cloud Slicer only — local Bambu freezes the Render web process.
+      if (!canCloud) {
         const who = row?.display_name || row?.email
         setupGaps.push(
           missingPrinterWarning(
             label,
             who
-              ? `${who} has not finished Cloud Slicer API setup (and local slicer is unavailable)`
-              : 'local slicer unavailable and no Cloud Slicer API key (Settings → Cloud Slicer)',
+              ? `${who} has not finished Cloud Slicer API setup`
+              : 'no Cloud Slicer API key on this printer (Settings → Cloud Slicer)',
           ),
         )
         continue
@@ -381,7 +381,11 @@ async function sliceDesignWithCloudSlicer(
       )
       for (const item of ready) {
         try {
-          const result = await quoteStlForPrintxPrinter(item.printerId, localPath, item.creds)
+          const result = await quoteStlForPrintxPrinter(item.printerId, localPath, item.creds, {
+            prefer: 'cloud',
+            captureGcode: false,
+            allowLocalFallback: false,
+          })
           const fields = PRINTER_FIELD[item.printerId]!
           gramsHours[fields.grams] = result.grams
           gramsHours[fields.hours] = result.hours

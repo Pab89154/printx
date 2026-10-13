@@ -287,62 +287,81 @@ export async function waitForQuoteAndDownloadGcode(
   throw new Error('Cloud Slicer quote timed out.')
 }
 
+export type QuotePrefer = 'cloud' | 'local'
+
 /**
- * Prefer local Bambu CLI for grams/hours (+ G-code). If local fails or is missing,
- * fall back to Cloud Slicer when that printer has API credentials.
+ * Quote one PrintX printer.
+ * - Pricing: prefer Cloud Slicer (light API). Local Bambu on Render freezes the site.
+ * - G-code download: prefer local (Cloud Slicer Free withholds files).
  */
 export async function quoteStlForPrintxPrinter(
   printxPrinterId: string,
   localPath: string,
   creds?: CloudSlicerCreds | null,
+  opts?: { prefer?: QuotePrefer; captureGcode?: boolean; allowLocalFallback?: boolean },
 ): Promise<CloudSlicerQuoteResult> {
+  const prefer = opts?.prefer ?? 'cloud'
+  const captureGcode = opts?.captureGcode !== false
+  // Pricing must not fall back to local Bambu on Render — it pegs CPU and freezes the site.
+  const allowLocalFallback = opts?.allowLocalFallback === true || prefer === 'local'
   const canCloud = Boolean(creds && cloudSlicerConfigured(creds))
-  let localError = ''
+  const canLocal = localSlicerAvailable(printxPrinterId) && (prefer === 'local' || allowLocalFallback)
+  let lastError = ''
 
-  if (localSlicerAvailable(printxPrinterId)) {
-    try {
-      const local = await sliceStlLocally(localPath, printxPrinterId)
-      if (!(local.grams > 0) || !(local.hours > 0)) {
-        throw new Error(
-          `Local slicer returned incomplete metrics (grams=${local.grams}, hours=${local.hours}).`,
-        )
-      }
-      return {
-        grams: local.grams,
-        hours: local.hours,
-        quoteId: `local-${Date.now().toString(36)}`,
-        fileId: '',
-        gcodeBuffer: local.buffer,
-        gcodeFilename: local.filename,
-      }
-    } catch (err) {
-      localError = err instanceof Error ? err.message : 'Local slicer failed'
-      if (!canCloud) throw err instanceof Error ? err : new Error(localError)
-      console.warn(
-        `[cloudslicer] local quote failed for ${printxPrinterId}; falling back to Cloud Slicer:`,
-        localError,
+  const tryLocal = async (): Promise<CloudSlicerQuoteResult> => {
+    const local = await sliceStlLocally(localPath, printxPrinterId)
+    if (!(local.grams > 0) || !(local.hours > 0)) {
+      throw new Error(
+        `Local slicer returned incomplete metrics (grams=${local.grams}, hours=${local.hours}).`,
       )
+    }
+    return {
+      grams: local.grams,
+      hours: local.hours,
+      quoteId: `local-${Date.now().toString(36)}`,
+      fileId: '',
+      gcodeBuffer: captureGcode ? local.buffer : undefined,
+      gcodeFilename: captureGcode ? local.filename : undefined,
     }
   }
 
-  if (!canCloud || !creds) {
-    throw new Error(
-      localError
-        ? localError
-        : 'Local slicer unavailable and Cloud Slicer is not configured for this printer.',
-    )
+  const tryCloud = async (): Promise<CloudSlicerQuoteResult> => {
+    if (!canCloud || !creds) {
+      throw new Error('Cloud Slicer is not configured for this printer.')
+    }
+    return quoteStlForPrinter(creds, localPath, { captureGcode })
   }
-  return quoteStlForPrinter(creds, localPath)
+
+  const order: Array<'cloud' | 'local'> =
+    prefer === 'local' ? ['local', 'cloud'] : ['cloud', 'local']
+
+  for (const mode of order) {
+    if (mode === 'cloud' && !canCloud) continue
+    if (mode === 'local' && !canLocal) continue
+    try {
+      return mode === 'cloud' ? await tryCloud() : await tryLocal()
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : `${mode} quote failed`
+      console.warn(`[cloudslicer] ${mode} quote failed for ${printxPrinterId}:`, lastError)
+    }
+  }
+
+  throw new Error(
+    lastError ||
+      'Local slicer unavailable and Cloud Slicer is not configured for this printer.',
+  )
 }
 
-/** Upload STL + quote for one printer; capture G-code when Cloud Slicer still has it. */
+/** Upload STL + quote for one printer; optionally chase G-code after success. */
 export async function quoteStlForPrinter(
   creds: CloudSlicerCreds,
   localPath: string,
+  opts?: { captureGcode?: boolean },
 ): Promise<CloudSlicerQuoteResult> {
+  const captureGcode = opts?.captureGcode !== false
   const filename = path.basename(localPath) || 'design.stl'
   const fileId = await uploadStlFile(creds, localPath, filename)
-  const quoteId = await queueQuote(creds, fileId)
+  const quoteId = await createQuote(creds, fileId)
 
   let earlyGcode: { buffer: Buffer; filename: string } | null = null
   const deadline = Date.now() + 360_000
@@ -357,7 +376,7 @@ export async function quoteStlForPrinter(
       )
     }
     const status = String(data.status || '')
-    if (!earlyGcode) {
+    if (captureGcode && !earlyGcode) {
       try {
         earlyGcode = await downloadQuoteGcodeOnce(creds, quoteId)
       } catch {
@@ -366,6 +385,9 @@ export async function quoteStlForPrinter(
     }
     if (status === 'success') {
       const { grams, hours } = extractGramsHours(data)
+      if (!captureGcode) {
+        return { grams, hours, quoteId, fileId }
+      }
       if (earlyGcode) {
         return {
           grams,
@@ -392,7 +414,7 @@ export async function quoteStlForPrinter(
     if (status === 'failed' || status === 'error') {
       throw new Error(String(data.error_message || data.error || data.message || 'Cloud Slicer quote failed'))
     }
-    await sleep(500)
+    await sleep(captureGcode ? 500 : 800)
   }
   throw new Error('Cloud Slicer quote timed out.')
 }
@@ -455,7 +477,7 @@ export async function requoteFileAndDownloadGcode(
   }
 }
 
-/** Fresh upload + slice; prefer local slicer, else Cloud Slicer when it still has G-code. */
+/** Fresh upload + slice; prefer local slicer for G-code (Cloud Slicer Free withholds files). */
 export async function quoteAndDownloadGcode(
   creds: CloudSlicerCreds,
   localPath: string,
@@ -463,8 +485,11 @@ export async function quoteAndDownloadGcode(
 ): Promise<{ buffer: Buffer; filename: string; quoteId: string; fileId: string; grams: number; hours: number }> {
   const printxPrinterId = opts?.printxPrinterId?.trim() || ''
   const quoted = printxPrinterId
-    ? await quoteStlForPrintxPrinter(printxPrinterId, localPath, creds)
-    : await quoteStlForPrinter(creds, localPath)
+    ? await quoteStlForPrintxPrinter(printxPrinterId, localPath, creds, {
+        prefer: 'local',
+        captureGcode: true,
+      })
+    : await quoteStlForPrinter(creds, localPath, { captureGcode: true })
   if (quoted.gcodeBuffer && quoted.gcodeBuffer.length) {
     return {
       buffer: quoted.gcodeBuffer,

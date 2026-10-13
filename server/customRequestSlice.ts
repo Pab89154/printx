@@ -239,19 +239,22 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
         printerId: String(owner?.cloud_slicer_printer_id || ''),
         filamentId: String(owner?.cloud_slicer_filament_id || ''),
       }
-      const canLocal = localSlicerAvailable(id)
       const canCloud = cloudSlicerConfigured(creds)
-      if (!canLocal && !canCloud) {
+      if (!canCloud) {
         const who = owner?.display_name || owner?.email
         setupGaps.push(
           who
-            ? `${label}: ${who} has not finished Cloud Slicer setup (and local slicer is unavailable)`
-            : `${label}: local slicer unavailable and no Cloud Slicer API key (Settings → Cloud Slicer)`,
+            ? `${label}: ${who} has not finished Cloud Slicer setup`
+            : `${label}: no Cloud Slicer API key saved (Settings → Cloud Slicer)`,
         )
         continue
       }
       try {
-        const result = await quoteStlForPrintxPrinter(id, resolved.path, creds)
+        const result = await quoteStlForPrintxPrinter(id, resolved.path, creds, {
+          prefer: 'cloud',
+          captureGcode: false,
+          allowLocalFallback: false,
+        })
         gramsHours[GRAMS_COL[id]!] = result.grams
         gramsHours[HOURS_COL[id]!] = result.hours
         quoteIds[id] = result.quoteId

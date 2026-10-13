@@ -148,8 +148,8 @@ export function AdminApprovals() {
                         {!ready ? (
                           <p className="mt-2 text-xs text-amber-700">
                             {d.sliceStatus === 'slicing'
-                              ? 'Quoting in progress (local slicer and/or Cloud Slicer) — refresh in a minute.'
-                              : 'No printer quotes yet — click Re-quote missing (uses local slicer when available, otherwise your Cloud Slicer API key). Approve once any printer has grams/hours.'}
+                              ? 'Quoting via Cloud Slicer in the background — refresh shortly (usually under a minute per printer with a key).'
+                              : 'No printer quotes yet — click Re-quote missing (uses your Cloud Slicer API key; local slicer only if no key). Approve once any printer has grams/hours.'}
                           </p>
                         ) : !designHasAllThree(d) ? (
                           <p className="mt-2 text-xs text-muted">
