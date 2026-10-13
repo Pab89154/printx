@@ -283,8 +283,8 @@ export async function sliceStlLocally(
 
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'printx-slice-'))
     try {
-      // Skip auto-orient / arrange — they hang or OOM free-tier hosts on large STLs
-      // (e.g. 40MB multi-part meshes) and are unnecessary for shop downloads.
+      // Skip auto-orient (hangs/OOMs on large meshes). Keep arrange so the STL
+      // is placed on the bed — arrange=0 yields exit 206 "plate is empty".
       const args = [
         '--load-settings',
         `${machine};${processFile}`,
@@ -293,7 +293,7 @@ export async function sliceStlLocally(
         '--orient',
         '0',
         '--arrange',
-        '0',
+        '1',
         '--slice',
         '0',
         '--no-check',
