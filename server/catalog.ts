@@ -92,12 +92,15 @@ export type OrderStatus =
   | 'pending_payment'
   | 'paid'
   | 'in_production'
+  | 'printed'
+  | 'shipped'
+  | 'arrived'
   | 'ready'
   | 'fulfilled'
   | 'cancelled'
   | 'refunded'
 
-export type PrintStatus = 'unclaimed' | 'claimed' | 'printing' | 'done'
+export type PrintStatus = 'unclaimed' | 'claimed' | 'printing' | 'printed' | 'done'
 
 export type OrderItem = {
   id: string
@@ -145,6 +148,8 @@ export type Order = {
   trackingCarrier: string
   trackingUrl: string
   shippedAt: string | null
+  trackCode: string
+  trackCodeShownAt: string | null
   userId: string | null
   createdAt: string
   updatedAt: string
@@ -236,6 +241,8 @@ export function rowToOrder(row: Record<string, unknown>): Order {
     trackingCarrier: (row.tracking_carrier as string) || '',
     trackingUrl: (row.tracking_url as string) || '',
     shippedAt: (row.shipped_at as string | null) ?? null,
+    trackCode: String(row.track_code || '').trim(),
+    trackCodeShownAt: (row.track_code_shown_at as string | null) ?? null,
     userId: (row.user_id as string | null) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
@@ -265,7 +272,9 @@ export function rowToOrderItem(row: Record<string, unknown>): OrderItem {
     unitPriceUsd: Number(row.unit_price_usd) || 0,
     worstCostUnitUsd: Number(row.worst_cost_unit_usd) || 0,
     lineTotalUsd: Number(row.line_total_usd) || 0,
-    printStatus: row.print_status as PrintStatus,
+    printStatus: (String(row.print_status) === 'done'
+      ? 'printed'
+      : row.print_status) as PrintStatus,
     assignedPrinterId: (row.assigned_printer_id as string | null) ?? null,
     assignedAdminUserId: (row.assigned_admin_user_id as string | null) ?? null,
     claimedAt: (row.claimed_at as string | null) ?? null,

@@ -414,6 +414,32 @@ async function migrateCustomerAccounts(database: DbApi) {
     }
   }
 
+  // Public 6-digit track codes (shop orders only).
+  for (const [name, def] of [
+    ['track_code', `TEXT`],
+    ['track_code_shown_at', `TEXT`],
+  ] as const) {
+    try {
+      await database.exec(`ALTER TABLE orders ADD COLUMN ${name} ${def}`)
+    } catch {
+      /* exists */
+    }
+  }
+  try {
+    await database.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_track_code ON orders(track_code) WHERE track_code IS NOT NULL AND TRIM(track_code) != ''`,
+    )
+  } catch {
+    /* sqlite/pg dialect — fall back below */
+  }
+  try {
+    await database.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_track_code ON orders(track_code)`,
+    )
+  } catch {
+    /* already exists or partial index unsupported */
+  }
+
   await database.exec(`
     CREATE TABLE IF NOT EXISTS refund_requests (
       id TEXT PRIMARY KEY,

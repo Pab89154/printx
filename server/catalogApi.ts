@@ -1140,9 +1140,11 @@ async function settleOrderItem(
     itemId,
   )
   if (!item) return { ok: false as const, error: 'Item not found' }
-  if (item.print_status === 'done') return { ok: false as const, error: 'Already completed' }
+  if (item.print_status === 'done' || item.print_status === 'printed') {
+    return { ok: false as const, error: 'Already marked printed.' }
+  }
   if (item.assigned_admin_user_id !== adminUserId) {
-    return { ok: false as const, error: 'Only the claiming admin can mark this done.' }
+    return { ok: false as const, error: 'Only the claiming admin can mark this printed.' }
   }
 
   const qty = Number(item.qty) || 1
@@ -1155,7 +1157,7 @@ async function settleOrderItem(
 
   await database.run(
     `UPDATE order_items SET print_status = ?, completed_at = ?, reimburse_usd = ?, profit_usd = ? WHERE id = ?`,
-    'done',
+    'printed',
     now,
     reimburse,
     profit,
@@ -1177,19 +1179,30 @@ async function settleOrderItem(
     now,
   )
 
-  // Roll up order status
+  // Roll up order status — printed means all items printed (not shipped/fulfilled yet).
   const orderId = item.order_id as string
   const remaining = await database.get<{ c: number | string }>(
-    `SELECT COUNT(*) as c FROM order_items WHERE order_id = ? AND print_status != 'done'`,
+    `SELECT COUNT(*) as c FROM order_items
+     WHERE order_id = ? AND print_status NOT IN ('printed', 'done')`,
     orderId,
   )
   const left = Number(remaining?.c ?? 0)
-  await database.run(
-    `UPDATE orders SET status = ?, updated_at = ? WHERE id = ?`,
-    left === 0 ? 'fulfilled' : 'in_production',
-    now,
+  const order = await database.get<{ status: string; shipped_at: string | null }>(
+    'SELECT status, shipped_at FROM orders WHERE id = ?',
     orderId,
   )
+  // Don't overwrite shipped/arrived/fulfilled.
+  if (
+    order &&
+    !['shipped', 'arrived', 'fulfilled', 'refunded', 'cancelled'].includes(String(order.status))
+  ) {
+    await database.run(
+      `UPDATE orders SET status = ?, updated_at = ? WHERE id = ?`,
+      left === 0 ? 'printed' : 'in_production',
+      now,
+      orderId,
+    )
+  }
 
   return { ok: true as const }
 }
