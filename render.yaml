@@ -2,8 +2,8 @@
 # Custom cold-start screen: use the Cloudflare Worker in /cloudflare (see cloudflare/HOW_TO.md).
 # The free Render spinner cannot be replaced from inside a sleeping web service alone.
 #
-# Docker runtime for a consistent Node 22 image. Pricing uses Cloud Slicer API
-# (local Bambu is not installed in this image).
+# Docker runtime is required so Bambu Studio (local G-code slicer) installs with system libs.
+# Pricing uses Cloud Slicer; G-code download uses the local slicer (Cloud Free never releases files).
 # If the existing service is still "Node", change Environment → Docker in the Render dashboard
 # (or recreate from this blueprint).
 
@@ -17,6 +17,10 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: PRINTX_SLICER_HOME
+        value: "/opt/printx-slicer"
+      - key: PRINTX_SLICER_BIN
+        value: "/opt/printx-slicer/printx-slice"
       - key: PRINTX_COOKIE_DOMAIN
         value: ".printx.pw"
       - key: PRINTX_ADMIN_PASSWORD

@@ -133,9 +133,30 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+/** One local slice at a time — concurrent Bambu CLI jobs OOM free-tier Render. */
+let sliceChain: Promise<unknown> = Promise.resolve()
+
+function enqueueLocalSlice<T>(work: () => Promise<T>): Promise<T> {
+  const runJob = sliceChain.then(work, work)
+  sliceChain = runJob.then(
+    () => undefined,
+    () => undefined,
+  )
+  return runJob
+}
+
 function run(bin: string, args: string[], timeoutMs: number): Promise<{ code: number; log: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        // Keep the GUI toolkit from grabbing a real display.
+        DISPLAY: process.env.DISPLAY || '',
+        // Reduce OpenGL/GPU probing noise in containers.
+        LIBGL_ALWAYS_SOFTWARE: '1',
+      },
+    })
     let log = ''
     const onData = (chunk: Buffer) => {
       log += chunk.toString('utf8')
@@ -218,91 +239,94 @@ export async function sliceStlLocally(
   localPath: string,
   printxPrinterId: string,
 ): Promise<LocalSliceResult> {
-  const profile = PRINTER_PROFILES[printxPrinterId]
-  if (!profile) {
-    throw new Error(`No local slicer profile for printer "${printxPrinterId}".`)
-  }
-  const bin = resolveLocalSlicerBin()
-  if (!bin) {
-    throw new Error(
-      'Local slicer not found. Install Bambu Studio, or set PRINTX_SLICER_BIN / PRINTX_SLICER_HOME.',
-    )
-  }
-  const root = resolveVendorProfileRoot(profile.vendor)
-  if (!root) {
-    throw new Error(
-      `Slicer profiles for ${profile.vendor} not found. Set PRINTX_SLICER_PROFILES to …/profiles.`,
-    )
-  }
-
-  const machine = path.join(root, profile.machine)
-  const processFile = path.join(root, profile.process)
-  const filament = path.join(root, profile.filament)
-  for (const f of [machine, processFile, filament, localPath]) {
-    if (!fs.existsSync(f)) throw new Error(`Slicer input missing: ${f}`)
-  }
-
-  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'printx-slice-'))
-  try {
-    const args = [
-      '--load-settings',
-      `${machine};${processFile}`,
-      '--load-filaments',
-      filament,
-      '--orient',
-      '1',
-      '--arrange',
-      '1',
-      '--slice',
-      '0',
-      '--no-check',
-      '--outputdir',
-      outDir,
-      localPath,
-    ]
-    console.warn('[local-slicer] slicing', printxPrinterId, path.basename(localPath))
-    const { code, log } = await run(bin, args, 10 * 60_000)
-    const gcodePath =
-      fs.readdirSync(outDir)
-        .filter((n) => n.endsWith('.gcode'))
-        .map((n) => path.join(outDir, n))
-        .sort()[0] || ''
-    if (!gcodePath || !fs.existsSync(gcodePath)) {
-      const resultPath = path.join(outDir, 'result.json')
-      const resultHint = fs.existsSync(resultPath) ? fs.readFileSync(resultPath, 'utf8').slice(0, 400) : ''
+  return enqueueLocalSlice(async () => {
+    const profile = PRINTER_PROFILES[printxPrinterId]
+    if (!profile) {
+      throw new Error(`No local slicer profile for printer "${printxPrinterId}".`)
+    }
+    const bin = resolveLocalSlicerBin()
+    if (!bin) {
       throw new Error(
-        `Local slicer failed (exit ${code}). ${resultHint || log.slice(-500) || 'No G-code produced.'}`,
+        'Local slicer not found. Deploy the Docker image with Bambu Studio, or set PRINTX_SLICER_BIN / PRINTX_SLICER_HOME.',
+      )
+    }
+    const root = resolveVendorProfileRoot(profile.vendor)
+    if (!root) {
+      throw new Error(
+        `Slicer profiles for ${profile.vendor} not found. Set PRINTX_SLICER_PROFILES to …/profiles.`,
       )
     }
 
-    const buffer = fs.readFileSync(gcodePath)
-    if (!buffer.length) throw new Error('Local slicer produced an empty G-code file.')
+    const machine = path.join(root, profile.machine)
+    const processFile = path.join(root, profile.process)
+    const filament = path.join(root, profile.filament)
+    for (const f of [machine, processFile, filament, localPath]) {
+      if (!fs.existsSync(f)) throw new Error(`Slicer input missing: ${f}`)
+    }
 
-    const head = buffer.subarray(0, 8000).toString('utf8')
-    let metrics = parseGramsHoursFromGcode(head)
-    const resultPath = path.join(outDir, 'result.json')
-    if ((metrics.grams <= 0 || metrics.hours <= 0) && fs.existsSync(resultPath)) {
-      const fromJson = parseGramsHoursFromResultJson(fs.readFileSync(resultPath, 'utf8'))
-      if (fromJson) {
-        if (metrics.grams <= 0) metrics = { ...metrics, grams: fromJson.grams }
-        if (metrics.hours <= 0) metrics = { ...metrics, hours: fromJson.hours }
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'printx-slice-'))
+    try {
+      const args = [
+        '--load-settings',
+        `${machine};${processFile}`,
+        '--load-filaments',
+        filament,
+        '--orient',
+        '1',
+        '--arrange',
+        '1',
+        '--slice',
+        '0',
+        '--no-check',
+        '--outputdir',
+        outDir,
+        localPath,
+      ]
+      console.warn('[local-slicer] slicing', printxPrinterId, path.basename(localPath))
+      const { code, log } = await run(bin, args, 10 * 60_000)
+      const gcodePath =
+        fs.readdirSync(outDir)
+          .filter((n) => n.endsWith('.gcode'))
+          .map((n) => path.join(outDir, n))
+          .sort()[0] || ''
+      if (!gcodePath || !fs.existsSync(gcodePath)) {
+        const resultPath = path.join(outDir, 'result.json')
+        const resultHint = fs.existsSync(resultPath)
+          ? fs.readFileSync(resultPath, 'utf8').slice(0, 400)
+          : ''
+        throw new Error(
+          `Local slicer failed (exit ${code}). ${resultHint || log.slice(-500) || 'No G-code produced.'}`,
+        )
+      }
+
+      const buffer = fs.readFileSync(gcodePath)
+      if (!buffer.length) throw new Error('Local slicer produced an empty G-code file.')
+
+      const head = buffer.subarray(0, 8000).toString('utf8')
+      let metrics = parseGramsHoursFromGcode(head)
+      const resultPath = path.join(outDir, 'result.json')
+      if ((metrics.grams <= 0 || metrics.hours <= 0) && fs.existsSync(resultPath)) {
+        const fromJson = parseGramsHoursFromResultJson(fs.readFileSync(resultPath, 'utf8'))
+        if (fromJson) {
+          if (metrics.grams <= 0) metrics = { ...metrics, grams: fromJson.grams }
+          if (metrics.hours <= 0) metrics = { ...metrics, hours: fromJson.hours }
+        }
+      }
+
+      await sleep(10)
+
+      return {
+        buffer,
+        filename: path.basename(gcodePath),
+        grams: metrics.grams,
+        hours: metrics.hours,
+      }
+    } finally {
+      try {
+        fs.rmSync(outDir, { recursive: true, force: true })
+      } catch {
+        /* ignore */
       }
     }
-
-    // Allow filesystem flush on slow hosts
-    await sleep(10)
-
-    return {
-      buffer,
-      filename: path.basename(gcodePath),
-      grams: metrics.grams,
-      hours: metrics.hours,
-    }
-  } finally {
-    try {
-      fs.rmSync(outDir, { recursive: true, force: true })
-    } catch {
-      /* ignore */
-    }
-  }
+  })
 }

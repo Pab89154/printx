@@ -21,6 +21,15 @@ if [[ -z "${PRINTX_SLICER_BIN:-}" ]]; then
   fi
 fi
 
+if [[ -z "${PRINTX_SLICER_HOME:-}" && -x /opt/printx-slicer/AppRun ]]; then
+  export PRINTX_SLICER_HOME=/opt/printx-slicer
+fi
+if [[ -z "${PRINTX_SLICER_BIN:-}" && -x /opt/printx-slicer/printx-slice ]]; then
+  export PRINTX_SLICER_BIN=/opt/printx-slicer/printx-slice
+elif [[ -z "${PRINTX_SLICER_BIN:-}" && -x /opt/printx-slicer/AppRun ]]; then
+  export PRINTX_SLICER_BIN=/opt/printx-slicer/AppRun
+fi
+
 if [[ -z "${PRINTX_SLICER_PROFILES:-}" && -f /etc/printx-slicer-profiles ]]; then
   export PRINTX_SLICER_PROFILES="$(cat /etc/printx-slicer-profiles)"
 fi
@@ -41,10 +50,10 @@ if [[ -z "${PRINTX_BAMBU_PROFILE_ROOT:-}" && -n "${PRINTX_SLICER_PROFILES:-}" ]]
   export PRINTX_BAMBU_PROFILE_ROOT="$PRINTX_SLICER_PROFILES/BBL"
 fi
 
-if [[ -n "${PRINTX_SLICER_BIN:-}${PRINTX_SLICER_HOME:-}" ]]; then
+if [[ -x "${PRINTX_SLICER_BIN:-}" || -x "${PRINTX_SLICER_HOME:-}/AppRun" ]]; then
   echo "[printx] slicer bin=${PRINTX_SLICER_BIN:-none} home=${PRINTX_SLICER_HOME:-none} profiles=${PRINTX_SLICER_PROFILES:-none}"
 else
-  echo "[printx] no local slicer (Cloud Slicer pricing only; Free-plan G-code needs Save gcode or a local binary)"
+  echo "[printx] WARNING: no local slicer — G-code download will fail on Cloud Slicer Free"
 fi
 
 # Cap V8 heap so GC runs before Render's ~512MB free-tier kill.

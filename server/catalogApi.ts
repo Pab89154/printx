@@ -717,7 +717,7 @@ async function ensureOrderItemGcode(
   const canLocal = localSlicerAvailable(printerId)
   if (!canCloud && !canLocal) {
     throw new Error(
-      'No slicer available for this printer. Add Cloud Slicer keys under Settings, or install Bambu Studio / set PRINTX_SLICER_BIN.',
+      'No slicer available for this printer. Deploy the Docker image with the local slicer (PRINTX_SLICER_BIN), or add Cloud Slicer keys and enable “Save gcode files” (Pro/Max).',
     )
   }
 
@@ -754,40 +754,34 @@ async function ensureOrderItemGcode(
   if (!resolved) throw new Error('Model file missing on server. Re-upload the design.')
 
   try {
-    // Free Cloud Slicer never returns G-code — prefer local slicer when available.
+    // Cloud Slicer Free never returns G-code — local Docker slicer is the production path.
     if (canLocal) {
-      try {
-        const local = await sliceStlLocally(resolved.path, printerId)
-        const existingGrams = Number(
-          printerId === 'pablo_p1s'
-            ? designRow.grams_pablo_p1s
-            : printerId === 'court_ender'
-              ? designRow.grams_court_ender
-              : designRow.grams_josh_kobra,
-        )
-        const existingHours = Number(
-          printerId === 'pablo_p1s'
-            ? designRow.hours_pablo_p1s
-            : printerId === 'court_ender'
-              ? designRow.hours_court_ender
-              : designRow.hours_josh_kobra,
-        )
-        return await persistCaptured({
-          buffer: local.buffer,
-          filename: local.filename || safeName,
-          quoteId: `local-${Date.now().toString(36)}`,
-          fileId: fileId || '',
-          grams: Number.isFinite(existingGrams) && existingGrams > 0 ? existingGrams : local.grams,
-          hours: Number.isFinite(existingHours) && existingHours > 0 ? existingHours : local.hours,
-        })
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        errors.push(`Local slicer: ${msg}`)
-        console.warn('[gcode] local slicer failed:', msg)
-        if (!canCloud) throw err
-      }
+      const local = await sliceStlLocally(resolved.path, printerId)
+      const existingGrams = Number(
+        printerId === 'pablo_p1s'
+          ? designRow.grams_pablo_p1s
+          : printerId === 'court_ender'
+            ? designRow.grams_court_ender
+            : designRow.grams_josh_kobra,
+      )
+      const existingHours = Number(
+        printerId === 'pablo_p1s'
+          ? designRow.hours_pablo_p1s
+          : printerId === 'court_ender'
+            ? designRow.hours_court_ender
+            : designRow.hours_josh_kobra,
+      )
+      return await persistCaptured({
+        buffer: local.buffer,
+        filename: local.filename || safeName,
+        quoteId: `local-${Date.now().toString(36)}`,
+        fileId: fileId || '',
+        grams: Number.isFinite(existingGrams) && existingGrams > 0 ? existingGrams : local.grams,
+        hours: Number.isFinite(existingHours) && existingHours > 0 ? existingHours : local.hours,
+      })
     }
 
+    // Fallback only when Save-gcode is enabled on Cloud Slicer (Pro/Max).
     if (fileId && canCloud) {
       try {
         return await persistCaptured(await requoteFileAndDownloadGcode(creds, fileId))
@@ -795,18 +789,25 @@ async function ensureOrderItemGcode(
         const msg = err instanceof Error ? err.message : String(err)
         errors.push(`Re-quote: ${msg}`)
         console.warn('[gcode] requote existing file failed, will re-upload:', msg)
+        if (!isGcodeOutputMissing(err)) {
+          throw new Error(errors.filter(Boolean).join(' · '))
+        }
       }
     }
 
     if (canCloud) {
       try {
         return await persistCaptured(
-          await quoteAndDownloadGcode(creds, resolved.path, { printxPrinterId: printerId }),
+          await quoteAndDownloadGcode(creds, resolved.path, {
+            printxPrinterId: printerId,
+          }),
         )
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         errors.push(`Re-upload: ${msg}`)
-        if (isGcodeOutputMissing(err)) throw new Error(errors.filter(Boolean).join(' · ') || GCODE_SAVE_HINT)
+        if (isGcodeOutputMissing(err)) {
+          throw new Error(errors.filter(Boolean).join(' · ') || GCODE_SAVE_HINT)
+        }
         throw new Error(errors.filter(Boolean).join(' · ') || msg)
       }
     }

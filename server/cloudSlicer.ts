@@ -152,7 +152,7 @@ export function quoteHasNoGcodeOutput(quote: Record<string, unknown> | null | un
 }
 
 export const GCODE_SAVE_HINT =
-  'Could not produce G-code. Cloud Slicer Free never releases files; install Bambu Studio (or set PRINTX_SLICER_BIN) for local slicing, then try Download again.'
+  'Could not produce G-code. Cloud Slicer Free discards files after quoting. PrintX needs the Docker local slicer (PRINTX_SLICER_BIN) on the server, or turn on “Save gcode files” in Cloud Slicer Settings (Pro/Max), then try Download again.'
 
 function extractGramsHours(quote: Record<string, unknown>): { grams: number; hours: number } {
   const pricing = (quote.pricing as Record<string, unknown> | undefined) ?? {}
@@ -485,10 +485,12 @@ export async function quoteAndDownloadGcode(
   opts?: { printxPrinterId?: string },
 ): Promise<{ buffer: Buffer; filename: string; quoteId: string; fileId: string; grams: number; hours: number }> {
   const printxPrinterId = opts?.printxPrinterId?.trim() || ''
+  // Prefer local for G-code; Free Cloud Slicer never returns files.
   const quoted = printxPrinterId
     ? await quoteStlForPrintxPrinter(printxPrinterId, localPath, creds, {
         prefer: 'local',
         captureGcode: true,
+        allowLocalFallback: true,
       })
     : await quoteStlForPrinter(creds, localPath, { captureGcode: true })
   if (quoted.gcodeBuffer && quoted.gcodeBuffer.length) {
