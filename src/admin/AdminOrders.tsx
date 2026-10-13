@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react'
+import { publicOrderStatusLabel, publicPrintStatusLabel } from '../../shared/orderTracking'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { api } from '../lib/api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import type { OrderDto, PrinterDto } from '../types/catalog'
+
+function isPrinted(status: string): boolean {
+  return status === 'printed' || status === 'done'
+}
 
 function money(n: number | null | undefined): string {
   return (Number(n) || 0).toFixed(2)
@@ -251,12 +256,18 @@ export function AdminOrders() {
                 {order.customerName || 'Customer'} · {order.customerEmail}
               </p>
               <p className="text-xs text-muted">
-                {order.status} · ${money(order.totalUsd)}
+                {publicOrderStatusLabel(order.status)} · ${money(order.totalUsd)}
                 {order.subtotalUsd > 0 && order.shippingUsd > 0
                   ? ` (items $${money(order.subtotalUsd)} + ship $${money(order.shippingUsd)})`
                   : ''}{' '}
                 · paid {order.paidAt ? new Date(order.paidAt).toLocaleString() : '—'}
               </p>
+              {order.trackCode ? (
+                <p className="mt-1 font-mono text-xs font-semibold text-navy">
+                  Track code {order.trackCode}
+                  {order.trackCodeShownAt ? ' · shown to customer' : ' · not shown yet'}
+                </p>
+              ) : null}
               {(order.shippingName ||
                 order.shippingLine1 ||
                 order.shippingMethod ||
@@ -367,12 +378,12 @@ export function AdminOrders() {
                       {money(item.worstCostUnitUsd)}
                     </p>
                     <p className="text-xs text-muted">
-                      Status: {item.printStatus}
+                      Status: {publicPrintStatusLabel(item.printStatus)}
                       {item.assignedPrinterId
                         ? ` · printer ${printers.find((p) => p.id === item.assignedPrinterId)?.ownerLabel ?? item.assignedPrinterId}`
                         : ''}
                     </p>
-                    {item.printStatus === 'done' ? (
+                    {isPrinted(item.printStatus) ? (
                       <p className="mt-1 text-xs text-electric">
                         Pay printer ${money(item.reimburseUsd)}
                         {item.profitUsd != null
@@ -421,7 +432,7 @@ export function AdminOrders() {
 
                   {order.status !== 'refunded' &&
                     !order.shippedAt &&
-                    (item.printStatus === 'claimed' || item.printStatus === 'done') && (
+                    (item.printStatus === 'claimed' || isPrinted(item.printStatus)) && (
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
@@ -465,7 +476,7 @@ export function AdminOrders() {
                                 )
                             }
                           >
-                            Mark printed / settle
+                            Mark printed
                           </button>
                         )}
                       </div>

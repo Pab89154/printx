@@ -33,7 +33,7 @@ export function AdminDashboard() {
   }, [can])
 
   useEffect(() => {
-    if (!can('orders')) return
+    if (!can('money')) return
     api.catalog.money
       .get(currentUtcMonth())
       .then(setMoney)
@@ -134,7 +134,7 @@ export function AdminDashboard() {
       <h1 className="text-2xl font-bold text-navy">Welcome to PrintX</h1>
       <p className="mt-1 text-muted">Here&apos;s what&apos;s happening with your business.</p>
 
-      {can('orders') && (
+      {can('money') && (
         <Link
           to={adminPath('money')}
           className="mt-8 block rounded-3xl border-2 border-electric/25 bg-gradient-to-br from-navy to-[#132038] p-6 text-white shadow-lg transition hover:border-electric/50 hover:shadow-xl sm:p-8"

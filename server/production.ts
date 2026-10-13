@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { usingPostgres } from './dbClient.ts'
 import { ensureDbReady } from './db.ts'
-import { handleApi, startMailScheduleFlusher } from './router.ts'
+import { handleApi, startArrivedOrderFlusher, startMailScheduleFlusher } from './router.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -51,6 +51,21 @@ const MIME: Record<string, string> = {
   '.woff2': 'font/woff2',
 }
 
+function streamFile(filePath: string, res: ServerResponse, contentType: string) {
+  const stream = fs.createReadStream(filePath)
+  res.statusCode = 200
+  res.setHeader('Content-Type', contentType)
+  stream.on('error', () => {
+    if (!res.headersSent) {
+      res.statusCode = 500
+      res.end('Error')
+    } else {
+      res.destroy()
+    }
+  })
+  stream.pipe(res)
+}
+
 async function serveStatic(urlPath: string, res: ServerResponse) {
   const safePath = urlPath.split('?')[0] ?? '/'
   let filePath = path.join(DIST, safePath === '/' ? 'index.html' : safePath)
@@ -68,16 +83,15 @@ async function serveStatic(urlPath: string, res: ServerResponse) {
       stat = await fsPromises.stat(filePath)
     }
     const ext = path.extname(filePath)
-    const body = await fsPromises.readFile(filePath)
-    res.statusCode = 200
-    res.setHeader('Content-Type', MIME[ext] ?? 'application/octet-stream')
-    res.end(body)
+    res.setHeader('Content-Length', String(stat.size))
+    // Avoid buffering whole JS/CSS bundles in RAM on the free Render instance.
+    streamFile(filePath, res, MIME[ext] ?? 'application/octet-stream')
   } catch {
     try {
-      const fallback = await fsPromises.readFile(path.join(DIST, 'index.html'))
-      res.statusCode = 200
-      res.setHeader('Content-Type', 'text/html; charset=utf-8')
-      res.end(fallback)
+      const indexPath = path.join(DIST, 'index.html')
+      const stat = await fsPromises.stat(indexPath)
+      res.setHeader('Content-Length', String(stat.size))
+      streamFile(indexPath, res, 'text/html; charset=utf-8')
     } catch {
       res.statusCode = 404
       res.end('Not found')
@@ -147,6 +161,7 @@ async function main() {
   logObjectStorageStatus()
   await ensureModelBucket()
   startMailScheduleFlusher()
+  startArrivedOrderFlusher()
   // In-memory quote queue dies on deploy — pick up designs left mid-quote.
   void import('./catalogApi.ts').then(({ resumeInterruptedDesignQuotes }) =>
     resumeInterruptedDesignQuotes(),

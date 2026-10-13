@@ -312,6 +312,24 @@ export function startMailScheduleFlusher() {
   }
 }
 
+const ARRIVED_ORDER_FLUSH_MS = 15 * 60 * 1000
+let arrivedFlushTimer: ReturnType<typeof setInterval> | null = null
+
+/** Periodically advance shipped → arrived → fulfilled by shipping-method business days. */
+export function startArrivedOrderFlusher() {
+  if (arrivedFlushTimer) return
+  const tick = () => {
+    void import('./catalogApi.ts')
+      .then(({ resumeArrivedOrderChecks }) => resumeArrivedOrderChecks())
+      .catch((err) => console.error('[printx] arrived order flush failed', err))
+  }
+  tick()
+  arrivedFlushTimer = setInterval(tick, ARRIVED_ORDER_FLUSH_MS)
+  if (typeof arrivedFlushTimer === 'object' && 'unref' in arrivedFlushTimer) {
+    arrivedFlushTimer.unref()
+  }
+}
+
 async function purgeExpiredMailTrash(db: Awaited<ReturnType<typeof getDb>>) {
   const cutoff = mailTrashCutoffIso()
   const expiredRecipients = await db.all<{ id: string; message_id: string }>(

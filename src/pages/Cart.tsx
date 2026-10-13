@@ -10,11 +10,10 @@ import { Footer } from '../components/Footer'
 
 export function Cart() {
   const { lines, setQty, remove, subtotal, clear } = useCart()
-  const { customer, loading } = useCustomerAuth()
+  const { loading } = useCustomerAuth()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [promoCode, setPromoCode] = useState('')
-  const signedIn = CUSTOMER_ACCOUNTS_ENABLED && Boolean(customer)
 
   async function checkout() {
     setBusy(true)
@@ -123,7 +122,7 @@ export function Cart() {
               disabled={busy || (CUSTOMER_ACCOUNTS_ENABLED && loading)}
               onClick={() => void checkout()}
             >
-              {busy ? 'Redirecting…' : signedIn ? 'Checkout' : 'Checkout as guest'}
+              {busy ? 'Redirecting…' : 'Checkout'}
             </button>
           </>
         )}

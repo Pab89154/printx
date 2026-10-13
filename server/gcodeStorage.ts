@@ -51,3 +51,18 @@ export async function loadStoredGcode(
     resolved.cleanup?.()
   }
 }
+
+/** Open stored G-code for streaming (avoids holding multi-MB buffers in RAM). */
+export async function openStoredGcode(
+  fileName: string,
+): Promise<{ path: string; filename: string; cleanup?: () => void } | null> {
+  const name = fileName.trim()
+  if (!name) return null
+  const resolved = await resolveStoredFile(name)
+  if (!resolved) return null
+  return {
+    path: resolved.path,
+    filename: name.endsWith('.gcode') ? name : `${name}.gcode`,
+    cleanup: resolved.cleanup,
+  }
+}

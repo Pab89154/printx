@@ -57,8 +57,8 @@ export function Header() {
               <User size={20} strokeWidth={2} aria-hidden />
             </Link>
           ) : (
-            <Button href="/shop" size="sm" className="hidden sm:inline-flex">
-              Shop
+            <Button href="/track" size="sm" className="hidden sm:inline-flex">
+              Track orders
             </Button>
           )}
           <button
@@ -110,19 +110,19 @@ export function Header() {
             ) : (
               <>
                 <Link
-                  to="/shop"
+                  to="/track"
                   className="rounded-xl px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-electric"
                   onClick={() => setMenuOpen(false)}
                 >
-                  Shop
+                  Track orders
                 </Link>
                 {hasStands ? (
                   <Button href="#stands" size="md" className="mt-2 w-full">
                     Find a Stand
                   </Button>
                 ) : (
-                  <Button href="/shop" size="md" className="mt-2 w-full">
-                    Shop
+                  <Button href="/track" size="md" className="mt-2 w-full">
+                    Track orders
                   </Button>
                 )}
               </>

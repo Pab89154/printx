@@ -112,7 +112,7 @@ export type OrderItemDto = {
   unitPriceUsd: number
   worstCostUnitUsd: number
   lineTotalUsd: number
-  printStatus: 'unclaimed' | 'claimed' | 'printing' | 'done'
+  printStatus: 'unclaimed' | 'claimed' | 'printing' | 'printed' | 'done'
   assignedPrinterId: string | null
   assignedAdminUserId: string | null
   claimedAt: string | null
@@ -145,6 +145,8 @@ export type OrderDto = {
   trackingCarrier?: string
   trackingUrl?: string
   shippedAt?: string | null
+  trackCode?: string
+  trackCodeShownAt?: string | null
   userId?: string | null
   pendingRefundRequest?: {
     id: string

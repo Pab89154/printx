@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Connect, Plugin } from 'vite'
 import { closeDb, ensureDbReady } from './db.ts'
 import { ensureModelBucket, logObjectStorageStatus } from './objectStorage.ts'
-import { handleApi, startMailScheduleFlusher } from './router.ts'
+import { handleApi, startArrivedOrderFlusher, startMailScheduleFlusher } from './router.ts'
 
 const apiMiddleware: Connect.NextHandleFunction = async (req, res, next) => {
   const url = req.url?.split('?')[0] ?? ''
@@ -32,6 +32,7 @@ async function attachApi(server: {
   logObjectStorageStatus()
   await ensureModelBucket()
   startMailScheduleFlusher()
+  startArrivedOrderFlusher()
   server.middlewares.use(apiMiddleware)
   server.httpServer?.once('close', () => {
     void closeDb()

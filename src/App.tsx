@@ -11,6 +11,7 @@ import { Shop } from './pages/Shop'
 import { ShopProduct } from './pages/ShopProduct'
 import { Cart } from './pages/Cart'
 import { OrderSuccess } from './pages/OrderSuccess'
+import { TrackOrder } from './pages/TrackOrder'
 import { Account } from './pages/Account'
 import { AccountSignIn } from './pages/AccountSignIn'
 import { AccountRegister } from './pages/AccountRegister'
@@ -56,6 +57,7 @@ function PortalRoutes() {
         <Route path="shop/:skuBase" element={<ShopProduct />} />
         <Route path="cart" element={<Cart />} />
         <Route path="order/success" element={<OrderSuccess />} />
+        <Route path="track" element={<TrackOrder />} />
         <Route path="sandbox" element={<AdminSandbox />} />
         <Route element={<AdminLayout />}>
           <Route path="dashboard" element={<AdminDashboard />} />
@@ -86,6 +88,7 @@ function PublicRoutes() {
       <Route path="/shop/:skuBase" element={<ShopProduct />} />
       <Route path="/cart" element={<Cart />} />
       <Route path="/order/success" element={<OrderSuccess />} />
+      <Route path="/track" element={<TrackOrder />} />
       {CUSTOMER_ACCOUNTS_ENABLED ? (
         <>
           <Route path="/account" element={<Account />} />

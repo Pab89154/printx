@@ -19,6 +19,13 @@ import {
 } from './auth.ts'
 import { upsTrackUrl } from './shippingUrls.ts'
 import { notifyAdminsWithPermission } from './pushNotify.ts'
+import { advanceArrivedOrders, ensureOrderTrackCode } from './trackCodes.ts'
+import {
+  arrivedEtaIso,
+  normalizeTrackCode,
+  publicOrderStatusLabel,
+  publicPrintStatusLabel,
+} from '../shared/orderTracking.ts'
 import { getDb, getUploadsDir } from './db.ts'
 import { invalidateBootstrapCache } from './bootstrapCache.ts'
 import {
@@ -77,7 +84,7 @@ import {
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
 import { localSlicerAvailable, sliceStlLocally } from './localSlicer.ts'
-import { loadStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
+import { loadStoredGcode, openStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
 import {
   objectStorageConfigured,
   objectStorageRequired,
@@ -557,6 +564,7 @@ async function saveDesignPrinterQuote(
 type GcodePrepJob = {
   status: 'running' | 'ready' | 'error'
   error?: string
+  /** Only kept briefly when persist failed — prefer disk/storage. */
   buffer?: Buffer
   filename?: string
   updatedAt: number
@@ -567,6 +575,20 @@ const orderGcodeJobs = new Map<string, GcodePrepJob>()
 
 /** Jobs stuck "running" longer than this are treated as failed so the UI can recover. */
 const GCODE_JOB_STALE_MS = 15 * 60_000
+/** Drop ready/error job entries (and any leftover buffers) quickly on free-tier RAM. */
+const GCODE_JOB_KEEP_MS = 2 * 60_000
+
+function pruneOrderGcodeJobs() {
+  const now = Date.now()
+  for (const [id, job] of orderGcodeJobs) {
+    const age = now - job.updatedAt
+    if (job.status === 'running') {
+      if (age > GCODE_JOB_STALE_MS) orderGcodeJobs.delete(id)
+      continue
+    }
+    if (age > GCODE_JOB_KEEP_MS) orderGcodeJobs.delete(id)
+  }
+}
 
 async function orderItemIsShipped(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -582,10 +604,10 @@ async function orderItemIsShipped(
   return Boolean(row?.shipped_at)
 }
 
-async function peekStoredOrderItemGcode(
+async function orderItemStoredGcodeName(
   db: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
-): Promise<{ buffer: Buffer; filename: string } | null> {
+): Promise<{ storedName: string; downloadName: string } | null> {
   const item = await db.get<Record<string, unknown>>('SELECT * FROM order_items WHERE id = ?', itemId)
   if (!item) return null
   const printerId = String(item.assigned_printer_id || '').trim()
@@ -597,24 +619,68 @@ async function peekStoredOrderItemGcode(
   const storedGcode = gcodePaths[printerId] || ''
   if (!storedGcode) return null
   const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
-  const safeName = `printx-${sku}-${printerId}.gcode`
-  const local = await loadStoredGcode(storedGcode)
-  if (!local) return null
-  return { buffer: local.buffer, filename: safeName }
+  const downloadName = `printx-${sku}-${printerId}.gcode`
+  return { storedName: storedGcode, downloadName }
 }
 
-/** Prefer disk, then in-memory job buffer (persist may have failed). */
-async function resolveOrderItemGcode(
+async function peekStoredOrderItemGcode(
   db: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
 ): Promise<{ buffer: Buffer; filename: string } | null> {
-  const stored = await peekStoredOrderItemGcode(db, itemId)
-  if (stored) return stored
+  const meta = await orderItemStoredGcodeName(db, itemId)
+  if (!meta) return null
+  const local = await loadStoredGcode(meta.storedName)
+  if (!local) return null
+  return { buffer: local.buffer, filename: meta.downloadName }
+}
+
+async function openOrderItemGcode(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<
+  | { kind: 'stream'; path: string; filename: string; cleanup?: () => void }
+  | { kind: 'buffer'; buffer: Buffer; filename: string }
+  | null
+> {
+  pruneOrderGcodeJobs()
+  const meta = await orderItemStoredGcodeName(db, itemId)
+  if (meta) {
+    const opened = await openStoredGcode(meta.storedName)
+    if (opened) {
+      return {
+        kind: 'stream',
+        path: opened.path,
+        filename: meta.downloadName,
+        cleanup: opened.cleanup,
+      }
+    }
+  }
   const job = orderGcodeJobs.get(itemId)
   if (job?.status === 'ready' && job.buffer?.length) {
-    return { buffer: job.buffer, filename: job.filename || `printx-${itemId.slice(0, 8)}.gcode` }
+    const buffer = job.buffer
+    const filename = job.filename || `printx-${itemId.slice(0, 8)}.gcode`
+    // Drop RAM copy after one use.
+    orderGcodeJobs.set(itemId, { status: 'ready', filename, updatedAt: Date.now() })
+    return { kind: 'buffer', buffer, filename }
   }
   return null
+}
+
+/** True when G-code is available without loading the file into RAM. */
+async function orderItemGcodeReady(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<boolean> {
+  pruneOrderGcodeJobs()
+  const meta = await orderItemStoredGcodeName(db, itemId)
+  if (meta) {
+    const uploadsDir = await getUploadsDir()
+    if (fs.existsSync(path.join(uploadsDir, meta.storedName))) return true
+    // Path recorded — download streams from object storage on demand.
+    if (objectStorageConfigured()) return true
+  }
+  const job = orderGcodeJobs.get(itemId)
+  return Boolean(job?.status === 'ready' && (job.buffer?.length || job.filename))
 }
 
 /**
@@ -752,13 +818,14 @@ async function ensureOrderItemGcode(
 }
 
 function startOrderGcodePrep(itemId: string) {
+  pruneOrderGcodeJobs()
   const current = orderGcodeJobs.get(itemId)
   if (current?.status === 'running') {
     // Stale in-memory job (server restart mid-slice, hung Cloud Slicer, etc.).
     if (Date.now() - current.updatedAt < GCODE_JOB_STALE_MS) return
     console.warn('[gcode] restarting stale prepare job', itemId)
   }
-  if (current?.status === 'ready' && current.buffer?.length) return
+  if (current?.status === 'ready') return
   orderGcodeJobs.set(itemId, { status: 'running', updatedAt: Date.now() })
   const heartbeat = setInterval(() => {
     const job = orderGcodeJobs.get(itemId)
@@ -770,10 +837,12 @@ function startOrderGcodePrep(itemId: string) {
     try {
       const db = await getDb()
       const file = await ensureOrderItemGcode(db, itemId)
+      // Prefer disk/object storage — do not pin multi-MB G-code in the process heap.
+      const storedMeta = await orderItemStoredGcodeName(db, itemId)
       orderGcodeJobs.set(itemId, {
         status: 'ready',
-        buffer: file.buffer,
         filename: file.filename,
+        buffer: storedMeta ? undefined : file.buffer,
         updatedAt: Date.now(),
       })
     } catch (err) {
@@ -782,6 +851,7 @@ function startOrderGcodePrep(itemId: string) {
       orderGcodeJobs.set(itemId, { status: 'error', error: message, updatedAt: Date.now() })
     } finally {
       clearInterval(heartbeat)
+      pruneOrderGcodeJobs()
     }
   })()
 }
@@ -892,7 +962,7 @@ export async function resumeInterruptedDesignQuotes(): Promise<void> {
            )
          )
        ORDER BY updated_at DESC
-       LIMIT 20`,
+       LIMIT 3`,
     )
     for (const row of rows) {
       const id = String(row.id || '')
@@ -1207,6 +1277,69 @@ async function settleOrderItem(
   return { ok: true as const }
 }
 
+/** Light IP throttle for public track lookups (in-memory). */
+const trackThrottle = new Map<string, { count: number; resetAt: number }>()
+
+function trackClientIp(req: IncomingMessage): string {
+  const xf = String(req.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    ?.trim()
+  return xf || req.socket.remoteAddress || 'unknown'
+}
+
+function allowTrackLookup(ip: string): boolean {
+  const now = Date.now()
+  const windowMs = 60_000
+  const max = 30
+  if (trackThrottle.size > 500) {
+    for (const [k, v] of trackThrottle) {
+      if (now >= v.resetAt) trackThrottle.delete(k)
+    }
+    if (trackThrottle.size > 500) trackThrottle.clear()
+  }
+  const cur = trackThrottle.get(ip)
+  if (!cur || now >= cur.resetAt) {
+    trackThrottle.set(ip, { count: 1, resetAt: now + windowMs })
+    return true
+  }
+  if (cur.count >= max) return false
+  cur.count += 1
+  return true
+}
+
+const SHOP_ORDER_LIST_STATUSES = [
+  'paid',
+  'in_production',
+  'printed',
+  'shipped',
+  'arrived',
+  'ready',
+  'fulfilled',
+  'refunded',
+] as const
+
+const SHOP_ORDER_MONEY_STATUSES = [
+  'paid',
+  'in_production',
+  'printed',
+  'shipped',
+  'arrived',
+  'ready',
+  'fulfilled',
+] as const
+
+const SHOP_ORDER_MONEY_STATUS_SQL = SHOP_ORDER_MONEY_STATUSES.map((s) => `'${s}'`).join(', ')
+
+export async function resumeArrivedOrderChecks(): Promise<void> {
+  try {
+    const db = await getDb()
+    const n = await advanceArrivedOrders(db)
+    if (n > 0) console.log(`[printx] Advanced ${n} shipped order(s) to arrived/fulfilled`)
+  } catch (err) {
+    console.warn('[printx] Arrived-order advance failed', err instanceof Error ? err.message : err)
+  }
+}
+
 export async function handleCatalogApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1215,6 +1348,125 @@ export async function handleCatalogApi(
 ): Promise<boolean> {
   const db = await getDb()
   await seedCatalogDefaults(db)
+
+  // ----- Public order success (one-time track code reveal) -----
+  if (urlPath === '/api/public/order-success' && method === 'GET') {
+    const u = new URL(req.url || '', 'http://localhost')
+    const sessionId = String(u.searchParams.get('session_id') || '').trim()
+    if (!sessionId || sessionId.length > 200) {
+      send(res, 400, { error: 'session_id is required.' })
+      return true
+    }
+    let row = await db.get<Record<string, unknown>>(
+      `SELECT * FROM orders WHERE stripe_session_id = ? LIMIT 1`,
+      sessionId,
+    )
+    if (!row) {
+      send(res, 404, { error: 'Order not found for this checkout session.' })
+      return true
+    }
+    const status = String(row.status || '')
+    if (status === 'pending_payment') {
+      send(res, 404, { error: 'Payment not confirmed yet. Refresh in a moment.' })
+      return true
+    }
+    try {
+      await ensureOrderTrackCode(db, String(row.id))
+    } catch (err) {
+      console.warn('[printx] order-success track code', err instanceof Error ? err.message : err)
+    }
+    await advanceArrivedOrders(db)
+    row = (await db.get<Record<string, unknown>>('SELECT * FROM orders WHERE id = ?', row.id))!
+    const order = rowToOrder(row)
+    const items = await db.all<Record<string, unknown>>(
+      `SELECT oi.*, d.name as design_name FROM order_items oi
+       JOIN designs d ON d.id = oi.design_id WHERE oi.order_id = ? ORDER BY oi.sku ASC`,
+      order.id,
+    )
+    const alreadyShown = Boolean(order.trackCodeShownAt)
+    let trackCode: string | null = null
+    if (!alreadyShown && /^\d{6}$/.test(order.trackCode)) {
+      trackCode = order.trackCode
+      const now = new Date().toISOString()
+      await db.run(
+        `UPDATE orders SET track_code_shown_at = ?, updated_at = ? WHERE id = ? AND track_code_shown_at IS NULL`,
+        now,
+        now,
+        order.id,
+      )
+    }
+    send(res, 200, {
+      orderId: order.id,
+      status: order.status,
+      statusLabel: publicOrderStatusLabel(order.status),
+      totalUsd: order.totalUsd,
+      shippingMethod: order.shippingMethod,
+      trackCode,
+      trackCodeAlreadyShown: alreadyShown || trackCode == null,
+      items: items.map((it) => {
+        const mapped = rowToOrderItem(it)
+        return {
+          designName: String(it.design_name || mapped.sku),
+          colorName: mapped.colorName,
+          qty: mapped.qty,
+          printStatus: mapped.printStatus,
+          printStatusLabel: publicPrintStatusLabel(mapped.printStatus),
+        }
+      }),
+    })
+    return true
+  }
+
+  // ----- Public track-by-code -----
+  if (urlPath === '/api/public/track' && method === 'POST') {
+    if (!allowTrackLookup(trackClientIp(req))) {
+      send(res, 429, { error: 'Too many attempts. Try again in a minute.' })
+      return true
+    }
+    const body = await readJson(req)
+    const code = normalizeTrackCode(body.code)
+    if (!code) {
+      send(res, 400, { error: 'Enter a valid 6-digit track code.' })
+      return true
+    }
+    await advanceArrivedOrders(db)
+    const row = await db.get<Record<string, unknown>>(
+      `SELECT * FROM orders WHERE track_code = ? LIMIT 1`,
+      code,
+    )
+    if (!row) {
+      send(res, 404, { error: 'No order found for that code.' })
+      return true
+    }
+    const order = rowToOrder(row)
+    const items = await db.all<Record<string, unknown>>(
+      `SELECT oi.*, d.name as design_name FROM order_items oi
+       JOIN designs d ON d.id = oi.design_id WHERE oi.order_id = ? ORDER BY oi.sku ASC`,
+      order.id,
+    )
+    const eta = arrivedEtaIso(order.shippedAt, order.shippingMethod)
+    send(res, 200, {
+      status: order.status,
+      statusLabel: publicOrderStatusLabel(order.status),
+      shippingMethod: order.shippingMethod,
+      trackingNumber: order.trackingNumber,
+      trackingCarrier: order.trackingCarrier,
+      trackingUrl: order.trackingUrl,
+      shippedAt: order.shippedAt,
+      arrivedEta: eta,
+      items: items.map((it) => {
+        const mapped = rowToOrderItem(it)
+        return {
+          designName: String(it.design_name || mapped.sku),
+          colorName: mapped.colorName,
+          qty: mapped.qty,
+          printStatus: mapped.printStatus,
+          printStatusLabel: publicPrintStatusLabel(mapped.printStatus),
+        }
+      }),
+    })
+    return true
+  }
 
   // ----- Public catalog -----
   if (urlPath === '/api/public/catalog' && method === 'GET') {
@@ -1809,6 +2061,15 @@ export async function handleCatalogApi(
             customerUserId,
             orderId,
           )
+          try {
+            await ensureOrderTrackCode(db, String(orderId))
+          } catch (err) {
+            console.warn(
+              '[printx] Could not assign track code',
+              orderId,
+              err instanceof Error ? err.message : err,
+            )
+          }
           void notifyAdminsWithPermission(db, 'orders', {
             title: 'New shop order',
             body: `${stripeName || stripeEmail || 'Customer'} placed a paid order`,
@@ -2567,8 +2828,10 @@ export async function handleCatalogApi(
 
   async function loadAdminOrdersPayload(opts?: { backfillMissingShipping?: boolean }) {
     await repairDiscountCappedPayouts(db)
+    await advanceArrivedOrders(db)
+    const statusList = SHOP_ORDER_LIST_STATUSES.map((s) => `'${s}'`).join(', ')
     const rows = await db.all<Record<string, unknown>>(
-      `SELECT * FROM orders WHERE status IN ('paid', 'in_production', 'ready', 'fulfilled', 'refunded')
+      `SELECT * FROM orders WHERE status IN (${statusList})
        ORDER BY COALESCE(paid_at, created_at) DESC LIMIT 200`,
     )
     const orders = []
@@ -2694,7 +2957,11 @@ export async function handleCatalogApi(
       send(res, 200, result)
       return true
     }
-    if (!['paid', 'in_production', 'ready', 'fulfilled'].includes(status)) {
+    if (
+      !['paid', 'in_production', 'printed', 'shipped', 'arrived', 'ready', 'fulfilled'].includes(
+        status,
+      )
+    ) {
       send(res, 400, { error: 'Only paid orders can be refunded.' })
       return true
     }
@@ -2839,8 +3106,10 @@ export async function handleCatalogApi(
       send(res, 404, { error: 'Order not found' })
       return true
     }
-    if (!['paid', 'in_production', 'ready', 'fulfilled'].includes(order.status)) {
-      send(res, 400, { error: 'Only paid orders can be marked shipped.' })
+    if (
+      !['paid', 'in_production', 'printed', 'ready', 'shipped'].includes(order.status)
+    ) {
+      send(res, 400, { error: 'Only paid / printed orders can be marked shipped.' })
       return true
     }
     const now = new Date().toISOString()
@@ -2850,7 +3119,7 @@ export async function handleCatalogApi(
          tracking_carrier = ?,
          tracking_url = ?,
          shipped_at = ?,
-         status = 'fulfilled',
+         status = 'shipped',
          updated_at = ?
        WHERE id = ?`,
       trackingNumber,
@@ -3384,8 +3653,7 @@ export async function handleCatalogApi(
       })
       return true
     }
-    const ready = await resolveOrderItemGcode(db, itemId)
-    if (ready) {
+    if (await orderItemGcodeReady(db, itemId)) {
       send(res, 200, { status: 'ready' as const })
       return true
     }
@@ -3407,7 +3675,7 @@ export async function handleCatalogApi(
       return true
     }
     if (job?.status === 'ready') {
-      // Ready without buffer shouldn't happen; treat as idle so client can retry prepare.
+      // Ready without buffer/storage — treat as idle so client can retry prepare.
       send(res, 200, { status: 'idle' as const })
       return true
     }
@@ -3433,8 +3701,7 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'G-code download is disabled after the order is marked shipped.' })
       return true
     }
-    const ready = await resolveOrderItemGcode(db, itemId)
-    if (ready) {
+    if (await orderItemGcodeReady(db, itemId)) {
       send(res, 200, { status: 'ready' as const })
       return true
     }
@@ -3469,7 +3736,7 @@ export async function handleCatalogApi(
     }
     try {
       // Fast path only — slicing runs via /gcode/prepare so proxies do not time out.
-      const file = await resolveOrderItemGcode(db, itemId)
+      const file = await openOrderItemGcode(db, itemId)
       if (!file) {
         const job = orderGcodeJobs.get(itemId)
         if (job?.status === 'error') {
@@ -3489,7 +3756,22 @@ export async function handleCatalogApi(
         `attachment; filename="${file.filename.replace(/"/g, '')}"`,
       )
       res.setHeader('Cache-Control', 'private, no-store')
-      res.end(file.buffer)
+      if (file.kind === 'stream') {
+        const stream = fs.createReadStream(file.path)
+        stream.on('close', () => file.cleanup?.())
+        stream.on('error', () => {
+          file.cleanup?.()
+          if (!res.headersSent) {
+            res.statusCode = 500
+            res.end('Error')
+          } else {
+            res.destroy()
+          }
+        })
+        stream.pipe(res)
+      } else {
+        res.end(file.buffer)
+      }
     } catch (err) {
       send(res, 400, { error: err instanceof Error ? err.message : 'G-code download failed' })
     }
@@ -3585,7 +3867,7 @@ export async function handleCatalogApi(
 
   if (urlPath === '/api/admin/money' && method === 'GET') {
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin || !adminCan(admin, 'money')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
@@ -3616,7 +3898,7 @@ export async function handleCatalogApi(
       const shopParams: unknown[] = []
       let shopSql = `SELECT COALESCE(SUM(${shopItemEarningsSql}), 0) as total FROM orders
         WHERE paid_at IS NOT NULL
-          AND status IN ('paid', 'in_production', 'ready', 'fulfilled')`
+          AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`
       if (start) {
         shopSql += ` AND paid_at >= ?`
         shopParams.push(start)
@@ -3675,7 +3957,7 @@ export async function handleCatalogApi(
        FROM orders
        WHERE paid_at IS NOT NULL
          AND paid_at >= ? AND paid_at < ?
-         AND status IN ('paid', 'in_production', 'ready', 'fulfilled')
+         AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
        ORDER BY paid_at DESC`,
       rangeStart,
       rangeEnd,
@@ -3817,7 +4099,7 @@ export async function handleCatalogApi(
        FROM orders o
        WHERE o.paid_at IS NOT NULL
          AND o.paid_at >= ? AND o.paid_at < ?
-         AND o.status IN ('paid', 'in_production', 'ready', 'fulfilled')`,
+         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`,
       rangeStart,
       rangeEnd,
     )
@@ -3858,7 +4140,7 @@ export async function handleCatalogApi(
        FROM orders
        WHERE paid_at IS NOT NULL
          AND length(paid_at) >= 7
-         AND status IN ('paid', 'in_production', 'ready', 'fulfilled')
+         AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
        GROUP BY substr(paid_at, 1, 7)`,
     )
     const customByMonth = await db.all<{ ym: string; total: number | string | null }>(
@@ -4001,7 +4283,7 @@ export async function handleCatalogApi(
 
   if (urlPath === '/api/admin/money/settle' && method === 'POST') {
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }

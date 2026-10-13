@@ -192,6 +192,44 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    orderSuccess: (sessionId: string) =>
+      request<{
+        orderId: string
+        status: string
+        statusLabel: string
+        totalUsd: number
+        shippingMethod: string
+        trackCode: string | null
+        trackCodeAlreadyShown: boolean
+        items: {
+          designName: string
+          colorName: string
+          qty: number
+          printStatus: string
+          printStatusLabel: string
+        }[]
+      }>(`/api/public/order-success?session_id=${encodeURIComponent(sessionId)}`),
+    trackOrder: (code: string) =>
+      request<{
+        status: string
+        statusLabel: string
+        shippingMethod: string
+        trackingNumber: string
+        trackingCarrier: string
+        trackingUrl: string
+        shippedAt: string | null
+        arrivedEta: string | null
+        items: {
+          designName: string
+          colorName: string
+          qty: number
+          printStatus: string
+          printStatusLabel: string
+        }[]
+      }>('/api/public/track', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      }),
     designs: {
       list: () => request<import('../types/catalog.ts').Design[]>('/api/admin/designs'),
       get: (id: string) =>

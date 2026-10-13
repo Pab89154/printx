@@ -191,7 +191,7 @@ export async function handleCustomerApi(
     const shopRows = await db.all<Record<string, unknown>>(
       `SELECT * FROM orders
        WHERE user_id = ?
-         AND status IN ('paid', 'in_production', 'ready', 'fulfilled', 'refunded')
+         AND status IN ('paid', 'in_production', 'printed', 'shipped', 'arrived', 'ready', 'fulfilled', 'refunded')
        ORDER BY COALESCE(paid_at, created_at) DESC
        LIMIT 100`,
       customer.id,
@@ -348,7 +348,11 @@ export async function handleCustomerApi(
       send(res, 400, { error: 'This order is already refunded.' })
       return true
     }
-    if (!['paid', 'in_production', 'ready', 'fulfilled'].includes(order.status)) {
+    if (
+      !['paid', 'in_production', 'printed', 'shipped', 'arrived', 'ready', 'fulfilled'].includes(
+        order.status,
+      )
+    ) {
       send(res, 400, { error: 'This order cannot be refunded.' })
       return true
     }

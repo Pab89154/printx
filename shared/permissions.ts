@@ -5,6 +5,7 @@ export const PERMISSION_KEYS = [
   'dashboard',
   'messages',
   'mail',
+  'money',
   'stands',
   'products',
   'orders',
@@ -24,6 +25,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   dashboard: 'Dashboard',
   messages: 'Inbox (feedback & contact)',
   mail: 'Mail (admin messages)',
+  money: 'Money',
   stands: 'Stands',
   products: 'Designs',
   orders: 'Orders (print queue)',
@@ -41,6 +43,7 @@ export function defaultPermissions(): AdminPermissions {
     dashboard: true,
     messages: true,
     mail: true,
+    money: true,
     stands: true,
     products: true,
     orders: true,
@@ -97,6 +100,8 @@ export function normalizePermissions(input: unknown): AdminPermissions {
   for (const key of PERMISSION_KEYS) {
     if (typeof raw[key] === 'boolean') base[key] = raw[key]
   }
+  // Predates `money` key — grant view access without a manual re-save.
+  if (typeof raw.money !== 'boolean') base.money = true
   // Regular admins never get manage_admins through stored JSON alone —
   // only the primary admin account grants it.
   base.manage_admins = false

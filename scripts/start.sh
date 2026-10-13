@@ -47,4 +47,6 @@ else
   echo "[printx] no local slicer (Cloud Slicer pricing only; Free-plan G-code needs Save gcode or a local binary)"
 fi
 
+# Cap V8 heap so GC runs before Render's ~512MB free-tier kill.
+export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=384"
 exec node --import tsx server/production.ts
