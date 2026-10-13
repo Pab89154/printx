@@ -710,7 +710,6 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
           : {
               customer_creation: 'if_required',
             }),
-        allow_promotion_codes: true,
         success_url: successUrl,
         cancel_url: cancelUrl,
         client_reference_id: id,

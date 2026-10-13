@@ -112,9 +112,7 @@ export function Cart() {
             </label>
 
             <p className="mt-4 text-sm text-muted">
-              {signedIn
-                ? 'Enter item+shipping promos here. Other codes can also be entered on Checkout.'
-                : 'Pay as a guest — email and shipping are collected on Checkout.'}
+              Promo codes are entered here only — not on Stripe Checkout.
             </p>
 
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}

@@ -1497,8 +1497,40 @@ export async function handleCatalogApi(
       }
     }
     const freeStandardShipping =
+      appliedPromo?.kind === 'free_shipping' ||
       appliedPromo?.kind === 'percent_and_shipping' ||
       appliedPromo?.kind === 'amount_and_shipping'
+    // free_shipping is handled only via $0 Standard shipping — do not also apply a Stripe coupon.
+    const stripePromoId =
+      appliedPromo && appliedPromo.kind !== 'free_shipping'
+        ? appliedPromo.stripePromotionCodeId
+        : ''
+
+    if (stripePromoId) {
+      try {
+        const pc = await stripe.promotionCodes.retrieve(stripePromoId)
+        if (!pc.active) {
+          send(res, 400, {
+            error: `Promo code ${appliedPromo!.code} is no longer active. Remove it or try another code.`,
+          })
+          return true
+        }
+        const max = pc.max_redemptions
+        const used = pc.times_redeemed ?? 0
+        if (max != null && used >= max) {
+          send(res, 400, {
+            error: `Promo code ${appliedPromo!.code} has already been fully redeemed. Remove it or try another code.`,
+          })
+          return true
+        }
+      } catch (err) {
+        console.warn('[checkout] promotion code check failed:', err instanceof Error ? err.message : err)
+        send(res, 400, {
+          error: `Promo code ${appliedPromo!.code} could not be verified with Stripe. Remove it or try another code.`,
+        })
+        return true
+      }
+    }
 
     const subtotal = roundMoney(lineItems.reduce((s, i) => s + i.unit * i.qty, 0))
     const now = new Date().toISOString()
@@ -1544,48 +1576,71 @@ export async function handleCatalogApi(
       `${origin}/order/success?session_id={CHECKOUT_SESSION_ID}`
     const cancelUrl = process.env.STRIPE_CANCEL_URL?.trim() || `${origin}/cart`
 
-    const stripeCustomerId = account ? await ensureStripeCustomer(stripe, account) : null
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      ...(stripeCustomerId
-        ? {
-            customer: stripeCustomerId,
-            ...stripeAccountSavedPaymentFields(),
-          }
-        : {
-            // Guest: Stripe collects email; create a Customer when needed for the payment.
-            customer_creation: 'if_required',
-            ...(customerEmail ? { customer_email: customerEmail } : {}),
-          }),
-      // Stripe disallows allow_promotion_codes when a discount is already applied.
-      ...(appliedPromo
-        ? { discounts: [{ promotion_code: appliedPromo.stripePromotionCodeId }] }
-        : { allow_promotion_codes: true }),
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      client_reference_id: orderId,
-      metadata: {
-        orderId,
-        ...(account ? { customerUserId: account.id } : { guest: '1' }),
-        ...(appliedPromo ? { promoCode: appliedPromo.code, promoKind: appliedPromo.kind } : {}),
-      },
-      ...stripeCheckoutShippingFields({
-        freeStandard: freeStandardShipping,
-        guest: !account,
-      }),
-      line_items: lineItems.map((i) => ({
-        quantity: i.qty,
-        price_data: {
-          currency: 'usd',
-          unit_amount: Math.round(i.unit * 100),
-          product_data: {
-            name: `${i.design.name} (${i.colorName})`,
-            description: i.sku,
-            images: i.design.imageUrl?.startsWith('http') ? [i.design.imageUrl] : undefined,
-          },
+    let session: Stripe.Checkout.Session
+    try {
+      const stripeCustomerId = account ? await ensureStripeCustomer(stripe, account) : null
+      session = await stripe.checkout.sessions.create({
+        mode: 'payment',
+        ...(stripeCustomerId
+          ? {
+              customer: stripeCustomerId,
+              ...stripeAccountSavedPaymentFields(),
+            }
+          : {
+              // Guest: Stripe collects email; create a Customer when needed for the payment.
+              customer_creation: 'if_required',
+              ...(customerEmail ? { customer_email: customerEmail } : {}),
+            }),
+        // Promo codes only from the cart (before Checkout) — never the Stripe Checkout field.
+        ...(stripePromoId ? { discounts: [{ promotion_code: stripePromoId }] } : {}),
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        client_reference_id: orderId,
+        metadata: {
+          orderId,
+          ...(account ? { customerUserId: account.id } : { guest: '1' }),
+          ...(appliedPromo ? { promoCode: appliedPromo.code, promoKind: appliedPromo.kind } : {}),
         },
-      })),
-    })
+        ...stripeCheckoutShippingFields({
+          freeStandard: freeStandardShipping,
+          guest: !account,
+        }),
+        line_items: lineItems.map((i) => ({
+          quantity: i.qty,
+          price_data: {
+            currency: 'usd',
+            unit_amount: Math.round(i.unit * 100),
+            product_data: {
+              name: `${i.design.name} (${i.colorName})`,
+              description: i.sku,
+              images: i.design.imageUrl?.startsWith('http') ? [i.design.imageUrl] : undefined,
+            },
+          },
+        })),
+      })
+    } catch (err) {
+      const stripeMsg =
+        err && typeof err === 'object' && 'raw' in err
+          ? String((err as { raw?: { message?: string } }).raw?.message || '')
+          : ''
+      const msg = stripeMsg || (err instanceof Error ? err.message : 'Checkout failed')
+      console.error('[checkout] Stripe session create failed:', msg)
+      try {
+        await db.run(
+          `UPDATE orders SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'pending_payment'`,
+          new Date().toISOString(),
+          orderId,
+        )
+      } catch {
+        /* ignore cleanup */
+      }
+      send(res, 400, {
+        error: appliedPromo
+          ? `Could not apply promo ${appliedPromo.code}: ${msg}`
+          : `Checkout failed: ${msg}`,
+      })
+      return true
+    }
 
     await db.run(
       `UPDATE orders SET stripe_session_id = ?, updated_at = ? WHERE id = ?`,
