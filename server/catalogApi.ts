@@ -18,7 +18,7 @@ import {
   type SessionCustomer,
 } from './auth.ts'
 import { upsTrackUrl } from './shippingUrls.ts'
-import { notifyAdminsWithPermission } from './pushNotify.ts'
+import { notifyAdminsWithPermission, notifyMainAdmins } from './pushNotify.ts'
 import { advanceArrivedOrders, ensureOrderTrackCode } from './trackCodes.ts'
 import {
   arrivedEtaIso,
@@ -2542,6 +2542,15 @@ export async function handleCatalogApi(
       design = rowToDesign(
         (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
       )
+      // Approvals are main-admin only — ping their devices when someone else submits.
+      if (!admin.isMainAdmin) {
+        const who = admin.displayName || admin.email || 'An admin'
+        void notifyMainAdmins(db, {
+          title: 'Design needs approval',
+          body: `${who} submitted “${design.name}”`,
+          url: '/approvals',
+        }).catch((err) => console.warn('[push] design submit', err))
+      }
       send(res, 200, { ...designDto(design), sliceWarning })
       return true
     }

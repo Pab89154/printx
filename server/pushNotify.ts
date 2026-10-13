@@ -3,6 +3,7 @@ import webpush from 'web-push'
 import type { DbApi } from './dbClient.ts'
 import {
   hasPermission,
+  isPrimaryAdminUser,
   permissionsForUser,
   type PermissionKey,
 } from '../shared/permissions.ts'
@@ -127,6 +128,18 @@ export async function notifyAdminsWithPermission(
     ...allowed,
   )
   await deliver(db, rows, payload)
+}
+
+/** Notify the primary/main admin only (Approvals & Pricing is main-admin gated). */
+export async function notifyMainAdmins(db: DbApi, payload: PushPayload): Promise<void> {
+  if (!pushConfigured()) return
+  const admins = await db.all<{ id: string; email: string | null }>(
+    `SELECT id, email FROM users WHERE role = 'admin'`,
+  )
+  const mainIds = admins
+    .filter((a) => isPrimaryAdminUser(a.id, a.email))
+    .map((a) => a.id)
+  await notifyAdminUsers(db, mainIds, payload)
 }
 
 /** Notify specific admin user ids (e.g. mail recipients). */
