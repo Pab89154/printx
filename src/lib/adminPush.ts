@@ -1,13 +1,5 @@
 import { api } from './api'
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
-  const raw = atob(base64)
-  const out = new Uint8Array(raw.length)
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i)
-  return out
-}
+import { isValidVapidPublicKey, normalizeVapidKey, vapidPublicKeyToBytes } from '../../shared/vapid'
 
 export type PushSetupState =
   | 'loading'
@@ -54,6 +46,31 @@ export async function getPushSetupState(): Promise<PushSetupState> {
   return 'ready'
 }
 
+function applicationServerKeyFromVapid(publicKey: string): BufferSource {
+  const bytes = vapidPublicKeyToBytes(publicKey)
+  if (!bytes) throw new Error('Invalid VAPID public key from server.')
+  // Some WebKit builds reject a view into a larger ArrayBuffer — copy to a tight buffer.
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+}
+
+function pushSubscribeErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  const lower = msg.toLowerCase()
+  if (
+    lower.includes('push service error') ||
+    lower.includes('registration failed') ||
+    lower.includes('applicationServerKey') ||
+    lower.includes('invalid')
+  ) {
+    return (
+      'Push service rejected this device registration. On Render, set a matching VAPID key pair from ' +
+      '`npx web-push generate-vapid-keys` (VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY, no quotes), redeploy, ' +
+      'then tap Enable again. On iPhone, open PrintX from the Home Screen icon.'
+    )
+  }
+  return msg || 'Could not enable notifications.'
+}
+
 export async function enableAdminPush(): Promise<PushSetupState> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     return isIosDevice() && !isStandaloneDisplay() ? 'needs_homescreen' : 'unsupported'
@@ -63,11 +80,11 @@ export async function enableAdminPush(): Promise<PushSetupState> {
   let publicKey = ''
   try {
     const vapid = await api.admin.push.vapidPublicKey()
-    publicKey = vapid.publicKey
+    publicKey = normalizeVapidKey(vapid.publicKey)
   } catch {
     return 'no_vapid'
   }
-  if (!publicKey) return 'no_vapid'
+  if (!publicKey || !isValidVapidPublicKey(publicKey)) return 'no_vapid'
 
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'ready'
@@ -75,12 +92,24 @@ export async function enableAdminPush(): Promise<PushSetupState> {
   const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
   await navigator.serviceWorker.ready
 
+  const appKey = applicationServerKeyFromVapid(publicKey)
   let sub = await reg.pushManager.getSubscription()
-  if (!sub) {
+  // If a stale subscription exists from old/wrong VAPID keys, drop it and resubscribe.
+  if (sub) {
+    try {
+      await sub.unsubscribe()
+    } catch {
+      /* continue to subscribe */
+    }
+    sub = null
+  }
+  try {
     sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
+      applicationServerKey: appKey,
     })
+  } catch (err) {
+    throw new Error(pushSubscribeErrorMessage(err))
   }
 
   const json = sub.toJSON()

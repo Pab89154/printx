@@ -148,10 +148,14 @@ export function AdminApprovals() {
                         {!ready ? (
                           <p className="mt-2 text-xs text-amber-700">
                             {d.sliceStatus === 'slicing'
-                              ? 'Quoting via Cloud Slicer in the background — refresh shortly, then Publish to shop.'
-                              : d.sliceStatus === 'idle'
-                                ? 'Review the model first. Approve starts Cloud Slicer quoting (no shop listing until you Publish).'
-                                : 'No printer quotes yet — use Re-quote missing after Approve, then Publish to shop when grams/hours appear.'}
+                              ? 'Accepted — quoting via Cloud Slicer in the background. Refresh shortly, then Publish to shop.'
+                              : d.reviewedAt ||
+                                  d.sliceStatus === 'ready' ||
+                                  d.sliceStatus === 'error'
+                                ? d.sliceError
+                                  ? `Accepted for quoting. ${d.sliceError.split('\n')[0]}`
+                                  : 'Accepted — waiting on printer quotes. Use Re-quote missing if grams/hours do not appear, then Publish to shop.'
+                                : 'Review the model first. Approve starts Cloud Slicer quoting (no shop listing until you Publish).'}
                           </p>
                         ) : !designHasAllThree(d) ? (
                           <p className="mt-2 text-xs text-muted">
@@ -167,7 +171,7 @@ export function AdminApprovals() {
                         <button
                           type="button"
                           className="btn btn-primary btn-compact"
-                          disabled={busyId === d.id || (ready ? false : d.sliceStatus === 'slicing')}
+                          disabled={busyId === d.id || (!ready && d.sliceStatus === 'slicing')}
                           onClick={() => {
                             setBusyId(d.id)
                             setError('')
@@ -180,6 +184,8 @@ export function AdminApprovals() {
                                     res.sliceWarning ||
                                       'Accepted — quoting started. Refresh when grams/hours appear, then Publish to shop.',
                                   )
+                                } else {
+                                  setMessage('Published to shop.')
                                 }
                                 return load()
                               })
@@ -187,14 +193,23 @@ export function AdminApprovals() {
                               .finally(() => setBusyId(null))
                           }}
                         >
-                          {ready ? 'Publish to shop' : 'Approve & quote'}
+                          {ready
+                            ? 'Publish to shop'
+                            : d.sliceStatus === 'slicing'
+                              ? 'Quoting…'
+                              : d.reviewedAt
+                                ? 'Retry quote'
+                                : 'Approve & quote'}
                         </button>
                         <button
                           type="button"
                           className="btn btn-secondary btn-compact"
-                          disabled={busyId === d.id || d.sliceStatus === 'idle'}
+                          disabled={
+                            busyId === d.id ||
+                            (d.sliceStatus === 'idle' && !d.reviewedAt && d.status === 'pending_review')
+                          }
                           title={
-                            d.sliceStatus === 'idle'
+                            d.sliceStatus === 'idle' && !d.reviewedAt
                               ? 'Approve the design first to start quoting'
                               : undefined
                           }

@@ -6,6 +6,11 @@ import {
   permissionsForUser,
   type PermissionKey,
 } from '../shared/permissions.ts'
+import {
+  isValidVapidPrivateKey,
+  isValidVapidPublicKey,
+  normalizeVapidKey,
+} from '../shared/vapid.ts'
 
 export type PushPayload = {
   title: string
@@ -24,23 +29,51 @@ type SubRow = {
 
 let vapidReady = false
 
+function vapidEnvKeys(): { publicKey: string; privateKey: string; subject: string } {
+  return {
+    publicKey: normalizeVapidKey(process.env.VAPID_PUBLIC_KEY),
+    privateKey: normalizeVapidKey(process.env.VAPID_PRIVATE_KEY),
+    subject: process.env.VAPID_SUBJECT?.trim() || 'mailto:hello@printx.pw',
+  }
+}
+
 function configureVapid(): boolean {
   if (vapidReady) return true
-  const publicKey = process.env.VAPID_PUBLIC_KEY?.trim()
-  const privateKey = process.env.VAPID_PRIVATE_KEY?.trim()
-  const subject = process.env.VAPID_SUBJECT?.trim() || 'mailto:hello@printx.pw'
-  if (!publicKey || !privateKey) return false
-  webpush.setVapidDetails(subject, publicKey, privateKey)
+  const { publicKey, privateKey, subject } = vapidEnvKeys()
+  if (!isValidVapidPublicKey(publicKey) || !isValidVapidPrivateKey(privateKey)) return false
+  try {
+    webpush.setVapidDetails(subject, publicKey, privateKey)
+  } catch (err) {
+    console.warn('[push] VAPID configure failed:', err instanceof Error ? err.message : err)
+    return false
+  }
   vapidReady = true
   return true
 }
 
 export function pushConfigured(): boolean {
-  return Boolean(process.env.VAPID_PUBLIC_KEY?.trim() && process.env.VAPID_PRIVATE_KEY?.trim())
+  const { publicKey, privateKey } = vapidEnvKeys()
+  return isValidVapidPublicKey(publicKey) && isValidVapidPrivateKey(privateKey)
 }
 
 export function vapidPublicKey(): string | null {
-  return process.env.VAPID_PUBLIC_KEY?.trim() || null
+  const { publicKey } = vapidEnvKeys()
+  return isValidVapidPublicKey(publicKey) ? publicKey : null
+}
+
+/** Why push is unavailable — for admin UI / logs (never includes private key). */
+export function vapidConfigError(): string | null {
+  const { publicKey, privateKey } = vapidEnvKeys()
+  if (!publicKey && !privateKey) return 'Missing VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY on the server.'
+  if (!publicKey) return 'Missing VAPID_PUBLIC_KEY on the server.'
+  if (!privateKey) return 'Missing VAPID_PRIVATE_KEY on the server.'
+  if (!isValidVapidPublicKey(publicKey)) {
+    return 'VAPID_PUBLIC_KEY is invalid (need the ~87-char key from: npx web-push generate-vapid-keys). Remove quotes/spaces.'
+  }
+  if (!isValidVapidPrivateKey(privateKey)) {
+    return 'VAPID_PRIVATE_KEY is invalid (need the matching private key from the same generate-vapid-keys run). Remove quotes/spaces.'
+  }
+  return null
 }
 
 async function sendToSubscription(row: SubRow, payload: PushPayload): Promise<'ok' | 'gone' | 'error'> {

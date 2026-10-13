@@ -147,6 +147,10 @@ async function main() {
   logObjectStorageStatus()
   await ensureModelBucket()
   startMailScheduleFlusher()
+  // In-memory quote queue dies on deploy — pick up designs left mid-quote.
+  void import('./catalogApi.ts').then(({ resumeInterruptedDesignQuotes }) =>
+    resumeInterruptedDesignQuotes(),
+  )
 
   const shutdown = () => {
     void import('./db.ts').then(({ closeDb }) => closeDb()).finally(() => process.exit(0))

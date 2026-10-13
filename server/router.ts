@@ -54,6 +54,7 @@ import {
   notifyAdminsWithPermission,
   pushConfigured,
   upsertPushSubscription,
+  vapidConfigError,
   vapidPublicKey,
 } from './pushNotify.ts'
 import {
@@ -886,7 +887,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     }
     const key = vapidPublicKey()
     if (!key) {
-      send(res, 503, { error: 'Push notifications are not configured (missing VAPID keys).' })
+      send(res, 503, {
+        error: vapidConfigError() || 'Push notifications are not configured (missing VAPID keys).',
+      })
       return true
     }
     send(res, 200, { publicKey: key, configured: pushConfigured() })

@@ -452,7 +452,9 @@ export function AdminSettings() {
         )}
         {pushState === 'no_vapid' && (
           <p className="mt-3 text-sm text-amber-700">
-            Server is missing VAPID keys. Add VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY on Render.
+            Push keys missing or invalid on Render. Run{' '}
+            <code className="rounded bg-slate-100 px-1">npx web-push generate-vapid-keys</code>, paste both
+            keys into VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY (no quotes), save, and redeploy.
           </p>
         )}
         {pushState === 'denied' && (

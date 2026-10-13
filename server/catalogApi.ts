@@ -303,6 +303,23 @@ function missingPrinterWarning(label: string, detail: string): string {
  * By default skips printers that already have grams/hours (fill-in later).
  * Persists quote/file IDs so printers can download G-code from Orders.
  */
+async function markDesignSliceError(
+  db: Awaited<ReturnType<typeof getDb>>,
+  designId: string,
+  error: string,
+): Promise<void> {
+  try {
+    await db.run(
+      `UPDATE designs SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
+      error.slice(0, 2000),
+      new Date().toISOString(),
+      designId,
+    )
+  } catch (err) {
+    console.error('[catalog] failed to persist slice error:', err)
+  }
+}
+
 async function sliceDesignWithCloudSlicer(
   db: Awaited<ReturnType<typeof getDb>>,
   designId: string,
@@ -312,13 +329,19 @@ async function sliceDesignWithCloudSlicer(
   const fillMissingOnly = opts?.fillMissingOnly !== false
   const resolved = await resolveStoredFile(stlPath)
   if (!resolved) {
-    return { ok: false, error: 'Model file missing on server. Re-upload the design file.' }
+    const error = 'Model file missing on server. Re-upload the design file.'
+    await markDesignSliceError(db, designId, error)
+    return { ok: false, error }
   }
   const localPath = resolved.path
 
   try {
     const existingRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
-    if (!existingRow) return { ok: false, error: 'Design not found.' }
+    if (!existingRow) {
+      const error = 'Design not found.'
+      await markDesignSliceError(db, designId, error)
+      return { ok: false, error }
+    }
     const existing = rowToDesign(existingRow)
     const quoteIds = parseDesignIdMap(existingRow.quote_ids_json)
     const fileIds = parseDesignIdMap(existingRow.file_ids_json)
@@ -424,13 +447,14 @@ async function sliceDesignWithCloudSlicer(
       return gramsHours[fields.grams] != null && gramsHours[fields.hours] != null
     }).length
 
-    const sliceStatus = quotedCount === 0 && ready.length === 0 && setupGaps.length > 0
-      ? 'error'
-      : quotedCount > 0
-        ? 'ready'
-        : quoteErrors.length
-          ? 'error'
-          : 'idle'
+    // Never return to 'idle' after a quote attempt — idle looks like "never approved" in Approvals
+    // and blocks Re-quote (pending_review + idle).
+    const sliceStatus: 'ready' | 'error' = quotedCount > 0 ? 'ready' : 'error'
+    const finalWarning =
+      warning ||
+      (quotedCount === 0
+        ? 'Quoting finished with no printer grams/hours. Check Cloud Slicer keys, then Re-quote missing.'
+        : '')
 
     const now = new Date().toISOString()
     await db.run(
@@ -451,12 +475,16 @@ async function sliceDesignWithCloudSlicer(
       JSON.stringify(fileIds),
       JSON.stringify(gcodePaths),
       sliceStatus,
-      warning.slice(0, 2000),
+      finalWarning.slice(0, 2000),
       now,
       designId,
     )
     const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
-    return { ok: true, design: rowToDesign(row!), warning: warning || undefined }
+    return { ok: true, design: rowToDesign(row!), warning: finalWarning || undefined }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : 'Quoting failed'
+    await markDesignSliceError(db, designId, error)
+    return { ok: false, error }
   } finally {
     resolved.cleanup?.()
   }
@@ -838,8 +866,50 @@ export function scheduleFillMissingQuotesForPrinter(printxPrinterId: string): vo
 export function scheduleDesignSlice(designId: string, stlPath: string): void {
   enqueueQuoteJob(`design-slice:${designId}`, async () => {
     const bg = await getDb()
-    await sliceDesignWithCloudSlicer(bg, designId, stlPath, { fillMissingOnly: true })
+    const result = await sliceDesignWithCloudSlicer(bg, designId, stlPath, { fillMissingOnly: true })
+    if (!result.ok) {
+      console.error(`[catalog] design-slice ${designId} failed:`, result.error)
+    }
   })
+}
+
+/** After deploy/restart, resume designs left mid-quote (in-memory queue is gone). */
+export async function resumeInterruptedDesignQuotes(): Promise<void> {
+  try {
+    const db = await getDb()
+    const rows = await db.all<{ id: string; stl_path: string }>(
+      `SELECT id, stl_path FROM designs
+       WHERE TRIM(stl_path) != ''
+         AND (
+           slice_status = 'slicing'
+           OR (
+             status = 'pending_review'
+             AND reviewed_at IS NOT NULL
+             AND slice_status IN ('slicing', 'error')
+             AND grams_pablo_p1s IS NULL
+             AND grams_court_ender IS NULL
+             AND grams_josh_kobra IS NULL
+           )
+         )
+       ORDER BY updated_at DESC
+       LIMIT 20`,
+    )
+    for (const row of rows) {
+      const id = String(row.id || '')
+      const stlPath = String(row.stl_path || '')
+      if (!id || !stlPath) continue
+      if (!SLICEABLE_EXTS.has(path.extname(stlPath).toLowerCase())) continue
+      console.warn(`[catalog] resuming interrupted quote for design ${id}`)
+      await db.run(
+        `UPDATE designs SET slice_status = 'slicing', slice_error = '', updated_at = ? WHERE id = ?`,
+        new Date().toISOString(),
+        id,
+      )
+      scheduleDesignSlice(id, stlPath)
+    }
+  } catch (err) {
+    console.error('[catalog] resumeInterruptedDesignQuotes failed:', err)
+  }
 }
 
 export function scheduleCustomRequestQuote(requestId: string): void {
@@ -2164,7 +2234,13 @@ export async function handleCatalogApi(
         return true
       }
       // Quoting only after the main admin has accepted the design (or it is already approved).
-      if (design.status === 'pending_review' && design.sliceStatus === 'idle') {
+      const acceptedForQuote =
+        design.status === 'approved' ||
+        Boolean(design.reviewedAt) ||
+        design.sliceStatus === 'slicing' ||
+        design.sliceStatus === 'ready' ||
+        design.sliceStatus === 'error'
+      if (design.status === 'pending_review' && !acceptedForQuote) {
         send(res, 400, {
           error: 'Approve the design first — quoting starts after main admin approval.',
         })
@@ -2207,21 +2283,29 @@ export async function handleCatalogApi(
           return true
         }
         const now = new Date().toISOString()
+        // Persist acceptance BEFORE queueing work so a refresh still shows "approved for quote"
+        // even if the process restarts mid-Cloud-Slicer job.
         await db.run(
           `UPDATE designs SET
             reviewed_by = ?, reviewed_at = ?, review_note = ?,
             slice_status = 'slicing', slice_error = '', updated_at = ?
-           WHERE id = ?`,
+           WHERE id = ? AND status = 'pending_review'`,
           admin.id,
           now,
           'Accepted — quoting',
           now,
           designId,
         )
-        scheduleDesignSlice(designId, design.stlPath)
-        design = rowToDesign(
-          (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
+        const after = await db.get<Record<string, unknown>>(
+          'SELECT * FROM designs WHERE id = ?',
+          designId,
         )
+        if (!after || !after.reviewed_at) {
+          send(res, 500, { error: 'Could not save approval. Try again.' })
+          return true
+        }
+        scheduleDesignSlice(designId, design.stlPath)
+        design = rowToDesign(after)
         send(res, 200, {
           design: designDto(design),
           quotingStarted: true,
