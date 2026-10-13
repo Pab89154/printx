@@ -52,6 +52,8 @@ Paste that whole `https://….onrender.com` URL as `ORIGIN` (no slash at the end
 
 Also check **DNS** for `printx.pw` and `portal`:
 - Cloud icon must be **orange** (Proxied), not gray.
+- Apex `@` and `portal` should both be **CNAME → your `*.onrender.com` host** (Proxied).  
+  An apex **A** record to a Render IP (e.g. `216.24.57.1`) can skip the Worker — you’ll see Render’s green loading page instead of PrintX.
 
 ---
 
@@ -67,8 +69,9 @@ Also check **DNS** for `printx.pw` and `portal`:
 
 | What you see | Fix |
 |--------------|-----|
-| Still green Render loading screen | Routes missing (`printx.pw/*`) or DNS cloud is gray |
+| Still green Render loading screen | Routes missing (`printx.pw/*`), DNS cloud is gray, or apex is an **A** record to a Render IP instead of CNAME → `*.onrender.com` |
 | PrintX loading forever | `ORIGIN` wrong — must be the real `*.onrender.com` from Render |
+| `portal` wake works, `printx.pw` does not | Fix apex DNS: change `@` from A → CNAME `your-service.onrender.com` (Proxied) |
 | Site broken / Not Found | Same — fix `ORIGIN` |
 | Login cookies weird | On Render → Environment: `PRINTX_COOKIE_DOMAIN` = `.printx.pw` |
 
