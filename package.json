@@ -9,7 +9,10 @@
     "render-build": "bash scripts/render-build.sh",
     "start": "bash scripts/start.sh",
     "start:sqlite": "node --experimental-sqlite --import tsx server/production.ts",
-    "preview": "NODE_OPTIONS='--experimental-sqlite' vite preview --port 5221 --strictPort"
+    "preview": "NODE_OPTIONS='--experimental-sqlite' vite preview --port 5221 --strictPort",
+    "cf:build": "vite build",
+    "cf:deploy": "npm run cf:build && npx wrangler deploy",
+    "cf:tail": "npx wrangler tail"
   },
   "engines": {
     "node": ">=22"
@@ -40,12 +43,15 @@
   },
   "allowScripts": {
     "esbuild@0.25.12": true,
-    "esbuild@0.28.2": true
+    "esbuild@0.28.2": true,
+    "workerd@1.20261006.1": true
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@types/nspell": "^2.1.6",
     "@types/pg": "^8.23.1",
     "@types/three": "^0.186.0",
-    "@types/web-push": "^3.6.4"
+    "@types/web-push": "^3.6.4",
+    "wrangler": "^4.150.0"
   }
 }

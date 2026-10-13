@@ -1,0 +1,63 @@
+# Offline Bambu slice → Supabase Storage. Free GitHub Actions minutes; never runs on the web host.
+name: Prepare G-code
+
+on:
+  workflow_dispatch:
+    inputs:
+      design_id:
+        description: Design UUID
+        required: true
+        type: string
+      printer_id:
+        description: PrintX printer id (pablo_p1s, court_ender, josh_kobra)
+        required: true
+        default: pablo_p1s
+        type: string
+
+jobs:
+  slice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Bambu Studio CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates curl squashfs-tools python3 \
+            xvfb libgl1 libglib2.0-0 libgtk-3-0 libgomp1 \
+            libx11-6 libxkbcommon0 libdbus-1-3 libstdc++6 \
+            libwebkit2gtk-4.1-0 libsoup-3.0-0 libgstreamer1.0-0 \
+            libgstreamer-plugins-base1.0-0 libegl1 libwayland-client0 \
+            fonts-dejavu-core
+          PRINTX_SLICER_HOME=/opt/printx-slicer bash scripts/install-slicer.sh
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            'if [[ -z "${DISPLAY:-}" ]]; then' \
+            '  exec xvfb-run -a -s "-screen 0 1280x720x24" /opt/printx-slicer/AppRun "$@"' \
+            'fi' \
+            'exec /opt/printx-slicer/AppRun "$@"' \
+            | sudo tee /opt/printx-slicer/printx-slice >/dev/null
+          sudo chmod +x /opt/printx-slicer/printx-slice
+          test -d /opt/printx-slicer/resources/profiles/BBL/machine
+
+      - name: Slice and upload
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PRINTX_SLICER_HOME: /opt/printx-slicer
+          PRINTX_SLICER_BIN: /opt/printx-slicer/printx-slice
+          PRINTX_DESIGN_ID: ${{ inputs.design_id }}
+          PRINTX_PRINTER_ID: ${{ inputs.printer_id }}
+        run: npx tsx scripts/prepare-gcode-ci.ts

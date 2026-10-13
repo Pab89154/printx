@@ -65,6 +65,8 @@ export type Design = {
   catalogPriceUsd: number | null
   pricedAt: string | null
   pricingInputsJson: string
+  /** Raw gcode_paths_json for admin DTO (printerId → stored file name). */
+  gcodePathsJson: string
   createdAt: string
   updatedAt: string
 }
@@ -212,6 +214,7 @@ export function rowToDesign(row: Record<string, unknown>): Design {
     catalogPriceUsd: numOrNull(row.catalog_price_usd),
     pricedAt: (row.priced_at as string | null) ?? null,
     pricingInputsJson: (row.pricing_inputs_json as string) || '{}',
+    gcodePathsJson: String(row.gcode_paths_json || '{}'),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }

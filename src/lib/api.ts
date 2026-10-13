@@ -308,6 +308,15 @@ export const api = {
           method: 'POST',
           body: JSON.stringify({ note }),
         }),
+      prepareGcode: (id: string, printerId = 'pablo_p1s') =>
+        request<{ status: 'ready' | 'running' }>(`/api/admin/designs/${id}/gcode/prepare`, {
+          method: 'POST',
+          body: JSON.stringify({ printerId }),
+        }),
+      gcodeStatus: (id: string, printerId = 'pablo_p1s') =>
+        request<{ status: 'ready' | 'idle' | 'running' | 'error'; storedName?: string; error?: string }>(
+          `/api/admin/designs/${id}/gcode/status?printerId=${encodeURIComponent(printerId)}`,
+        ),
     },
     pricing: {
       get: () =>

@@ -52,6 +52,8 @@ export type Design = {
   pricingInputsJson: string
   createdAt: string
   updatedAt: string
+  /** Printer ids that already have stored G-code in Supabase. */
+  gcodeReadyPrinters?: string[]
 }
 
 export type PublicCatalogPart = {

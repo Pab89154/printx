@@ -721,6 +721,12 @@ export function AdminDesigns() {
                       {d.hoursCourtEnder}h · Kobra X {d.gramsJoshKobra}g / {d.hoursJoshKobra}h
                     </p>
                   ) : null}
+                  <p className="text-xs text-muted">
+                    G-code:{' '}
+                    {(d.gcodeReadyPrinters || []).length
+                      ? (d.gcodeReadyPrinters || []).join(', ')
+                      : 'not prepared'}
+                  </p>
                   {d.sliceError ? <p className="whitespace-pre-wrap text-xs text-amber-700">{d.sliceError}</p> : null}
                   {d.reviewNote ? <p className="text-xs text-amber-700">{d.reviewNote}</p> : null}
                 </div>
@@ -729,6 +735,45 @@ export function AdminDesigns() {
                 <button type="button" className="btn btn-secondary btn-compact" onClick={() => startEdit(d)}>
                   Edit
                 </button>
+                {d.hasStl ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-compact"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true)
+                      setMessage('Starting G-code prepare (GitHub Actions)…')
+                      setError('')
+                      void api.catalog.designs
+                        .prepareGcode(d.id, 'pablo_p1s')
+                        .then(async (res) => {
+                          if (res.status === 'ready') {
+                            setMessage('G-code already stored for Pablo P1S.')
+                            return load()
+                          }
+                          setMessage('Slicing in GitHub Actions… leave this page open.')
+                          const deadline = Date.now() + 20 * 60_000
+                          while (Date.now() < deadline) {
+                            await new Promise((r) => setTimeout(r, 8000))
+                            const st = await api.catalog.designs.gcodeStatus(d.id, 'pablo_p1s')
+                            if (st.status === 'ready') {
+                              setMessage('G-code ready for Pablo P1S — Orders Download will work.')
+                              return load()
+                            }
+                          }
+                          throw new Error(
+                            'Still preparing after ~20 min. Check GitHub → Actions → Prepare G-code.',
+                          )
+                        })
+                        .catch((err) =>
+                          setError(err instanceof Error ? err.message : 'Prepare G-code failed'),
+                        )
+                        .finally(() => setBusy(false))
+                    }}
+                  >
+                    Prepare G-code · P1S
+                  </button>
+                ) : null}
                 {d.status === 'draft' || d.status === 'rejected' ? (
                   <button
                     type="button"

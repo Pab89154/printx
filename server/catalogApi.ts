@@ -76,15 +76,11 @@ import {
 } from './stripeShipping.ts'
 import {
   cloudSlicerConfigured,
-  GCODE_SAVE_HINT,
-  isGcodeOutputMissing,
-  quoteAndDownloadGcode,
   quoteStlForPrintxPrinter,
-  requoteFileAndDownloadGcode,
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
-import { localSlicerAvailable, sliceStlLocally } from './localSlicer.ts'
 import { loadStoredGcode, openStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
+import { dispatchGcodePrepareJob, markDesignGcodePreparing } from './gcodePrepare.ts'
 import {
   objectStorageConfigured,
   objectStorageRequired,
@@ -106,14 +102,17 @@ const PRINTER_FIELD: Record<
 
 function designDto(
   d: Design,
-): Omit<Design, 'stlPath' | 'parts'> & {
+): Omit<Design, 'stlPath' | 'parts' | 'gcodePathsJson'> & {
   stlPath: ''
   modelExt: string
   parts: { label: string; stlPath: ''; hasStl: boolean; modelExt: string }[]
+  gcodeReadyPrinters: string[]
 } {
   const modelExt = path.extname(d.stlPath || '').toLowerCase()
+  const gcodePaths = parseDesignIdMap(d.gcodePathsJson)
+  const { gcodePathsJson: _drop, ...rest } = d
   return {
-    ...d,
+    ...rest,
     stlPath: '',
     modelExt,
     parts: d.parts.map((p) => ({
@@ -122,6 +121,7 @@ function designDto(
       hasStl: Boolean(p.stlPath.trim()),
       modelExt: path.extname(p.stlPath || '').toLowerCase(),
     })),
+    gcodeReadyPrinters: Object.keys(gcodePaths).filter((k) => Boolean(gcodePaths[k])),
   }
 }
 
@@ -685,8 +685,8 @@ async function orderItemGcodeReady(
 }
 
 /**
- * Build G-code for the claimed printer only and store it on PrintX.
- * Safe to run in a background job (can take several minutes).
+ * Serve pre-stored G-code only — never run Bambu/Cloud Slicer on the web host
+ * (free-tier OOM/timeouts). Missing files are prepared via GitHub Actions.
  */
 async function ensureOrderItemGcode(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -704,131 +704,25 @@ async function ensureOrderItemGcode(
   const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
   if (!designRow) throw new Error('Design not found for this order item.')
 
-  const fileIds = parseDesignIdMap(designRow.file_ids_json)
-  const fileId = fileIds[printerId] || ''
-
-  const owners = await loadPrinterOwnerCreds(db)
-  const owner = owners.find((o) => o.printer_id === printerId)
-  const creds: CloudSlicerCreds = {
-    token: String(owner?.cloud_slicer_token || ''),
-    printerId: String(owner?.cloud_slicer_printer_id || ''),
-    filamentId: String(owner?.cloud_slicer_filament_id || ''),
-  }
-  const canCloud = cloudSlicerConfigured(creds)
-  const canLocal = localSlicerAvailable(printerId)
-  if (!canCloud && !canLocal) {
-    throw new Error(
-      'No slicer available for this printer. Deploy the Docker image with the local slicer (PRINTX_SLICER_BIN), or add Cloud Slicer keys and enable “Save gcode files” (Pro/Max).',
-    )
+  const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
+  if (gcodePaths[printerId]) {
+    const again = await peekStoredOrderItemGcode(db, itemId)
+    if (again) return again
   }
 
-  const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
-  const safeName = `printx-${sku}-${printerId}.gcode`
-
-  async function persistCaptured(result: {
-    buffer: Buffer
-    filename: string
-    quoteId: string
-    fileId: string
-    grams: number
-    hours: number
-  }) {
-    // Always return the file to the caller even if saving metadata fails.
-    try {
-      const gcodePath = await storeGcodeBuffer(result.buffer, {
-        hint: `${sku}-${printerId}`,
-      })
-      await saveDesignPrinterQuote(db, designId, designRow, printerId, {
-        ...result,
-        gcodePath,
-      })
-    } catch (err) {
-      console.warn('[gcode] persist failed:', err instanceof Error ? err.message : err)
-    }
-    return { buffer: result.buffer, filename: result.filename || safeName }
-  }
-
-  const errors: string[] = []
-  const stlPath = String(designRow.stl_path || '')
-  if (!stlPath) throw new Error('Design has no model file to slice.')
-  const resolved = await resolveStoredFile(stlPath)
-  if (!resolved) throw new Error('Model file missing on server. Re-upload the design.')
-
-  try {
-    // Cloud Slicer Free never returns G-code — local Docker slicer is the production path.
-    if (canLocal) {
-      const local = await sliceStlLocally(resolved.path, printerId)
-      const existingGrams = Number(
-        printerId === 'pablo_p1s'
-          ? designRow.grams_pablo_p1s
-          : printerId === 'court_ender'
-            ? designRow.grams_court_ender
-            : designRow.grams_josh_kobra,
-      )
-      const existingHours = Number(
-        printerId === 'pablo_p1s'
-          ? designRow.hours_pablo_p1s
-          : printerId === 'court_ender'
-            ? designRow.hours_court_ender
-            : designRow.hours_josh_kobra,
-      )
-      return await persistCaptured({
-        buffer: local.buffer,
-        filename: local.filename || safeName,
-        quoteId: `local-${Date.now().toString(36)}`,
-        fileId: fileId || '',
-        grams: Number.isFinite(existingGrams) && existingGrams > 0 ? existingGrams : local.grams,
-        hours: Number.isFinite(existingHours) && existingHours > 0 ? existingHours : local.hours,
-      })
-    }
-
-    // Fallback only when Save-gcode is enabled on Cloud Slicer (Pro/Max).
-    if (fileId && canCloud) {
-      try {
-        return await persistCaptured(await requoteFileAndDownloadGcode(creds, fileId))
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        errors.push(`Re-quote: ${msg}`)
-        console.warn('[gcode] requote existing file failed, will re-upload:', msg)
-        if (!isGcodeOutputMissing(err)) {
-          throw new Error(errors.filter(Boolean).join(' · '))
-        }
-      }
-    }
-
-    if (canCloud) {
-      try {
-        return await persistCaptured(
-          await quoteAndDownloadGcode(creds, resolved.path, {
-            printxPrinterId: printerId,
-          }),
-        )
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        errors.push(`Re-upload: ${msg}`)
-        if (isGcodeOutputMissing(err)) {
-          throw new Error(errors.filter(Boolean).join(' · ') || GCODE_SAVE_HINT)
-        }
-        throw new Error(errors.filter(Boolean).join(' · ') || msg)
-      }
-    }
-
-    throw new Error(errors.filter(Boolean).join(' · ') || GCODE_SAVE_HINT)
-  } finally {
-    resolved.cleanup?.()
-  }
+  throw new Error(
+    'G-code is not ready yet. Use Prepare G-code on Designs (runs the free GitHub Actions slicer), then tap Download again.',
+  )
 }
 
 function startOrderGcodePrep(itemId: string) {
   pruneOrderGcodeJobs()
   const current = orderGcodeJobs.get(itemId)
   if (current?.status === 'running') {
-    // Stale in-memory job (server restart mid-slice, hung Cloud Slicer, etc.).
     if (Date.now() - current.updatedAt < GCODE_JOB_STALE_MS) return
     console.warn('[gcode] restarting stale prepare job', itemId)
   }
   if (current?.status === 'ready') return
-  // error / idle → start fresh (client retries after timeouts)
   if (current?.status === 'error') {
     console.warn('[gcode] retrying after previous error', itemId, current.error)
   }
@@ -842,15 +736,39 @@ function startOrderGcodePrep(itemId: string) {
   void (async () => {
     try {
       const db = await getDb()
-      const file = await ensureOrderItemGcode(db, itemId)
-      // Prefer disk/object storage — do not pin multi-MB G-code in the process heap.
-      const storedMeta = await orderItemStoredGcodeName(db, itemId)
-      orderGcodeJobs.set(itemId, {
-        status: 'ready',
-        filename: file.filename,
-        buffer: storedMeta ? undefined : file.buffer,
-        updatedAt: Date.now(),
-      })
+      if (await orderItemGcodeReady(db, itemId)) {
+        orderGcodeJobs.set(itemId, { status: 'ready', updatedAt: Date.now() })
+        return
+      }
+      const item = await db.get<{ design_id: string; assigned_printer_id: string | null }>(
+        'SELECT design_id, assigned_printer_id FROM order_items WHERE id = ?',
+        itemId,
+      )
+      if (!item) throw new Error('Order item not found.')
+      const printerId = String(item.assigned_printer_id || '').trim()
+      if (!printerId) throw new Error('Claim this item with a printer before downloading G-code.')
+      const designId = String(item.design_id || '')
+      await markDesignGcodePreparing(db, designId, printerId)
+      const dispatched = await dispatchGcodePrepareJob({ designId, printerId })
+      if (!dispatched.ok) {
+        throw new Error(dispatched.error)
+      }
+      // Poll storage — GH Actions uploads gcode_paths_json when done.
+      const deadline = Date.now() + 14 * 60_000
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5000))
+        if (await orderItemGcodeReady(db, itemId)) {
+          orderGcodeJobs.set(itemId, { status: 'ready', updatedAt: Date.now() })
+          return
+        }
+        const running = orderGcodeJobs.get(itemId)
+        if (running?.status === 'running') {
+          orderGcodeJobs.set(itemId, { ...running, updatedAt: Date.now() })
+        }
+      }
+      throw new Error(
+        'Timed out waiting for GitHub Actions to store G-code. Check the prepare-gcode workflow, then tap Download again.',
+      )
     } catch (err) {
       const message = err instanceof Error ? err.message : 'G-code prepare failed'
       console.error('[gcode] prepare failed', itemId, message)
@@ -860,6 +778,29 @@ function startOrderGcodePrep(itemId: string) {
       pruneOrderGcodeJobs()
     }
   })()
+}
+
+/** Prepare stored G-code for a design+printer via GitHub Actions (admin Designs UI). */
+export async function startDesignGcodePrepare(
+  db: Awaited<ReturnType<typeof getDb>>,
+  designId: string,
+  printerId: string,
+): Promise<{ status: 'ready' | 'running'; error?: string }> {
+  const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+  if (!designRow) throw new Error('Design not found.')
+  const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
+  if (gcodePaths[printerId]) {
+    if (objectStorageConfigured()) return { status: 'ready' }
+    const uploadsDir = await getUploadsDir()
+    if (fs.existsSync(path.join(uploadsDir, gcodePaths[printerId]!))) return { status: 'ready' }
+  }
+  if (!String(designRow.stl_path || '').trim()) {
+    throw new Error('Design has no model file to slice.')
+  }
+  await markDesignGcodePreparing(db, designId, printerId)
+  const dispatched = await dispatchGcodePrepareJob({ designId, printerId })
+  if (!dispatched.ok) throw new Error(dispatched.error)
+  return { status: 'running' }
 }
 
 const GRAMS_COLUMN: Record<string, string> = {
@@ -2169,7 +2110,54 @@ export async function handleCatalogApi(
     const rows = await db.all<Record<string, unknown>>(
       `SELECT * FROM designs WHERE status != 'archived' ORDER BY updated_at DESC`,
     )
-    send(res, 200, rows.map(rowToDesign).map(designDto))
+    send(res, 200, rows.map((row) => designDto(rowToDesign(row))))
+    return true
+  }
+
+  const designGcodePrepareMatch = /^\/api\/admin\/designs\/([^/]+)\/gcode\/prepare$/.exec(urlPath)
+  if (designGcodePrepareMatch && method === 'POST') {
+    const designId = designGcodePrepareMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'products')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const body = await readJson(req)
+    const printerId = String(body.printerId || 'pablo_p1s').trim()
+    if (!PRINTER_FIELD[printerId]) {
+      send(res, 400, { error: 'Choose a valid printer.' })
+      return true
+    }
+    try {
+      const result = await startDesignGcodePrepare(db, designId, printerId)
+      send(res, 200, result)
+    } catch (err) {
+      send(res, 400, { error: err instanceof Error ? err.message : 'Prepare failed' })
+    }
+    return true
+  }
+
+  const designGcodeStatusMatch = /^\/api\/admin\/designs\/([^/]+)\/gcode\/status$/.exec(urlPath)
+  if (designGcodeStatusMatch && method === 'GET') {
+    const designId = designGcodeStatusMatch[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'products')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const printerId = String(new URL(req.url || '', 'http://local').searchParams.get('printerId') || 'pablo_p1s')
+    const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+    if (!designRow) {
+      send(res, 404, { error: 'Design not found' })
+      return true
+    }
+    const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
+    const stored = gcodePaths[printerId] || ''
+    if (stored) {
+      send(res, 200, { status: 'ready' as const, storedName: stored })
+      return true
+    }
+    send(res, 200, { status: 'idle' as const })
     return true
   }
 

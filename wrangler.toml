@@ -1,0 +1,28 @@
+# PrintX on Cloudflare Workers Free + static assets (no Render sleep, $0/mo).
+# Secrets: wrangler secret put NAME  (or set in Dashboard → Workers → Settings)
+name = "printx"
+main = "workers/printx.ts"
+compatibility_date = "2025-10-11"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+html_handling = "auto-trailing-slash"
+
+[vars]
+PRINTX_COOKIE_DOMAIN = ".printx.pw"
+PRINTX_GITHUB_REPO = "Pab89154/printx"
+PRINTX_GITHUB_REF = "main"
+PRINTX_ADMIN_EMAIL = "pablo.molina@printx.pw"
+PRINTX_NOTIFY_EMAIL = "hello@printx.pw"
+PRINTX_MAIL_FROM = "PrintX <hello@printx.pw>"
+VAPID_SUBJECT = "mailto:hello@printx.pw"
+
+# Optional: bind Hyperdrive for Postgres (free tier 100k queries/day).
+# Create with: npx wrangler hyperdrive create printx-db --connection-string="$DATABASE_URL"
+# Then uncomment and paste the id:
+# [[hyperdrive]]
+# binding = "HYPERDRIVE"
+# id = "REPLACE_WITH_HYPERDRIVE_ID"
