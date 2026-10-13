@@ -349,46 +349,39 @@ create table if not exists push_subscriptions (
 -- The Node server connects with DATABASE_URL (postgres role) and bypasses RLS.
 -- RLS + revokes block the public Data API (anon / publishable key).
 -- Do NOT add permissive policies for anon — PrintX does not use client-side Supabase.
+-- Same script (safe to re-run): supabase/rls-lockdown.sql
 -- ---------------------------------------------------------------------------
 
-alter table users enable row level security;
-alter table sessions enable row level security;
-alter table schools enable row level security;
-alter table stands enable row level security;
-alter table products enable row level security;
-alter table custom_requests enable row level security;
-alter table contact_messages enable row level security;
-alter table mail_messages enable row level security;
-alter table mail_recipients enable row level security;
-alter table website_settings enable row level security;
-alter table pricing_settings enable row level security;
-alter table printers enable row level security;
-alter table designs enable row level security;
-alter table orders enable row level security;
-alter table order_items enable row level security;
-alter table profit_ledger enable row level security;
-alter table printer_settlements enable row level security;
-alter table refund_requests enable row level security;
-alter table discounts enable row level security;
-alter table push_subscriptions enable row level security;
-
-revoke all on table users from anon, authenticated;
-revoke all on table sessions from anon, authenticated;
-revoke all on table schools from anon, authenticated;
-revoke all on table stands from anon, authenticated;
-revoke all on table products from anon, authenticated;
-revoke all on table custom_requests from anon, authenticated;
-revoke all on table contact_messages from anon, authenticated;
-revoke all on table mail_messages from anon, authenticated;
-revoke all on table mail_recipients from anon, authenticated;
-revoke all on table website_settings from anon, authenticated;
-revoke all on table pricing_settings from anon, authenticated;
-revoke all on table printers from anon, authenticated;
-revoke all on table designs from anon, authenticated;
-revoke all on table orders from anon, authenticated;
-revoke all on table order_items from anon, authenticated;
-revoke all on table profit_ledger from anon, authenticated;
-revoke all on table printer_settlements from anon, authenticated;
-revoke all on table refund_requests from anon, authenticated;
-revoke all on table discounts from anon, authenticated;
-revoke all on table push_subscriptions from anon, authenticated;
+DO $$
+DECLARE
+  t text;
+  tables text[] := ARRAY[
+    'users',
+    'sessions',
+    'schools',
+    'stands',
+    'products',
+    'custom_requests',
+    'contact_messages',
+    'mail_messages',
+    'mail_recipients',
+    'website_settings',
+    'pricing_settings',
+    'printers',
+    'designs',
+    'orders',
+    'order_items',
+    'profit_ledger',
+    'printer_settlements',
+    'refund_requests',
+    'discounts',
+    'push_subscriptions'
+  ];
+BEGIN
+  FOREACH t IN ARRAY tables LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+      EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon, authenticated', t);
+    END IF;
+  END LOOP;
+END $$;

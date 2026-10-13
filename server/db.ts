@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { resolveImageUrl } from '../shared/imageUrl.ts'
 import { setPrimaryAdminUserId } from '../shared/permissions.ts'
 import type { Stand, WebsiteContent } from './types.ts'
-import { closeDbApi, getDbApi, UPLOADS_DIR, type DbApi } from './dbClient.ts'
+import { closeDbApi, getDbApi, usingPostgres, UPLOADS_DIR, type DbApi } from './dbClient.ts'
 
 export type Db = DbApi
 
@@ -1035,6 +1035,38 @@ async function seed(database: DbApi) {
   )
 }
 
+/** Supabase: enable RLS + revoke anon/authenticated so the public Data API cannot touch PrintX tables. */
+async function migrateRlsLockdown(database: DbApi) {
+  if (!usingPostgres()) return
+  try {
+    await database.exec(`
+DO $$
+DECLARE
+  t text;
+  tables text[] := ARRAY[
+    'users', 'sessions', 'schools', 'stands', 'products', 'custom_requests',
+    'contact_messages', 'mail_messages', 'mail_recipients', 'website_settings',
+    'pricing_settings', 'printers', 'designs', 'orders', 'order_items',
+    'profit_ledger', 'printer_settlements', 'refund_requests', 'discounts',
+    'push_subscriptions'
+  ];
+BEGIN
+  FOREACH t IN ARRAY tables LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+      EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon, authenticated', t);
+    END IF;
+  END LOOP;
+END $$;
+`)
+  } catch (err) {
+    console.warn(
+      '[printx] RLS lockdown skipped:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
 async function initDb(): Promise<DbApi> {
   const database = await getDbApi()
   await migrate(database)
@@ -1059,6 +1091,7 @@ async function initDb(): Promise<DbApi> {
   await migrateDesignPartsJson(database)
   await migrateOrderItemFilamentColors(database)
   await migrateCustomerAccounts(database)
+  await migrateRlsLockdown(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
   const { seedCatalogDefaults } = await import('./catalog.ts')
