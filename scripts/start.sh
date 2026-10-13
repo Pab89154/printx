@@ -44,7 +44,7 @@ fi
 if [[ -n "${PRINTX_SLICER_BIN:-}${PRINTX_SLICER_HOME:-}" ]]; then
   echo "[printx] slicer bin=${PRINTX_SLICER_BIN:-none} home=${PRINTX_SLICER_HOME:-none} profiles=${PRINTX_SLICER_PROFILES:-none}"
 else
-  echo "[printx] WARNING: no local slicer — Free Cloud Slicer G-code downloads will fail"
+  echo "[printx] no local slicer (Cloud Slicer pricing only; Free-plan G-code needs Save gcode or a local binary)"
 fi
 
 exec node --import tsx server/production.ts
