@@ -1,16 +1,34 @@
 import type Stripe from 'stripe'
 
-/** Flat US shipping options for PrintX Checkout (pay UPS at the counter later). */
+/**
+ * Flat US shipping options for PrintX Checkout (pay UPS at the counter later).
+ * Defaults match 2026 UPS® Simple Rate (Extra Small, ≤100 cu in) between the
+ * contiguous 48 — same price from SHIP_FROM_POSTAL regardless of destination zone.
+ * @see UPS Rate and Service Guide — Simple Rate (Ground / 3 Day Select / Next Day Air Saver)
+ */
 
 export const SHIP_FROM_POSTAL = '75072'
 
-const STANDARD_CENTS = Number(process.env.PRINTX_SHIP_STANDARD_CENTS || 599)
-const PRIORITY_CENTS = Number(process.env.PRINTX_SHIP_PRIORITY_CENTS || 1199)
-const EXPRESS_CENTS = Number(process.env.PRINTX_SHIP_EXPRESS_CENTS || 1999)
+/** UPS Simple Rate Extra Small — Ground */
+const UPS_SIMPLE_XS_GROUND_CENTS = 1300
+/** UPS Simple Rate Extra Small — 3 Day Select */
+const UPS_SIMPLE_XS_3DAY_CENTS = 2125
+/** UPS Simple Rate Extra Small — Next Day Air Saver */
+const UPS_SIMPLE_XS_NEXTDAY_SAVER_CENTS = 4445
+
+const STANDARD_CENTS = Number(
+  process.env.PRINTX_SHIP_STANDARD_CENTS || UPS_SIMPLE_XS_GROUND_CENTS,
+)
+const PRIORITY_CENTS = Number(
+  process.env.PRINTX_SHIP_PRIORITY_CENTS || UPS_SIMPLE_XS_3DAY_CENTS,
+)
+const EXPRESS_CENTS = Number(
+  process.env.PRINTX_SHIP_EXPRESS_CENTS || UPS_SIMPLE_XS_NEXTDAY_SAVER_CENTS,
+)
 
 /** Standard flat rate in cents — used for free-shipping promo credit at Checkout. */
 export function standardShippingCents(): number {
-  return cents(STANDARD_CENTS, 599)
+  return cents(STANDARD_CENTS, UPS_SIMPLE_XS_GROUND_CENTS)
 }
 
 function cents(n: number, fallback: number): number {
@@ -50,7 +68,9 @@ export function stripeCheckoutShippingFields(opts?: {
   | 'billing_address_collection'
   | 'customer_update'
 > {
-  const standardAmount = opts?.freeStandard ? 0 : cents(STANDARD_CENTS, 599)
+  const standardAmount = opts?.freeStandard
+    ? 0
+    : cents(STANDARD_CENTS, UPS_SIMPLE_XS_GROUND_CENTS)
   return {
     // Always collect a billing address so we have a street even if ship-to is missing in API.
     billing_address_collection: 'required',
@@ -82,7 +102,10 @@ export function stripeCheckoutShippingFields(opts?: {
       {
         shipping_rate_data: {
           type: 'fixed_amount',
-          fixed_amount: { amount: cents(PRIORITY_CENTS, 1199), currency: 'usd' },
+          fixed_amount: {
+            amount: cents(PRIORITY_CENTS, UPS_SIMPLE_XS_3DAY_CENTS),
+            currency: 'usd',
+          },
           display_name: 'Priority',
           delivery_estimate: {
             minimum: { unit: 'business_day', value: 2 },
@@ -93,7 +116,10 @@ export function stripeCheckoutShippingFields(opts?: {
       {
         shipping_rate_data: {
           type: 'fixed_amount',
-          fixed_amount: { amount: cents(EXPRESS_CENTS, 1999), currency: 'usd' },
+          fixed_amount: {
+            amount: cents(EXPRESS_CENTS, UPS_SIMPLE_XS_NEXTDAY_SAVER_CENTS),
+            currency: 'usd',
+          },
           display_name: 'Express',
           delivery_estimate: {
             minimum: { unit: 'business_day', value: 1 },
@@ -340,9 +366,13 @@ export function parseCheckoutShipping(
   }
   if (!shippingMethod) {
     const centsPaid = Math.round(shippingUsd * 100)
-    if (centsPaid === cents(STANDARD_CENTS, 599)) shippingMethod = 'Standard'
-    else if (centsPaid === cents(PRIORITY_CENTS, 1199)) shippingMethod = 'Priority'
-    else if (centsPaid === cents(EXPRESS_CENTS, 1999)) shippingMethod = 'Express'
+    if (centsPaid === cents(STANDARD_CENTS, UPS_SIMPLE_XS_GROUND_CENTS)) {
+      shippingMethod = 'Standard'
+    } else if (centsPaid === cents(PRIORITY_CENTS, UPS_SIMPLE_XS_3DAY_CENTS)) {
+      shippingMethod = 'Priority'
+    } else if (centsPaid === cents(EXPRESS_CENTS, UPS_SIMPLE_XS_NEXTDAY_SAVER_CENTS)) {
+      shippingMethod = 'Express'
+    }
     else if (shippingUsd > 0) shippingMethod = 'Shipping'
   }
 
