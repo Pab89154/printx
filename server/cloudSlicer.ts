@@ -86,7 +86,8 @@ export async function uploadStlFile(
   return fileId
 }
 
-async function queueQuote(creds: CloudSlicerCreds, fileId: string): Promise<string> {
+/** POST /v1/quote/fdm/:fileId — start a Cloud Slicer FDM quote. */
+async function startCloudSlicerQuote(creds: CloudSlicerCreds, fileId: string): Promise<string> {
   const res = await fetch(`${apiBase()}/v1/quote/fdm/${encodeURIComponent(fileId)}`, {
     method: 'POST',
     headers: {
@@ -361,7 +362,7 @@ export async function quoteStlForPrinter(
   const captureGcode = opts?.captureGcode !== false
   const filename = path.basename(localPath) || 'design.stl'
   const fileId = await uploadStlFile(creds, localPath, filename)
-  const quoteId = await enqueueQuote(creds, fileId)
+  const quoteId = await startCloudSlicerQuote(creds, fileId)
 
   let earlyGcode: { buffer: Buffer; filename: string } | null = null
   const deadline = Date.now() + 360_000
@@ -465,7 +466,7 @@ export async function requoteFileAndDownloadGcode(
 ): Promise<{ buffer: Buffer; filename: string; quoteId: string; fileId: string; grams: number; hours: number }> {
   const id = fileId.trim()
   if (!id) throw new Error('Missing Cloud Slicer file id.')
-  const quoteId = await queueQuote(creds, id)
+  const quoteId = await startCloudSlicerQuote(creds, id)
   const result = await waitForQuoteAndDownloadGcode(creds, quoteId)
   return {
     buffer: result.buffer,
