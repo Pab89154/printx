@@ -659,8 +659,8 @@ async function openOrderItemGcode(
   if (job?.status === 'ready' && job.buffer?.length) {
     const buffer = job.buffer
     const filename = job.filename || `printx-${itemId.slice(0, 8)}.gcode`
-    // Drop RAM copy after one use.
-    orderGcodeJobs.set(itemId, { status: 'ready', filename, updatedAt: Date.now() })
+    // Keep the buffer until we have durable storage — dropping it made the next
+    // Download click return 409 while status still said "ready".
     return { kind: 'buffer', buffer, filename }
   }
   return null
@@ -680,7 +680,8 @@ async function orderItemGcodeReady(
     if (objectStorageConfigured()) return true
   }
   const job = orderGcodeJobs.get(itemId)
-  return Boolean(job?.status === 'ready' && (job.buffer?.length || job.filename))
+  // Filename alone is not enough — openOrderItemGcode needs a RAM buffer or storage.
+  return Boolean(job?.status === 'ready' && job.buffer?.length)
 }
 
 /**

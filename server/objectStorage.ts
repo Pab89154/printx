@@ -252,14 +252,9 @@ export async function resolveStoredFile(
   const uploadsDir = await getUploadsDir()
   const localPath = path.join(uploadsDir, fileName)
   if (fs.existsSync(localPath)) {
-    if (objectStorageConfigured()) {
-      void uploadStoredFile(localPath, fileName).catch((err) => {
-        console.warn(
-          '[object-storage] backfill failed:',
-          err instanceof Error ? err.message : err,
-        )
-      })
-    }
+    // Do not backfill-upload here. Reading a multi‑MB STL into RAM to re-upload
+    // while the local slicer is also loading it OOMs free-tier Render and stalls
+    // Download G-code. Uploads happen at write time (storeGcodeBuffer / design save).
     return { path: localPath }
   }
 

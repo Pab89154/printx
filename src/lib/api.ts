@@ -474,8 +474,9 @@ export const api = {
             )
           }
           if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
-          // Free-plan capture + automatic re-slices can take a while; fail with a clear error.
+          // Free-plan local slice can take several minutes; fail with a clear error.
           const deadline = Date.now() + 12 * 60_000
+          let idleRestarts = 0
           while (Date.now() < deadline) {
             await new Promise((r) => setTimeout(r, 2500))
             st = await withTimeout(
@@ -486,6 +487,13 @@ export const api = {
             if (st.status === 'ready') break
             if (st.status === 'error') throw new Error(st.error || 'G-code prepare failed')
             if (st.status === 'idle') {
+              // Server restart mid-slice clears in-memory jobs. Retry a couple times, then stop.
+              idleRestarts += 1
+              if (idleRestarts > 2) {
+                throw new Error(
+                  'G-code prepare was interrupted (server restarted or ran out of memory). Tap Download again.',
+                )
+              }
               st = await withTimeout(
                 request<PrepStatus>(`${base}/prepare`, { method: 'POST', body: '{}' }),
                 20_000,
@@ -500,7 +508,18 @@ export const api = {
             )
           }
         }
-        await downloadAuthFile(base, `printx-${itemId.slice(0, 8)}.gcode`, 'G-code download failed')
+        try {
+          await downloadAuthFile(base, `printx-${itemId.slice(0, 8)}.gcode`, 'G-code download failed')
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : ''
+          // Race: status flipped to ready before the file was openable — one retry.
+          if (/still preparing|NOT_READY|409/i.test(msg)) {
+            await new Promise((r) => setTimeout(r, 1500))
+            await downloadAuthFile(base, `printx-${itemId.slice(0, 8)}.gcode`, 'G-code download failed')
+            return
+          }
+          throw err
+        }
       },
     },
     money: {
