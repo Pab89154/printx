@@ -423,6 +423,26 @@ export const api = {
             method: 'POST',
             body: JSON.stringify(body),
           }),
+        update: (
+          id: string,
+          body: {
+            code: string
+            kind:
+              | 'percent'
+              | 'amount'
+              | 'free_shipping'
+              | 'percent_and_shipping'
+              | 'amount_and_shipping'
+            percentOff?: number
+            amountOffCents?: number
+            maxRedemptions?: number | null
+            visibleToCustomers?: boolean
+          },
+        ) =>
+          request<{ discount: { id: string; code: string } }>(`/api/admin/discounts/${id}`, {
+            method: 'PATCH',
+            body: JSON.stringify(body),
+          }),
         setVisibility: (id: string, visibleToCustomers: boolean) =>
           request<{ ok: true; visibleToCustomers: boolean }>(
             `/api/admin/discounts/${id}/visibility`,

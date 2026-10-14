@@ -13,8 +13,22 @@ export type DbApi = {
   all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Promise<T[]>
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-export const DATA_DIR = process.env.PRINTX_DATA_DIR ?? path.join(__dirname, '..', 'data')
+function resolveDataDir(): string {
+  const fromEnv = process.env.PRINTX_DATA_DIR?.trim()
+  if (fromEnv) return fromEnv
+  // Workers bundle has no usable import.meta.url for file paths; local Node does.
+  try {
+    const metaUrl = import.meta.url
+    if (typeof metaUrl === 'string' && metaUrl.startsWith('file:')) {
+      return path.join(path.dirname(fileURLToPath(metaUrl)), '..', 'data')
+    }
+  } catch {
+    /* Cloudflare Workers / non-file URL */
+  }
+  return '/tmp/printx-data'
+}
+
+export const DATA_DIR = resolveDataDir()
 export const UPLOADS_DIR = path.join(DATA_DIR, 'uploads')
 
 function toPgPlaceholders(sql: string): string {
@@ -117,6 +131,65 @@ function createPostgresApi(activePool: pg.Pool, gen: number, getGeneration: () =
   }
 }
 
+/** Cloudflare Workers: pg.Pool idle sockets hang the isolate — use short-lived Clients. */
+function createPostgresClientApi(connectionString: string): DbApi {
+  async function withClient<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+    const client = new pg.Client({
+      connectionString,
+      // Hyperdrive's local connection string is plaintext to the edge proxy.
+      ssl: connectionString.includes('localhost') || connectionString.includes('127.0.0.1')
+        ? undefined
+        : { rejectUnauthorized: false },
+      connectionTimeoutMillis: 10_000,
+    })
+    await client.connect()
+    try {
+      return await fn(client)
+    } finally {
+      try {
+        await client.end()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  return {
+    async exec(sql: string) {
+      await withClient(async (client) => {
+        for (const statement of splitSqlStatements(sql)) {
+          await client.query(statement)
+        }
+      })
+    },
+    async run(sql: string, ...params: unknown[]) {
+      return withClient(async (client) => {
+        const result = await client.query(toPgPlaceholders(sql), params)
+        return { changes: result.rowCount ?? 0 }
+      })
+    },
+    async get<T = Record<string, unknown>>(sql: string, ...params: unknown[]) {
+      return withClient(async (client) => {
+        const result = await client.query(toPgPlaceholders(sql), params)
+        return result.rows[0] as T | undefined
+      })
+    },
+    async all<T = Record<string, unknown>>(sql: string, ...params: unknown[]) {
+      return withClient(async (client) => {
+        const result = await client.query(toPgPlaceholders(sql), params)
+        return result.rows as T[]
+      })
+    },
+  }
+}
+
+function isCloudflareWorkerRuntime(): boolean {
+  return (
+    process.env.PRINTX_REQUIRE_OBJECT_STORAGE === '1' ||
+    typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined'
+  )
+}
+
 function createSqliteApi(database: {
   exec(sql: string): void
   prepare(sql: string): {
@@ -195,10 +268,21 @@ export async function getDbApi(): Promise<DbApi> {
       api = null
     }
 
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+    const onWorker = isCloudflareWorkerRuntime()
+    if (!onWorker) {
+      try {
+        fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+      } catch (err) {
+        console.warn('[printx] could not create uploads dir', err)
+      }
+    }
 
     const databaseUrl = process.env.DATABASE_URL?.trim()
     if (databaseUrl) {
+      if (onWorker) {
+        api = createPostgresClientApi(databaseUrl)
+        console.log('[printx] Using Postgres via short-lived Clients (Workers/Hyperdrive)')
+      } else {
       const sessionPooler = isSessionPoolerUrl(databaseUrl)
       const envMax = Number(process.env.PRINTX_PG_POOL_MAX || 1)
       // Session mode (Supabase :5432) caps ~15 clients across the whole project.
@@ -230,6 +314,7 @@ export async function getDbApi(): Promise<DbApi> {
           sessionPooler ? ', session-pooler' : ''
         })`,
       )
+      }
     } else {
       const { DatabaseSync } = await import('node:sqlite')
       fs.mkdirSync(DATA_DIR, { recursive: true })

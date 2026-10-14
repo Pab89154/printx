@@ -25,6 +25,7 @@ export type WorkerEnv = {
   RESEND_API_KEY?: string
   PRINTX_NOTIFY_EMAIL?: string
   PRINTX_MAIL_FROM?: string
+  PRINTX_PUBLIC_ORIGIN?: string
   VAPID_PUBLIC_KEY?: string
   VAPID_PRIVATE_KEY?: string
   VAPID_SUBJECT?: string
@@ -53,13 +54,15 @@ export function applyWorkerEnv(env: WorkerEnv) {
     ['RESEND_API_KEY', 'RESEND_API_KEY'],
     ['PRINTX_NOTIFY_EMAIL', 'PRINTX_NOTIFY_EMAIL'],
     ['PRINTX_MAIL_FROM', 'PRINTX_MAIL_FROM'],
+    ['PRINTX_PUBLIC_ORIGIN', 'PRINTX_PUBLIC_ORIGIN'],
     ['VAPID_PUBLIC_KEY', 'VAPID_PUBLIC_KEY'],
     ['VAPID_PRIVATE_KEY', 'VAPID_PRIVATE_KEY'],
     ['VAPID_SUBJECT', 'VAPID_SUBJECT'],
   ]
   for (const [from, to] of map) {
     const v = env[from]
-    if (typeof v === 'string' && v && process.env[to] === undefined) {
+    // Prefer Worker bindings/secrets over any empty/stale process.env values.
+    if (typeof v === 'string' && v.trim()) {
       process.env[to] = v
     }
   }

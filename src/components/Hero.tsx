@@ -46,7 +46,7 @@ export function Hero() {
           </div>
 
           <h1 className="text-4xl font-extrabold leading-tight tracking-tight text-navy sm:text-5xl lg:text-6xl">
-            {content?.heroHeadline?.trim() || 'Your Ideas. Our Prints.'}
+            {content?.heroHeadline?.trim() || 'Your Ideas. Made Real.'}
           </h1>
 
           <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted">

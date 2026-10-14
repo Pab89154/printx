@@ -1004,7 +1004,7 @@ async function seed(database: DbApi) {
   )
 
   const defaults: WebsiteContent = {
-    heroHeadline: 'Your Ideas. Our Prints.',
+    heroHeadline: 'Your Ideas. Made Real.',
     heroDescription: 'Student-made 3D prints, sold locally at school stands throughout the DFW area.',
     aboutText: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across the DFW area — where students can see, touch, and buy 3D-printed products made by people their age.',
     aboutTeam: 'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
@@ -1206,7 +1206,7 @@ export async function getWebsiteContent(database: DbApi): Promise<WebsiteContent
   }
 
   const defaults: WebsiteContent = {
-    heroHeadline: 'Your Ideas. Our Prints.',
+    heroHeadline: 'Your Ideas. Made Real.',
     heroDescription: 'Student-made 3D prints, sold locally at school stands throughout the DFW area.',
     aboutText:
       'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across the DFW area — where students can see, touch, and buy 3D-printed products made by people their age.',

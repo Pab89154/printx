@@ -3550,9 +3550,232 @@ export async function handleCatalogApi(
     return true
   }
 
-  const discountDelete = /^\/api\/admin\/discounts\/([^/]+)$/.exec(urlPath)
-  if (discountDelete && method === 'DELETE') {
-    const discountId = discountDelete[1]!
+  const discountMutate = /^\/api\/admin\/discounts\/([^/]+)$/.exec(urlPath)
+  if (discountMutate && method === 'PATCH') {
+    const discountId = discountMutate[1]!
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const stripe = stripeClient()
+    if (!stripe) {
+      send(res, 503, { error: 'Stripe is not configured.' })
+      return true
+    }
+    const existing = await db.get<{
+      id: string
+      code: string
+      kind: string
+      percent_off: number | null
+      amount_off_cents: number | null
+      max_redemptions: number | null
+      stripe_coupon_id: string
+      stripe_promotion_code_id: string
+      active: number | string
+      visible_to_customers: number | string
+    }>('SELECT * FROM discounts WHERE id = ?', discountId)
+    if (!existing) {
+      send(res, 404, { error: 'Discount not found' })
+      return true
+    }
+
+    const body = await readJson(req)
+    const code = sanitizeText(String(body.code ?? existing.code), 40).toUpperCase().replace(/\s+/g, '')
+    if (!code || code.length < 3) {
+      send(res, 400, { error: 'Enter a promo code (at least 3 characters).' })
+      return true
+    }
+    const dup = await db.get<{ id: string }>(
+      'SELECT id FROM discounts WHERE code = ? AND id != ?',
+      code,
+      discountId,
+    )
+    if (dup) {
+      send(res, 400, { error: 'Another promo code already uses that code.' })
+      return true
+    }
+
+    const kindRaw = String(body.kind ?? existing.kind ?? 'percent')
+    type DiscountKind =
+      | 'percent'
+      | 'amount'
+      | 'free_shipping'
+      | 'percent_and_shipping'
+      | 'amount_and_shipping'
+    let kind: DiscountKind
+    if (
+      kindRaw === 'free_shipping' ||
+      kindRaw === 'percent_and_shipping' ||
+      kindRaw === 'amount_and_shipping'
+    ) {
+      if (!admin.isMainAdmin) {
+        send(res, 403, {
+          error: 'Only main admins can use free-shipping or item+shipping promo codes.',
+        })
+        return true
+      }
+      kind = kindRaw
+    } else if (kindRaw === 'amount') {
+      kind = 'amount'
+    } else {
+      kind = 'percent'
+    }
+
+    const percentOff =
+      body.percentOff != null && body.percentOff !== ''
+        ? Number(body.percentOff)
+        : Number(existing.percent_off)
+    const amountOffCents =
+      kind === 'free_shipping'
+        ? standardShippingCents()
+        : body.amountOffCents != null && body.amountOffCents !== ''
+          ? Math.round(Number(body.amountOffCents) || 0)
+          : Number(existing.amount_off_cents) || 0
+    const maxRedemptions =
+      body.maxRedemptions === null || body.maxRedemptions === ''
+        ? null
+        : body.maxRedemptions != null
+          ? Math.max(1, Math.floor(Number(body.maxRedemptions)))
+          : existing.max_redemptions != null
+            ? Number(existing.max_redemptions)
+            : null
+    const visibleToCustomers =
+      body.visibleToCustomers === true || body.visibleToCustomers === 1 || body.visibleToCustomers === '1'
+        ? 1
+        : body.visibleToCustomers === false ||
+            body.visibleToCustomers === 0 ||
+            body.visibleToCustomers === '0'
+          ? 0
+          : Number(existing.visible_to_customers) ? 1 : 0
+
+    const usesPercent = kind === 'percent' || kind === 'percent_and_shipping'
+    if (usesPercent) {
+      if (!(percentOff > 0 && percentOff <= 100)) {
+        send(res, 400, { error: 'Percent off must be between 1 and 100.' })
+        return true
+      }
+    } else if (!(amountOffCents > 0)) {
+      send(res, 400, { error: 'Amount off must be greater than zero.' })
+      return true
+    }
+
+    const prevPercent = existing.percent_off != null ? Number(existing.percent_off) : null
+    const prevAmount = existing.amount_off_cents != null ? Number(existing.amount_off_cents) : null
+    const prevMax =
+      existing.max_redemptions != null ? Number(existing.max_redemptions) : null
+    const stripeNeedsRecreate =
+      code !== String(existing.code || '') ||
+      kind !== String(existing.kind || 'percent') ||
+      (usesPercent
+        ? percentOff !== prevPercent
+        : amountOffCents !== prevAmount)
+
+    const now = new Date().toISOString()
+    const keepActive = Boolean(Number(existing.active))
+
+    try {
+      let stripeCouponId = String(existing.stripe_coupon_id || '')
+      let stripePromotionCodeId = String(existing.stripe_promotion_code_id || '')
+
+      if (stripeNeedsRecreate) {
+        const couponName =
+          kind === 'free_shipping'
+            ? `${code} (free shipping)`
+            : kind === 'percent_and_shipping'
+              ? `${code} (${percentOff}% + free ship)`
+              : kind === 'amount_and_shipping'
+                ? `${code} ($ off + free ship)`
+                : code
+
+        // Free the old Stripe code string before creating the replacement.
+        if (stripePromotionCodeId) {
+          try {
+            await stripe.promotionCodes.update(stripePromotionCodeId, { active: false })
+          } catch (err) {
+            console.warn('[printx] Could not deactivate old Stripe promotion code', err)
+          }
+        }
+        if (stripeCouponId) {
+          try {
+            await stripe.coupons.del(stripeCouponId)
+          } catch (err) {
+            console.warn('[printx] Could not delete old Stripe coupon', err)
+          }
+        }
+
+        const coupon = await stripe.coupons.create({
+          ...(usesPercent
+            ? { percent_off: percentOff }
+            : { amount_off: amountOffCents, currency: 'usd' }),
+          duration: 'once',
+          name: couponName,
+        })
+        const promo = await stripe.promotionCodes.create({
+          promotion: { type: 'coupon', coupon: coupon.id },
+          code,
+          active: keepActive,
+          ...(maxRedemptions ? { max_redemptions: maxRedemptions } : {}),
+        })
+        stripeCouponId = coupon.id
+        stripePromotionCodeId = promo.id
+      } else {
+        // Soft fields only — update Stripe max redemptions when possible.
+        if (stripePromotionCodeId && maxRedemptions !== prevMax) {
+          try {
+            await stripe.promotionCodes.update(stripePromotionCodeId, {
+              ...(maxRedemptions != null ? { max_redemptions: maxRedemptions } : {}),
+            })
+          } catch (err) {
+            send(res, 400, {
+              error:
+                err instanceof Error
+                  ? err.message
+                  : 'Could not update max redemptions in Stripe. Try a higher limit, or change the discount amount to recreate the code.',
+            })
+            return true
+          }
+        }
+      }
+
+      await db.run(
+        `UPDATE discounts SET
+          code = ?, kind = ?, percent_off = ?, amount_off_cents = ?, max_redemptions = ?,
+          stripe_coupon_id = ?, stripe_promotion_code_id = ?, visible_to_customers = ?, updated_at = ?
+         WHERE id = ?`,
+        code,
+        kind,
+        usesPercent ? percentOff : null,
+        usesPercent ? null : amountOffCents,
+        maxRedemptions,
+        stripeCouponId,
+        stripePromotionCodeId,
+        visibleToCustomers,
+        now,
+        discountId,
+      )
+
+      send(res, 200, {
+        discount: {
+          id: discountId,
+          code,
+          kind,
+          percentOff: usesPercent ? percentOff : null,
+          amountOffCents: usesPercent ? null : amountOffCents,
+          maxRedemptions,
+          active: keepActive,
+          visibleToCustomers: Boolean(visibleToCustomers),
+          stripePromotionCodeId,
+        },
+      })
+    } catch (err) {
+      send(res, 400, { error: err instanceof Error ? err.message : 'Could not update discount' })
+    }
+    return true
+  }
+
+  if (discountMutate && method === 'DELETE') {
+    const discountId = discountMutate[1]!
     const admin = await requireAdmin(req)
     if (!admin || !adminCan(admin, 'orders')) {
       send(res, 403, { error: 'Forbidden' })

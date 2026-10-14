@@ -4,6 +4,7 @@ name = "printx"
 main = "workers/printx.ts"
 compatibility_date = "2025-10-11"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
 [assets]
 directory = "./dist"
@@ -20,9 +21,18 @@ PRINTX_NOTIFY_EMAIL = "hello@printx.pw"
 PRINTX_MAIL_FROM = "PrintX <hello@printx.pw>"
 VAPID_SUBJECT = "mailto:hello@printx.pw"
 
-# Optional: bind Hyperdrive for Postgres (free tier 100k queries/day).
-# Create with: npx wrangler hyperdrive create printx-db --connection-string="$DATABASE_URL"
-# Then uncomment and paste the id:
-# [[hyperdrive]]
-# binding = "HYPERDRIVE"
-# id = "REPLACE_WITH_HYPERDRIVE_ID"
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "ef29c678d4df4aa08f77ade13c43ca69"
+
+[[routes]]
+pattern = "printx.pw"
+custom_domain = true
+
+[[routes]]
+pattern = "www.printx.pw"
+custom_domain = true
+
+[[routes]]
+pattern = "portal.printx.pw"
+custom_domain = true

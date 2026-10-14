@@ -39,13 +39,11 @@ npx wrangler secret put PRINTX_GITHUB_TOKEN   # PAT with Actions:write for Prepa
 npm run cf:deploy
 ```
 
-7. Workers → **printx** → **Settings** → **Domains** → add `printx.pw` and `portal.printx.pw`.
+7. Delete Render CNAMEs for `@`, `www`, and `portal` (they block Worker custom domains), then deploy with `[[routes]]` + `custom_domain = true` in `wrangler.toml` (already configured).
 
-8. DNS: point `@` and `portal` to the Worker (Cloudflare will offer the correct records). Remove any CNAME that still targets `*.onrender.com`.
+8. Retire `printx-wake` (`npx wrangler delete printx-wake --force`).
 
-9. Retire `printx-wake` (no longer needed — the app itself does not sleep).
-
-10. Delete the Render web service when health checks pass on Cloudflare.
+9. Suspend/delete the Render web service when `https://printx.pw/api/health` shows `"runtime"` / object storage OK.
 
 ## G-code
 

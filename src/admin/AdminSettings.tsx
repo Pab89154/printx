@@ -452,9 +452,11 @@ export function AdminSettings() {
         )}
         {pushState === 'no_vapid' && (
           <p className="mt-3 text-sm text-amber-700">
-            Push keys missing or invalid on Render. Run{' '}
-            <code className="rounded bg-slate-100 px-1">npx web-push generate-vapid-keys</code>, paste both
-            keys into VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY (no quotes), save, and redeploy.
+            Push keys missing or invalid on the Cloudflare Worker. Set matching{' '}
+            <code className="rounded bg-slate-100 px-1">VAPID_PUBLIC_KEY</code> and{' '}
+            <code className="rounded bg-slate-100 px-1">VAPID_PRIVATE_KEY</code> (from{' '}
+            <code className="rounded bg-slate-100 px-1">npx web-push generate-vapid-keys</code>, no quotes),
+            redeploy, then try again.
           </p>
         )}
         {pushState === 'denied' && (

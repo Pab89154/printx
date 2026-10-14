@@ -28,6 +28,18 @@ const MAIN_ADMIN_KINDS: DiscountKind[] = [
   'amount_and_shipping',
 ]
 
+function asDiscountKind(raw: string): DiscountKind {
+  if (
+    raw === 'amount' ||
+    raw === 'free_shipping' ||
+    raw === 'percent_and_shipping' ||
+    raw === 'amount_and_shipping'
+  ) {
+    return raw
+  }
+  return 'percent'
+}
+
 function discountLabel(d: Pick<Discount, 'kind' | 'percentOff' | 'amountOffCents'>) {
   if (d.kind === 'free_shipping') return 'Free standard shipping'
   if (d.kind === 'percent_and_shipping') return `${d.percentOff}% off + free standard shipping`
@@ -43,6 +55,7 @@ export function AdminDiscounts() {
   const [discounts, setDiscounts] = useState<Discount[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [kind, setKind] = useState<DiscountKind>('percent')
   const [percentOff, setPercentOff] = useState('10')
@@ -65,25 +78,56 @@ export function AdminDiscounts() {
     if (!isMainAdmin && MAIN_ADMIN_KINDS.includes(kind)) setKind('percent')
   }, [isMainAdmin, kind])
 
-  async function onCreate(e: FormEvent) {
+  function resetForm() {
+    setEditingId(null)
+    setCode('')
+    setKind('percent')
+    setPercentOff('10')
+    setAmountDollars('5')
+    setMaxRedemptions('')
+    setVisibleToCustomers(false)
+  }
+
+  function startEdit(d: Discount) {
+    setError('')
+    setEditingId(d.id)
+    setCode(d.code)
+    const nextKind = asDiscountKind(d.kind)
+    setKind(
+      !isMainAdmin && MAIN_ADMIN_KINDS.includes(nextKind) ? 'percent' : nextKind,
+    )
+    setPercentOff(d.percentOff != null ? String(d.percentOff) : '10')
+    setAmountDollars(
+      d.amountOffCents != null ? (d.amountOffCents / 100).toFixed(2) : '5',
+    )
+    setMaxRedemptions(d.maxRedemptions != null ? String(d.maxRedemptions) : '')
+    setVisibleToCustomers(d.visibleToCustomers)
+  }
+
+  async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
     setError('')
     try {
       const usesPercent = kind === 'percent' || kind === 'percent_and_shipping'
       const usesAmount = kind === 'amount' || kind === 'amount_and_shipping'
-      await api.catalog.orders.discounts.create({
+      const body = {
         code,
         kind,
         percentOff: usesPercent ? Number(percentOff) : undefined,
         amountOffCents: usesAmount ? Math.round(Number(amountDollars) * 100) : undefined,
         maxRedemptions: maxRedemptions.trim() ? Number(maxRedemptions) : null,
         visibleToCustomers,
-      })
-      setCode('')
+      }
+      if (editingId) {
+        await api.catalog.orders.discounts.update(editingId, body)
+      } else {
+        await api.catalog.orders.discounts.create(body)
+      }
+      resetForm()
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Create failed')
+      setError(err instanceof Error ? err.message : editingId ? 'Update failed' : 'Create failed')
     } finally {
       setBusy(false)
     }
@@ -115,6 +159,7 @@ export function AdminDiscounts() {
     setError('')
     try {
       await api.catalog.orders.discounts.remove(pendingDelete.id)
+      if (editingId === pendingDelete.id) resetForm()
       setPendingDelete(null)
       await load()
     } catch (err) {
@@ -128,6 +173,7 @@ export function AdminDiscounts() {
     setError('')
     try {
       await api.catalog.orders.discounts.setVisibility(id, next)
+      if (editingId === id) setVisibleToCustomers(next)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not update visibility')
@@ -136,6 +182,7 @@ export function AdminDiscounts() {
 
   const usesPercent = kind === 'percent' || kind === 'percent_and_shipping'
   const usesAmount = kind === 'amount' || kind === 'amount_and_shipping'
+  const editing = Boolean(editingId)
 
   return (
     <div className="space-y-6">
@@ -149,8 +196,17 @@ export function AdminDiscounts() {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <form onSubmit={(e) => void onCreate(e)} className="rounded-2xl border bg-white p-5 space-y-3">
-        <p className="text-sm font-semibold text-navy">New promo code</p>
+      <form onSubmit={(e) => void onSubmit(e)} className="rounded-2xl border bg-white p-5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-navy">
+            {editing ? `Edit promo code` : 'New promo code'}
+          </p>
+          {editing ? (
+            <button type="button" className="btn btn-ghost btn-compact" onClick={() => resetForm()}>
+              Cancel edit
+            </button>
+          ) : null}
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-sm">
             Code
@@ -237,7 +293,13 @@ export function AdminDiscounts() {
           Show on customer account page (optional — off by default)
         </label>
         <button type="submit" className="btn btn-primary" disabled={busy}>
-          {busy ? 'Creating…' : 'Create in Stripe'}
+          {busy
+            ? editing
+              ? 'Saving…'
+              : 'Creating…'
+            : editing
+              ? 'Save changes'
+              : 'Create in Stripe'}
         </button>
       </form>
 
@@ -250,7 +312,12 @@ export function AdminDiscounts() {
             {discounts.map((d) => (
               <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
                 <div>
-                  <p className="font-semibold text-navy">{d.code}</p>
+                  <p className="font-semibold text-navy">
+                    {d.code}
+                    {editingId === d.id ? (
+                      <span className="ml-2 text-xs font-medium text-electric">editing</span>
+                    ) : null}
+                  </p>
                   <p className="text-xs text-muted">
                     {discountLabel(d)}
                     {d.maxRedemptions ? ` · max ${d.maxRedemptions}` : ''}
@@ -261,6 +328,13 @@ export function AdminDiscounts() {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-compact"
+                    onClick={() => startEdit(d)}
+                  >
+                    Edit
+                  </button>
                   <button
                     type="button"
                     className="btn btn-ghost btn-compact"
