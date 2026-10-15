@@ -77,9 +77,14 @@ export function vapidConfigError(): string | null {
   return null
 }
 
+/**
+ * Send via fetch — web-push's sendNotification uses Node https.request, which
+ * fails or never completes on Cloudflare Workers even with nodejs_compat.
+ */
 async function sendToSubscription(row: SubRow, payload: PushPayload): Promise<'ok' | 'gone' | 'error'> {
   try {
-    await webpush.sendNotification(
+    if (!configureVapid()) return 'error'
+    const details = webpush.generateRequestDetails(
       {
         endpoint: row.endpoint,
         keys: { p256dh: row.p256dh, auth: row.auth },
@@ -87,13 +92,67 @@ async function sendToSubscription(row: SubRow, payload: PushPayload): Promise<'o
       JSON.stringify(payload),
       { TTL: 60 * 60 * 12 },
     )
-    return 'ok'
+    let body: BodyInit | undefined
+    if (details.body != null) {
+      if (typeof details.body === 'string') body = details.body
+      else if (Buffer.isBuffer(details.body)) body = new Uint8Array(details.body)
+      else body = details.body as BodyInit
+    }
+    const res = await fetch(details.endpoint, {
+      method: details.method,
+      headers: details.headers as Record<string, string>,
+      body,
+    })
+    if (res.status === 201 || res.status === 200) return 'ok'
+    if (res.status === 404 || res.status === 410) return 'gone'
+    const text = await res.text().catch(() => '')
+    // Old Render-era subs after VAPID rotation — drop so the phone can re-enable cleanly.
+    if (
+      res.status === 403 ||
+      res.status === 400 ||
+      /vapid|do not correspond|VapidPkHashMismatch/i.test(text)
+    ) {
+      console.warn('[push] dropping stale subscription', row.endpoint.slice(0, 48), res.status)
+      return 'gone'
+    }
+    console.warn('[push]', row.endpoint.slice(0, 48), res.status, text.slice(0, 200))
+    return 'error'
   } catch (err) {
     const status = (err as { statusCode?: number })?.statusCode
     if (status === 404 || status === 410) return 'gone'
     console.warn('[push]', row.endpoint.slice(0, 48), err instanceof Error ? err.message : err)
     return 'error'
   }
+}
+
+/** Send a test notification to every device registered for this admin. */
+export async function sendTestPushToUser(
+  db: DbApi,
+  userId: string,
+): Promise<{ sent: number; failed: number; removed: number }> {
+  if (!pushConfigured()) {
+    throw new Error(vapidConfigError() || 'Push is not configured.')
+  }
+  const rows = await db.all<SubRow>(
+    `SELECT id, user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?`,
+    userId,
+  )
+  let sent = 0
+  let failed = 0
+  let removed = 0
+  for (const row of rows) {
+    const result = await sendToSubscription(row, {
+      title: 'PrintX',
+      body: 'Test notification — your Pixel (or phone) is connected.',
+      url: '/settings',
+    })
+    if (result === 'ok') sent += 1
+    else if (result === 'gone') {
+      await db.run('DELETE FROM push_subscriptions WHERE id = ?', row.id)
+      removed += 1
+    } else failed += 1
+  }
+  return { sent, failed, removed }
 }
 
 async function deliver(db: DbApi, rows: SubRow[], payload: PushPayload): Promise<void> {

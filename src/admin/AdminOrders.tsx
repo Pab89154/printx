@@ -454,7 +454,11 @@ export function AdminOrders() {
                         >
                           {gcodeBusyId === item.id
                             ? 'Slicing / downloading…'
-                            : `Download G-code${
+                            : `${
+                                (item.filamentColorIds?.length || 0) > 1
+                                  ? 'Download G-codes'
+                                  : 'Download G-code'
+                              }${
                                 item.assignedPrinterId
                                   ? ` · ${
                                       printers.find((p) => p.id === item.assignedPrinterId)

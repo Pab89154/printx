@@ -473,7 +473,12 @@ export const api = {
         }),
       downloadGcode: async (itemId: string) => {
         const base = `/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`
-        type PrepStatus = { status: 'idle' | 'running' | 'ready' | 'error'; error?: string }
+        type PrepStatus = {
+          status: 'idle' | 'running' | 'ready' | 'error'
+          error?: string
+          partCount?: number
+          parts?: { index: number; label: string }[]
+        }
         const withTimeout = async <T,>(p: Promise<T>, ms: number, label: string): Promise<T> => {
           let timer: ReturnType<typeof setTimeout> | undefined
           try {
@@ -528,11 +533,11 @@ export const api = {
               continue
             }
             if (st.status === 'idle') {
-              // Server restart mid-slice clears in-memory jobs. Retry a couple times, then stop.
+              // Prepare should mark DB "running"; idle means dispatch never stuck. Re-dispatch a few times.
               idleRestarts += 1
-              if (idleRestarts > 2) {
+              if (idleRestarts > 4) {
                 throw new Error(
-                  'G-code prepare was interrupted (server restarted or ran out of memory). Tap Download again.',
+                  'G-code is not ready yet. Prepare may still be running in GitHub Actions — wait a minute and tap Download again, or use Designs → Prepare G-code.',
                 )
               }
               st = await withTimeout(
@@ -549,17 +554,26 @@ export const api = {
             )
           }
         }
-        try {
-          await downloadAuthFile(base, `printx-${itemId.slice(0, 8)}.gcode`, 'G-code download failed')
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : ''
-          // Race: status flipped to ready before the file was openable — one retry.
-          if (/still preparing|NOT_READY|409/i.test(msg)) {
-            await new Promise((r) => setTimeout(r, 1500))
-            await downloadAuthFile(base, `printx-${itemId.slice(0, 8)}.gcode`, 'G-code download failed')
-            return
+        const partCount = Math.max(1, Number(st.partCount) || 1)
+        const downloadOne = async (partIndex: number) => {
+          const url = partCount > 1 ? `${base}?part=${partIndex}` : base
+          const fallback = `printx-${itemId.slice(0, 8)}${partCount > 1 ? `-part${partIndex + 1}` : ''}.gcode`
+          try {
+            await downloadAuthFile(url, fallback, 'G-code download failed')
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : ''
+            // Race: status flipped to ready before the file was openable — one retry.
+            if (/still preparing|NOT_READY|409/i.test(msg)) {
+              await new Promise((r) => setTimeout(r, 1500))
+              await downloadAuthFile(url, fallback, 'G-code download failed')
+              return
+            }
+            throw err
           }
-          throw err
+        }
+        for (let i = 0; i < partCount; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, 450))
+          await downloadOne(i)
         }
       },
     },
@@ -675,6 +689,11 @@ export const api = {
           method: 'DELETE',
           body: JSON.stringify({ endpoint }),
         }),
+      test: () =>
+        request<{ ok: true; sent: number; failed: number; removed: number }>(
+          '/api/admin/push/test',
+          { method: 'POST', body: '{}' },
+        ),
     },
     messages: {
       list: () => request<import('../types/api.ts').ContactMessage[]>('/api/admin/contact-messages'),

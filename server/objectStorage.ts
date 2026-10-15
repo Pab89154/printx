@@ -280,7 +280,11 @@ export async function resolveStoredFile(
   }
 }
 
-/** Stream a stored file to an HTTP response. Returns false if missing. */
+/**
+ * Send a stored file on an HTTP response. Returns false if missing.
+ * Uses readFile + end (not stream.pipe) so Cloudflare Workers' ServerResponse
+ * mock works — pipe() needs a real Writable and was throwing "dest.on is not a function".
+ */
 export async function sendStoredFile(
   res: ServerResponse,
   fileName: string,
@@ -290,25 +294,30 @@ export async function sendStoredFile(
 ): Promise<boolean> {
   const resolved = await resolveStoredFile(fileName)
   if (!resolved) return false
-  res.statusCode = 200
-  res.setHeader('Content-Type', contentType)
-  res.setHeader('Cache-Control', cacheControl)
-  if (headers) {
-    for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
-  }
-  const stream = fs.createReadStream(resolved.path)
-  stream.on('close', () => resolved.cleanup?.())
-  stream.on('error', () => {
-    resolved.cleanup?.()
-    if (!res.headersSent) {
-      res.statusCode = 500
-      res.end()
-    } else {
-      res.destroy()
+  try {
+    const buf = await fs.promises.readFile(resolved.path)
+    if (!buf.length) return false
+    res.statusCode = 200
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Cache-Control', cacheControl)
+    res.setHeader('Content-Length', String(buf.byteLength))
+    if (headers) {
+      for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
     }
-  })
-  stream.pipe(res)
-  return true
+    res.end(buf)
+    return true
+  } catch (err) {
+    console.warn(
+      '[object-storage] sendStoredFile failed:',
+      err instanceof Error ? err.message : err,
+    )
+    if (!res.headersSent && !res.writableEnded) {
+      /* caller may send JSON 404/500 */
+    }
+    return false
+  } finally {
+    resolved.cleanup?.()
+  }
 }
 
 export function logObjectStorageStatus(): void {

@@ -60,6 +60,10 @@ export function AdminMoney() {
     )
   }, [data])
 
+  const shippingLines = useMemo(() => {
+    return paymentLines.filter((line) => (line.shippingUsd ?? 0) > 0)
+  }, [paymentLines])
+
   const owedToMeUsd = useMemo(() => {
     if (!data || !email) return 0
     const me = email.trim().toLowerCase()
@@ -67,14 +71,17 @@ export function AdminMoney() {
     return mine?.totalOwedUsd ?? 0
   }, [data, email])
 
+  const shippingTotalUsd = data?.shippingTotalUsd ?? 0
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-navy">Money</h1>
           <p className="mt-1 text-sm text-muted">
-            Item earnings and print costs (shipping excluded — that money is for UPS). Each
-            month&apos;s owed resets for the new month; older months stay in history.
+            Item earnings and print costs. Shipping sits in its own bucket (for UPS) — not owed
+            and not PrintX profit. Each month&apos;s owed resets for the new month; older months
+            stay in history.
           </p>
         </div>
         <label className="text-sm font-semibold text-navy">
@@ -93,7 +100,7 @@ export function AdminMoney() {
 
       {data && (
         <>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                 What you earn
@@ -103,7 +110,7 @@ export function AdminMoney() {
               </p>
               <p className="mt-1 text-xs text-muted">
                 Shop ${data.earnings.shopUsd.toFixed(2)} · Custom $
-                {data.earnings.customUsd.toFixed(2)} · shipping excluded
+                {data.earnings.customUsd.toFixed(2)} · items only
               </p>
             </div>
             <div className="rounded-2xl border bg-white p-5">
@@ -113,6 +120,15 @@ export function AdminMoney() {
               <p className="mt-2 text-2xl font-bold text-navy">${owedToMeUsd.toFixed(2)}</p>
               <p className="mt-1 text-xs text-muted">This month · worst-case cost</p>
             </div>
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800/80">
+                Shipping · for UPS
+              </p>
+              <p className="mt-2 text-2xl font-bold text-navy">${shippingTotalUsd.toFixed(2)}</p>
+              <p className="mt-1 text-xs text-muted">
+                Collected via Stripe · pass-through · not profit or owed
+              </p>
+            </div>
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                 PrintX profit
@@ -121,10 +137,9 @@ export function AdminMoney() {
                 ${data.businessKeptUsd.toFixed(2)}
               </p>
               <p className="mt-1 text-xs text-muted">
-                Earned $
-                {(data.printxEarnedGrossUsd ?? data.earnings.totalUsd).toFixed(2)} − admins $
-                {(data.adminsEarnAllUsd ?? data.reimbursementsTotalUsd).toFixed(2)} − shipping $
-                {(data.shippingTotalUsd ?? 0).toFixed(2)}
+                Items $
+                {data.earnings.totalUsd.toFixed(2)} − admins $
+                {(data.adminsEarnAllUsd ?? data.reimbursementsTotalUsd).toFixed(2)}
               </p>
             </div>
           </div>
@@ -304,10 +319,60 @@ export function AdminMoney() {
             )}
           </section>
 
+          <section className="rounded-2xl border border-amber-200 bg-amber-50/40 p-6">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-navy">Shipping money</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Customer-paid shipping held for UPS labels in {formatMonthLabel(data.month)}. Not
+                  counted in owed or PrintX profit.
+                </p>
+              </div>
+              <p className="text-right">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-amber-800/80">
+                  Total shipping
+                </span>
+                <span className="text-2xl font-bold tabular-nums text-navy">
+                  ${shippingTotalUsd.toFixed(2)}
+                </span>
+              </p>
+            </div>
+
+            {shippingLines.length === 0 ? (
+              <p className="mt-4 text-sm text-muted">No shipping collected this month.</p>
+            ) : (
+              <div className="mt-4 space-y-2">
+                {shippingLines.map((line) => (
+                  <div
+                    key={`ship-${line.kind}-${line.id}`}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-100 bg-white px-4 py-3 text-sm"
+                  >
+                    <div>
+                      <p className="font-medium text-navy">
+                        {line.label}
+                        <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-900/70">
+                          {line.kind === 'shop' ? 'Shop' : 'Custom'}
+                        </span>
+                      </p>
+                      <p className="text-xs text-muted">
+                        {line.email || '—'}
+                        {line.paidAt ? ` · ${new Date(line.paidAt).toLocaleString()}` : ''}
+                      </p>
+                    </div>
+                    <p className="text-base font-bold tabular-nums text-navy">
+                      ${(line.shippingUsd ?? 0).toFixed(2)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           <section className="rounded-2xl border bg-white p-6">
             <h2 className="text-lg font-bold text-navy">Item payments</h2>
             <p className="mt-1 text-sm text-muted">
-              Paid shop checkouts and custom prints in {formatMonthLabel(data.month)}.
+              Paid shop checkouts and custom prints in {formatMonthLabel(data.month)} (item amount
+              only).
             </p>
 
             {paymentLines.length === 0 ? (
@@ -329,6 +394,9 @@ export function AdminMoney() {
                       <p className="text-xs text-muted">
                         {line.email || '—'}
                         {line.paidAt ? ` · ${new Date(line.paidAt).toLocaleString()}` : ''}
+                        {(line.shippingUsd ?? 0) > 0
+                          ? ` · shipping $${(line.shippingUsd ?? 0).toFixed(2)}`
+                          : ''}
                       </p>
                     </div>
                     <p className="text-base font-bold tabular-nums text-electric">

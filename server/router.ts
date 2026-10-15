@@ -53,10 +53,12 @@ import {
   notifyAdminUsers,
   notifyAdminsWithPermission,
   pushConfigured,
+  sendTestPushToUser,
   upsertPushSubscription,
   vapidConfigError,
   vapidPublicKey,
 } from './pushNotify.ts'
+import { runInBackground } from './background.ts'
 import {
   objectStorageRequired,
   sendStoredFile,
@@ -283,15 +285,17 @@ export async function flushDueScheduledMail(db: Awaited<ReturnType<typeof getDb>
       'SELECT recipient_id FROM mail_recipients WHERE message_id = ?',
       row.id,
     )
-    void notifyAdminUsers(
-      db,
-      recipients.map((r) => r.recipient_id),
-      {
-        title: 'New PrintX mail',
-        body: row.subject || '(no subject)',
-        url: '/mail',
-      },
-    ).catch((err) => console.warn('[push] scheduled mail', err))
+    runInBackground('push-scheduled-mail', () =>
+      notifyAdminUsers(
+        db,
+        recipients.map((r) => r.recipient_id),
+        {
+          title: 'New PrintX mail',
+          body: row.subject || '(no subject)',
+          url: '/mail',
+        },
+      ),
+    )
   }
   return due.length
 }
@@ -814,11 +818,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       new Date().toISOString(),
     )
     // Portal Inbox only — do not send real email to hello@ or the visitor's mail app.
-    void notifyAdminsWithPermission(db, 'messages', {
-      title: 'New contact message',
-      body: `${name || 'Someone'}: ${inquiryType || 'Message'}`,
-      url: '/messages',
-    }).catch((err) => console.warn('[push] contact', err))
+    runInBackground('push-contact', () =>
+      notifyAdminsWithPermission(db, 'messages', {
+        title: 'New contact message',
+        body: `${name || 'Someone'}: ${inquiryType || 'Message'}`,
+        url: '/messages',
+      }),
+    )
     send(res, 201, { ok: true })
     return true
   }
@@ -938,6 +944,33 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     }
     await upsertPushSubscription(db, user.id, { endpoint, p256dh, auth, userAgent })
     send(res, 200, { ok: true })
+    return true
+  }
+
+  if (urlPath === '/api/admin/push/test' && method === 'POST') {
+    const user = await requireAdmin(req)
+    if (!user) {
+      send(res, 401, { error: 'Unauthorized' })
+      return true
+    }
+    if (!pushConfigured()) {
+      send(res, 503, {
+        error: vapidConfigError() || 'Push notifications are not configured.',
+      })
+      return true
+    }
+    try {
+      const result = await sendTestPushToUser(db, user.id)
+      if (result.sent === 0 && result.removed === 0 && result.failed === 0) {
+        send(res, 400, {
+          error: 'No device registered yet. Tap Enable notifications on this phone first.',
+        })
+        return true
+      }
+      send(res, 200, { ok: true, ...result })
+    } catch (err) {
+      send(res, 500, { error: err instanceof Error ? err.message : 'Test push failed' })
+    }
     return true
   }
 
@@ -1647,15 +1680,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       )
     }
     if (!scheduledAt) {
-      void notifyAdminUsers(
-        db,
-        validRecipients.map((r) => r.id),
-        {
-          title: 'New PrintX mail',
-          body: subject || '(no subject)',
-          url: '/mail',
-        },
-      ).catch((err) => console.warn('[push] mail', err))
+      runInBackground('push-mail', () =>
+        notifyAdminUsers(
+          db,
+          validRecipients.map((r) => r.id),
+          {
+            title: 'New PrintX mail',
+            body: subject || '(no subject)',
+            url: '/mail',
+          },
+        ),
+      )
     }
     const created = await loadMailMessage(db, messageId, admin.id, false)
     send(res, 201, created)
@@ -1790,15 +1825,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
          WHERE r.message_id = ?`,
         messageId,
       )
-      void notifyAdminUsers(
-        db,
-        recipients.map((r) => r.recipient_id),
-        {
-          title: 'New PrintX mail',
-          body: recipients[0]?.subject || '(no subject)',
-          url: '/mail',
-        },
-      ).catch((err) => console.warn('[push] send-now', err))
+      runInBackground('push-send-now', () =>
+        notifyAdminUsers(
+          db,
+          recipients.map((r) => r.recipient_id),
+          {
+            title: 'New PrintX mail',
+            body: recipients[0]?.subject || '(no subject)',
+            url: '/mail',
+          },
+        ),
+      )
       const full = await loadMailMessage(db, messageId, admin.id, false)
       if (!full) {
         send(res, 404, { error: 'Message not found' })

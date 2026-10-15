@@ -35,17 +35,32 @@ export function OrderSuccess() {
     }
     let cancelled = false
     setLoading(true)
-    api.catalog
-      .orderSuccess(sessionId)
-      .then((payload) => {
-        if (!cancelled) setData(payload)
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Could not load order')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    setError('')
+    // Stripe webhook can lag a few seconds — retry before showing "not confirmed".
+    ;(async () => {
+      const delays = [0, 1500, 3000, 5000]
+      let lastErr = 'Could not load order'
+      for (const wait of delays) {
+        if (wait) await new Promise((r) => setTimeout(r, wait))
+        if (cancelled) return
+        try {
+          const payload = await api.catalog.orderSuccess(sessionId)
+          if (!cancelled) {
+            setData(payload)
+            setError('')
+            setLoading(false)
+          }
+          return
+        } catch (e) {
+          lastErr = e instanceof Error ? e.message : 'Could not load order'
+          if (!/not confirmed|not found/i.test(lastErr)) break
+        }
+      }
+      if (!cancelled) {
+        setError(lastErr)
+        setLoading(false)
+      }
+    })()
     return () => {
       cancelled = true
     }

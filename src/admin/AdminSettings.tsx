@@ -503,6 +503,35 @@ export function AdminSettings() {
           {pushState === 'enabled' && (
             <button
               type="button"
+              className="btn btn-secondary"
+              disabled={pushBusy}
+              onClick={() => {
+                setPushBusy(true)
+                setPushError('')
+                setPushMessage('')
+                void api.admin.push
+                  .test()
+                  .then((r) => {
+                    if (r.sent > 0) {
+                      setPushMessage(
+                        `Test sent to ${r.sent} device${r.sent === 1 ? '' : 's'}. Check the notification shade.`,
+                      )
+                    } else if (r.failed > 0) {
+                      setPushError('Test push failed. Re-enable notifications on this phone, then try again.')
+                    } else {
+                      setPushError('No active device. Tap Enable notifications first.')
+                    }
+                  })
+                  .catch((e) => setPushError(e instanceof Error ? e.message : 'Test push failed'))
+                  .finally(() => setPushBusy(false))
+              }}
+            >
+              Send test
+            </button>
+          )}
+          {pushState === 'enabled' && (
+            <button
+              type="button"
               className="btn btn-ghost"
               disabled={pushBusy}
               onClick={() => {

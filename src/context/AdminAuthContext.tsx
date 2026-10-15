@@ -17,12 +17,30 @@ import {
 } from '../../shared/permissions'
 
 const ME_CACHE_KEY = 'printx_admin_me_v1'
+/** Never leave the portal stuck on "Checking authentication…". */
+const AUTH_CHECK_TIMEOUT_MS = 12_000
 
 type CachedMe = {
   email: string
   displayName: string | null
   isMainAdmin: boolean
   permissions: AdminPermissions
+}
+
+function withAuthTimeout<T>(promise: Promise<T>, ms = AUTH_CHECK_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error('Auth check timed out')), ms)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        window.clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
 }
 
 type AuthContextValue = {
@@ -85,6 +103,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const location = useLocation()
   const needsSession = needsAdminSession(location.pathname)
   const checkedRef = useRef(false)
+  const authCheckGenRef = useRef(0)
   const [authenticated, setAuthenticated] = useState<boolean | null>(() => {
     if (typeof window === 'undefined') return null
     if (!needsAdminSession(window.location.pathname)) return false
@@ -132,7 +151,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      const me = await api.admin.me()
+      const me = await withAuthTimeout(api.admin.me())
       applyMe(me)
     } catch {
       clearAuth()
@@ -149,18 +168,27 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     // Already resolved for this browser session — don't flash "Checking…" on every route.
     if (checkedRef.current && authenticated !== null) return
 
-    let cancelled = false
-    ;(async () => {
-      try {
-        const me = await api.admin.me()
-        if (!cancelled) applyMe(me)
-      } catch {
-        if (!cancelled) clearAuth()
-      }
-    })()
+    const gen = ++authCheckGenRef.current
+    // Absolute failsafe: even if fetch hangs past withAuthTimeout, leave Checking.
+    const failsafe = window.setTimeout(() => {
+      if (authCheckGenRef.current === gen && !checkedRef.current) clearAuth()
+    }, AUTH_CHECK_TIMEOUT_MS + 500)
+
+    void withAuthTimeout(api.admin.me())
+      .then((me) => {
+        if (authCheckGenRef.current !== gen) return
+        applyMe(me)
+      })
+      .catch(() => {
+        if (authCheckGenRef.current !== gen) return
+        clearAuth()
+      })
+      .finally(() => {
+        window.clearTimeout(failsafe)
+      })
 
     return () => {
-      cancelled = true
+      window.clearTimeout(failsafe)
     }
   }, [needsSession, authenticated, applyMe, clearAuth])
 

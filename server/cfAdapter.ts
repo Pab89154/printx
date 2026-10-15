@@ -2,7 +2,7 @@
  * Adapt Cloudflare Workers fetch Request/Response to Node IncomingMessage/ServerResponse
  * so existing handleApi routers keep working under nodejs_compat.
  */
-import { Readable, Writable } from 'node:stream'
+import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handleApi } from './router.ts'
 import { ensureDbReady } from './db.ts'
@@ -35,6 +35,8 @@ export type WorkerEnv = {
 }
 
 let bootstrapped = false
+let bootstrapPromise: Promise<void> | null = null
+let storageWarmPromise: Promise<void> | null = null
 
 export function applyWorkerEnv(env: WorkerEnv) {
   const map: [keyof WorkerEnv, string][] = [
@@ -74,16 +76,48 @@ export function applyWorkerEnv(env: WorkerEnv) {
   process.env.PRINTX_REQUIRE_OBJECT_STORAGE = '1'
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
+
+/** DB ready is required; storage bucket check runs in the background so auth never stalls. */
 async function ensureBootstrapped() {
   if (bootstrapped) return
-  if (!usingPostgres()) {
-    throw new Error('DATABASE_URL (or Hyperdrive) is required on Cloudflare Workers.')
+  if (!bootstrapPromise) {
+    bootstrapPromise = (async () => {
+      if (!usingPostgres()) {
+        throw new Error('DATABASE_URL (or Hyperdrive) is required on Cloudflare Workers.')
+      }
+      await withTimeout(ensureDbReady(), 12_000, 'Database bootstrap')
+      bootstrapped = true
+      if (!storageWarmPromise) {
+        storageWarmPromise = (async () => {
+          const { ensureModelBucket, logObjectStorageStatus } = await import('./objectStorage.ts')
+          logObjectStorageStatus()
+          await ensureModelBucket()
+        })().catch((err) => {
+          console.warn('[cf-worker] storage warm failed', err)
+          storageWarmPromise = null
+        })
+      }
+    })().catch((err) => {
+      bootstrapPromise = null
+      throw err
+    })
   }
-  await ensureDbReady()
-  const { ensureModelBucket, logObjectStorageStatus } = await import('./objectStorage.ts')
-  logObjectStorageStatus()
-  await ensureModelBucket()
-  bootstrapped = true
+  await bootstrapPromise
 }
 
 function buildIncomingMessage(request: Request, body: Buffer): IncomingMessage {
@@ -108,6 +142,24 @@ function buildIncomingMessage(request: Request, body: Buffer): IncomingMessage {
   return readable
 }
 
+function pushChunk(chunks: Buffer[], chunk: unknown) {
+  if (chunk == null || typeof chunk === 'function') return
+  if (Buffer.isBuffer(chunk)) {
+    chunks.push(chunk)
+    return
+  }
+  if (chunk instanceof Uint8Array) {
+    chunks.push(Buffer.from(chunk))
+    return
+  }
+  chunks.push(Buffer.from(String(chunk)))
+}
+
+/**
+ * Plain ServerResponse mock — do NOT use node:stream Writable.
+ * Patching Writable.end previously double-wrote bodies ({...}{...}) and could hang
+ * the Worker on origEnd() before the fetch handler returned.
+ */
 function buildServerResponse(): {
   res: ServerResponse
   done: Promise<Response>
@@ -115,72 +167,72 @@ function buildServerResponse(): {
   let statusCode = 200
   const headerMap = new Map<string, string | string[]>()
   const chunks: Buffer[] = []
+  let ended = false
   let resolveDone!: (r: Response) => void
   const done = new Promise<Response>((resolve) => {
     resolveDone = resolve
   })
 
-  const writable = new Writable({
-    write(chunk, _enc, cb) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-      cb()
-    },
-    final(cb) {
-      const body = Buffer.concat(chunks)
-      const headers = new Headers()
-      for (const [k, v] of headerMap) {
-        if (Array.isArray(v)) v.forEach((item) => headers.append(k, item))
-        else headers.set(k, v)
-      }
-      resolveDone(new Response(body, { status: statusCode, headers }))
-      cb()
-    },
-  }) as ServerResponse
+  const finish = () => {
+    if (ended) return
+    ended = true
+    const body = Buffer.concat(chunks)
+    const headers = new Headers()
+    for (const [k, v] of headerMap) {
+      if (Array.isArray(v)) v.forEach((item) => headers.append(k, item))
+      else headers.set(k, v)
+    }
+    resolveDone(new Response(body.byteLength ? body : null, { status: statusCode, headers }))
+  }
 
-  Object.defineProperty(writable, 'statusCode', {
-    get: () => statusCode,
-    set: (v: number) => {
+  const res = {
+    get statusCode() {
+      return statusCode
+    },
+    set statusCode(v: number) {
       statusCode = v
     },
-    configurable: true,
-  })
-  writable.setHeader = (name: string, value: number | string | readonly string[]) => {
-    headerMap.set(String(name).toLowerCase(), value as string | string[])
-    return writable
-  }
-  writable.getHeader = (name: string) => headerMap.get(String(name).toLowerCase())
-  writable.removeHeader = (name: string) => {
-    headerMap.delete(String(name).toLowerCase())
-  }
-  writable.writeHead = (code: number, headers?: Record<string, string | string[]>) => {
-    statusCode = code
-    if (headers) {
-      for (const [k, v] of Object.entries(headers)) {
-        headerMap.set(k.toLowerCase(), v)
+    get writableEnded() {
+      return ended
+    },
+    get headersSent() {
+      return ended
+    },
+    setHeader(name: string, value: number | string | readonly string[]) {
+      headerMap.set(String(name).toLowerCase(), value as string | string[])
+      return res
+    },
+    getHeader(name: string) {
+      return headerMap.get(String(name).toLowerCase())
+    },
+    removeHeader(name: string) {
+      headerMap.delete(String(name).toLowerCase())
+    },
+    writeHead(code: number, maybeHeaders?: Record<string, string | string[]>) {
+      statusCode = code
+      if (maybeHeaders) {
+        for (const [k, v] of Object.entries(maybeHeaders)) {
+          headerMap.set(k.toLowerCase(), v)
+        }
       }
-    }
-    return writable
-  }
-  // Node often calls end() without going through Writable final if empty — patch end.
-  const origEnd = writable.end.bind(writable)
-  writable.end = ((...args: unknown[]) => {
-    if (args.length && args[0] != null && typeof args[0] !== 'function') {
-      const chunk = args[0] as string | Buffer
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-    }
-    queueMicrotask(() => {
-      const body = Buffer.concat(chunks)
-      const headers = new Headers()
-      for (const [k, v] of headerMap) {
-        if (Array.isArray(v)) v.forEach((item) => headers.append(k, item))
-        else headers.set(k, v)
-      }
-      resolveDone(new Response(body.byteLength ? body : null, { status: statusCode, headers }))
-    })
-    return origEnd(...(args as []))
-  }) as ServerResponse['end']
+      return res
+    },
+    write(chunk: unknown, encodingOrCb?: unknown, maybeCb?: unknown) {
+      pushChunk(chunks, chunk)
+      const cb = typeof encodingOrCb === 'function' ? encodingOrCb : maybeCb
+      if (typeof cb === 'function') queueMicrotask(() => (cb as () => void)())
+      return true
+    },
+    end(chunk?: unknown, encodingOrCb?: unknown, maybeCb?: unknown) {
+      pushChunk(chunks, chunk)
+      const cb = typeof encodingOrCb === 'function' ? encodingOrCb : maybeCb
+      finish()
+      if (typeof cb === 'function') queueMicrotask(() => (cb as () => void)())
+      return res
+    },
+  } as unknown as ServerResponse
 
-  return { res: writable, done }
+  return { res, done }
 }
 
 export async function handleWorkerFetch(request: Request, env: WorkerEnv): Promise<Response> {
@@ -192,6 +244,15 @@ export async function handleWorkerFetch(request: Request, env: WorkerEnv): Promi
     return Response.json({ ok: true, runtime: 'cloudflare-worker' })
   }
 
+  // Unauthenticated session probe — skip DB bootstrap so the portal never sits on
+  // "Checking authentication…" waiting for cold migrations.
+  if (pathname === '/api/admin/me' && request.method === 'GET') {
+    const cookie = request.headers.get('cookie') || ''
+    if (!/(?:^|;\s*)printx_session=/.test(cookie)) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+  }
+
   if (pathname.startsWith('/api/')) {
     try {
       await ensureBootstrapped()
@@ -199,19 +260,28 @@ export async function handleWorkerFetch(request: Request, env: WorkerEnv): Promi
       const body = Buffer.from(ab)
       const req = buildIncomingMessage(request, body)
       const { res, done } = buildServerResponse()
-      const handled = await handleApi(req, res, pathname, request.method)
-      if (!handled) {
-        return Response.json({ error: 'Not found' }, { status: 404 })
-      }
-      // If handler already ended the response, done resolves; otherwise wait briefly.
+
+      const handlerPromise = handleApi(req, res, pathname, request.method).then((handled) => {
+        if (!handled && !res.writableEnded) {
+          res.statusCode = 404
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ error: 'Not found' }))
+        } else if (handled && !res.writableEnded) {
+          res.statusCode = 500
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ error: 'No response' }))
+        }
+      })
+
+      // Always settle — never leave the portal fetch hanging on a stuck stream.
       return await Promise.race([
         done,
+        handlerPromise.then(() => done),
         new Promise<Response>((resolve) =>
-          setTimeout(() => {
-            if (!res.writableEnded) {
-              resolve(Response.json({ error: 'No response' }, { status: 500 }))
-            }
-          }, 55_000),
+          setTimeout(
+            () => resolve(Response.json({ error: 'Request timed out' }, { status: 504 })),
+            20_000,
+          ),
         ),
       ])
     } catch (err) {
@@ -224,7 +294,49 @@ export async function handleWorkerFetch(request: Request, env: WorkerEnv): Promi
   }
 
   if (env.ASSETS) {
-    return env.ASSETS.fetch(request)
+    const assetRes = await env.ASSETS.fetch(request)
+    // Missing hashed bundles must stay 404 (not index.html) — iOS home-screen apps
+    // often keep a stale index that points at deleted /assets/index-*.js.
+    if (assetRes.status !== 404) {
+      return withPwaCacheHeaders(pathname, assetRes)
+    }
+    if (request.method === 'GET' && shouldSpaFallback(pathname)) {
+      const indexRes = await env.ASSETS.fetch(new URL('/index.html', url.origin))
+      return withPwaCacheHeaders('/index.html', indexRes)
+    }
+    return assetRes
   }
   return new Response('Not found', { status: 404 })
+}
+
+/** Paths that should soft-route to the React SPA when no static file exists. */
+function shouldSpaFallback(pathname: string): boolean {
+  if (pathname.startsWith('/api/')) return false
+  if (pathname.startsWith('/assets/')) return false
+  if (
+    pathname === '/sw.js' ||
+    pathname === '/manifest.webmanifest' ||
+    pathname === '/reset-pwa' ||
+    pathname === '/reset-pwa.html'
+  ) {
+    return false
+  }
+  // Real files (icons, spell dicts, etc.) — never rewrite to HTML.
+  if (/\.[a-zA-Z0-9]{1,12}$/.test(pathname)) return false
+  return true
+}
+
+/** Keep HTML + SW fresh so installed iOS PWAs pick up new hashed bundles. */
+function withPwaCacheHeaders(pathname: string, res: Response): Response {
+  const noStore =
+    pathname === '/' ||
+    pathname === '/index.html' ||
+    pathname.endsWith('.html') ||
+    pathname === '/sw.js' ||
+    pathname === '/manifest.webmanifest'
+  if (!noStore) return res
+  const headers = new Headers(res.headers)
+  headers.set('Cache-Control', 'no-cache, no-store, must-revalidate')
+  headers.set('Pragma', 'no-cache')
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
 }

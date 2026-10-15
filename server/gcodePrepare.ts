@@ -72,7 +72,18 @@ export async function dispatchGcodePrepareJob(input: {
   }
 }
 
-/** Record that a prepare was requested (UI / status polling). */
+/** How long status stays "running" after a prepare dispatch (GH Actions + queue). */
+export const GCODE_PREPARE_STALE_MS = 20 * 60_000
+
+export function preparingGcodeMessage(printerId: string): string {
+  return `Preparing G-code for ${printerId} via GitHub Actions…`
+}
+
+export function isPreparingGcodeMessage(message: string | null | undefined): boolean {
+  return /^Preparing G-code\b/i.test(String(message || '').trim())
+}
+
+/** Record that a prepare was requested (durable — Workers lose in-memory job maps). */
 export async function markDesignGcodePreparing(
   db: DbApi,
   designId: string,
@@ -81,14 +92,27 @@ export async function markDesignGcodePreparing(
   const now = new Date().toISOString()
   await db.run(
     `UPDATE designs SET
-       slice_error = CASE
-         WHEN slice_error IS NULL OR trim(slice_error) = '' THEN ?
-         ELSE slice_error
-       END,
+       slice_status = 'slicing',
+       slice_error = ?,
        updated_at = ?
      WHERE id = ?`,
-    `Preparing G-code for ${printerId} via GitHub Actions…`,
+    preparingGcodeMessage(printerId),
     now,
     designId,
   )
+}
+
+/** True when Designs row says GH Actions prepare is in flight and not stale. */
+export function designGcodePrepareInFlight(design: {
+  slice_status?: unknown
+  slice_error?: unknown
+  updated_at?: unknown
+}): boolean {
+  const status = String(design.slice_status || '').trim()
+  const error = String(design.slice_error || '').trim()
+  const preparing = status === 'slicing' || isPreparingGcodeMessage(error)
+  if (!preparing) return false
+  const updatedAt = Date.parse(String(design.updated_at || ''))
+  if (!Number.isFinite(updatedAt)) return true
+  return Date.now() - updatedAt < GCODE_PREPARE_STALE_MS
 }

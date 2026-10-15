@@ -19,6 +19,7 @@ import {
 } from './auth.ts'
 import { upsTrackUrl } from './shippingUrls.ts'
 import { notifyAdminsWithPermission, notifyMainAdmins } from './pushNotify.ts'
+import { runInBackground } from './background.ts'
 import { advanceArrivedOrders, ensureOrderTrackCode } from './trackCodes.ts'
 import {
   arrivedEtaIso,
@@ -80,7 +81,19 @@ import {
   type CloudSlicerCreds,
 } from './cloudSlicer.ts'
 import { loadStoredGcode, openStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
-import { dispatchGcodePrepareJob, markDesignGcodePreparing } from './gcodePrepare.ts'
+import {
+  designGcodePrepareInFlight,
+  dispatchGcodePrepareJob,
+  GCODE_PREPARE_STALE_MS,
+  isPreparingGcodeMessage,
+  markDesignGcodePreparing,
+} from './gcodePrepare.ts'
+import {
+  designGcodeSliceTargets,
+  gcodeReadyPrinterIds,
+  printerHasStoredGcodes,
+  safeGcodeFilenamePart,
+} from './gcodePartPaths.ts'
 import {
   objectStorageConfigured,
   objectStorageRequired,
@@ -110,6 +123,7 @@ function designDto(
 } {
   const modelExt = path.extname(d.stlPath || '').toLowerCase()
   const gcodePaths = parseDesignIdMap(d.gcodePathsJson)
+  const partCount = designGcodeSliceTargets(d).length
   const { gcodePathsJson: _drop, ...rest } = d
   return {
     ...rest,
@@ -121,7 +135,7 @@ function designDto(
       hasStl: Boolean(p.stlPath.trim()),
       modelExt: path.extname(p.stlPath || '').toLowerCase(),
     })),
-    gcodeReadyPrinters: Object.keys(gcodePaths).filter((k) => Boolean(gcodePaths[k])),
+    gcodeReadyPrinters: gcodeReadyPrinterIds(gcodePaths, Math.max(1, partCount)),
   }
 }
 
@@ -570,11 +584,12 @@ type GcodePrepJob = {
   updatedAt: number
 }
 
-/** Background prepare jobs — avoids HTTP timeouts while Cloud Slicer re-slices. */
+/**
+ * Optional same-isolate cache only. Cloudflare Workers do not keep this Map across
+ * requests — durable prepare state lives on designs.slice_status / slice_error.
+ */
 const orderGcodeJobs = new Map<string, GcodePrepJob>()
 
-/** Jobs stuck "running" longer than this are treated as failed so the UI can recover. */
-const GCODE_JOB_STALE_MS = 15 * 60_000
 /** Drop ready/error job entries (and any leftover buffers) quickly on free-tier RAM. */
 const GCODE_JOB_KEEP_MS = 2 * 60_000
 
@@ -583,7 +598,8 @@ function pruneOrderGcodeJobs() {
   for (const [id, job] of orderGcodeJobs) {
     const age = now - job.updatedAt
     if (job.status === 'running') {
-      if (age > GCODE_JOB_STALE_MS) orderGcodeJobs.delete(id)
+      // Running is authoritative in DB now; drop orphan RAM markers quickly.
+      if (age > GCODE_JOB_KEEP_MS) orderGcodeJobs.delete(id)
       continue
     }
     if (age > GCODE_JOB_KEEP_MS) orderGcodeJobs.delete(id)
@@ -604,10 +620,23 @@ async function orderItemIsShipped(
   return Boolean(row?.shipped_at)
 }
 
-async function orderItemStoredGcodeName(
+type OrderItemGcodeFileMeta = {
+  storedName: string
+  downloadName: string
+  partIndex: number
+  label: string
+}
+
+async function orderItemGcodePartMeta(
   db: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
-): Promise<{ storedName: string; downloadName: string } | null> {
+): Promise<{
+  printerId: string
+  sku: string
+  targets: ReturnType<typeof designGcodeSliceTargets>
+  gcodePaths: Record<string, string>
+  files: OrderItemGcodeFileMeta[]
+} | null> {
   const item = await db.get<Record<string, unknown>>('SELECT * FROM order_items WHERE id = ?', itemId)
   if (!item) return null
   const printerId = String(item.assigned_printer_id || '').trim()
@@ -615,53 +644,84 @@ async function orderItemStoredGcodeName(
   const designId = String(item.design_id || '')
   const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
   if (!designRow) return null
+  const design = rowToDesign(designRow)
+  const targets = designGcodeSliceTargets(design)
+  if (!targets.length) return null
   const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
-  const storedGcode = gcodePaths[printerId] || ''
-  if (!storedGcode) return null
   const sku = String(item.sku || designId).replace(/[^\w.-]+/g, '_')
-  const downloadName = `printx-${sku}-${printerId}.gcode`
-  return { storedName: storedGcode, downloadName }
+  const files: OrderItemGcodeFileMeta[] = []
+  for (const target of targets) {
+    const key = target.storageKey(printerId)
+    const storedName = gcodePaths[key] || ''
+    if (!storedName) continue
+    const partIndex = target.partIndex ?? 0
+    const label = target.label
+    const downloadName =
+      target.partIndex != null
+        ? `printx-${sku}-${printerId}-${safeGcodeFilenamePart(label, partIndex)}.gcode`
+        : `printx-${sku}-${printerId}.gcode`
+    files.push({ storedName, downloadName, partIndex, label })
+  }
+  return { printerId, sku, targets, gcodePaths, files }
+}
+
+async function orderItemStoredGcodeName(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+  partIndex = 0,
+): Promise<OrderItemGcodeFileMeta | null> {
+  const meta = await orderItemGcodePartMeta(db, itemId)
+  if (!meta) return null
+  if (!printerHasStoredGcodes(meta.gcodePaths, meta.printerId, meta.targets.length)) {
+    return null
+  }
+  return meta.files.find((f) => f.partIndex === partIndex) || meta.files[partIndex] || null
 }
 
 async function peekStoredOrderItemGcode(
   db: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
+  partIndex = 0,
 ): Promise<{ buffer: Buffer; filename: string } | null> {
-  const meta = await orderItemStoredGcodeName(db, itemId)
-  if (!meta) return null
-  const local = await loadStoredGcode(meta.storedName)
+  const file = await orderItemStoredGcodeName(db, itemId, partIndex)
+  if (!file) return null
+  const local = await loadStoredGcode(file.storedName)
   if (!local) return null
-  return { buffer: local.buffer, filename: meta.downloadName }
+  return { buffer: local.buffer, filename: file.downloadName }
 }
 
 async function openOrderItemGcode(
   db: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
+  partIndex = 0,
 ): Promise<
   | { kind: 'stream'; path: string; filename: string; cleanup?: () => void }
   | { kind: 'buffer'; buffer: Buffer; filename: string }
   | null
 > {
   pruneOrderGcodeJobs()
-  const meta = await orderItemStoredGcodeName(db, itemId)
-  if (meta) {
-    const opened = await openStoredGcode(meta.storedName)
+  const file = await orderItemStoredGcodeName(db, itemId, partIndex)
+  if (file) {
+    const opened = await openStoredGcode(file.storedName)
     if (opened) {
       return {
         kind: 'stream',
         path: opened.path,
-        filename: meta.downloadName,
+        filename: file.downloadName,
         cleanup: opened.cleanup,
       }
     }
   }
-  const job = orderGcodeJobs.get(itemId)
-  if (job?.status === 'ready' && job.buffer?.length) {
-    const buffer = job.buffer
-    const filename = job.filename || `printx-${itemId.slice(0, 8)}.gcode`
-    // Keep the buffer until we have durable storage — dropping it made the next
-    // Download click return 409 while status still said "ready".
-    return { kind: 'buffer', buffer, filename }
+  // In-memory job buffer is single-file only (legacy / non-multicolor).
+  if (partIndex === 0) {
+    const job = orderGcodeJobs.get(itemId)
+    if (job?.status === 'ready' && job.buffer?.length) {
+      const buffer = job.buffer
+      const filename = job.filename || `printx-${itemId.slice(0, 8)}.gcode`
+      // Keep the buffer until we have durable storage — dropping it made the next
+      // Download click return 409 while status still said "ready".
+      return { kind: 'buffer', buffer, filename }
+    }
   }
   return null
 }
@@ -672,12 +732,11 @@ async function orderItemGcodeReady(
   itemId: string,
 ): Promise<boolean> {
   pruneOrderGcodeJobs()
-  const meta = await orderItemStoredGcodeName(db, itemId)
-  if (meta) {
-    const uploadsDir = await getUploadsDir()
-    if (fs.existsSync(path.join(uploadsDir, meta.storedName))) return true
-    // Path recorded — download streams from object storage on demand.
+  const meta = await orderItemGcodePartMeta(db, itemId)
+  if (meta && printerHasStoredGcodes(meta.gcodePaths, meta.printerId, meta.targets.length)) {
     if (objectStorageConfigured()) return true
+    const uploadsDir = await getUploadsDir()
+    return meta.files.every((f) => fs.existsSync(path.join(uploadsDir, f.storedName)))
   }
   const job = orderGcodeJobs.get(itemId)
   // Filename alone is not enough — openOrderItemGcode needs a RAM buffer or storage.
@@ -691,8 +750,9 @@ async function orderItemGcodeReady(
 async function ensureOrderItemGcode(
   db: Awaited<ReturnType<typeof getDb>>,
   itemId: string,
+  partIndex = 0,
 ): Promise<{ buffer: Buffer; filename: string }> {
-  const existing = await peekStoredOrderItemGcode(db, itemId)
+  const existing = await peekStoredOrderItemGcode(db, itemId, partIndex)
   if (existing) return existing
 
   const item = await db.get<Record<string, unknown>>('SELECT * FROM order_items WHERE id = ?', itemId)
@@ -704,9 +764,11 @@ async function ensureOrderItemGcode(
   const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
   if (!designRow) throw new Error('Design not found for this order item.')
 
+  const design = rowToDesign(designRow)
+  const targets = designGcodeSliceTargets(design)
   const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
-  if (gcodePaths[printerId]) {
-    const again = await peekStoredOrderItemGcode(db, itemId)
+  if (printerHasStoredGcodes(gcodePaths, printerId, targets.length)) {
+    const again = await peekStoredOrderItemGcode(db, itemId, partIndex)
     if (again) return again
   }
 
@@ -715,69 +777,144 @@ async function ensureOrderItemGcode(
   )
 }
 
-function startOrderGcodePrep(itemId: string) {
+/**
+ * Dispatch GitHub Actions prepare and persist "running" on the design row.
+ * Never long-poll in the Worker — isolates die and the old in-memory Map looked "idle".
+ */
+async function startOrderGcodePrep(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<{ status: 'ready' | 'running' }> {
   pruneOrderGcodeJobs()
-  const current = orderGcodeJobs.get(itemId)
-  if (current?.status === 'running') {
-    if (Date.now() - current.updatedAt < GCODE_JOB_STALE_MS) return
-    console.warn('[gcode] restarting stale prepare job', itemId)
+  if (await orderItemGcodeReady(db, itemId)) {
+    orderGcodeJobs.set(itemId, { status: 'ready', updatedAt: Date.now() })
+    return { status: 'ready' }
   }
-  if (current?.status === 'ready') return
-  if (current?.status === 'error') {
-    console.warn('[gcode] retrying after previous error', itemId, current.error)
+
+  const item = await db.get<{ design_id: string; assigned_printer_id: string | null }>(
+    'SELECT design_id, assigned_printer_id FROM order_items WHERE id = ?',
+    itemId,
+  )
+  if (!item) throw new Error('Order item not found.')
+  const printerId = String(item.assigned_printer_id || '').trim()
+  if (!printerId) throw new Error('Claim this item with a printer before downloading G-code.')
+  const designId = String(item.design_id || '')
+  const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+  if (!designRow) throw new Error('Design not found for this order item.')
+  const design = rowToDesign(designRow)
+  const targets = designGcodeSliceTargets(design)
+  if (!targets.length) {
+    throw new Error(
+      design.multicolorOnly
+        ? 'Multicolor design is missing part STLs to slice.'
+        : 'Design has no model file to slice.',
+    )
   }
+
+  // Already dispatched recently — don't spam GitHub Actions on every status poll.
+  if (designGcodePrepareInFlight(designRow)) {
+    orderGcodeJobs.set(itemId, { status: 'running', updatedAt: Date.now() })
+    return { status: 'running' }
+  }
+
+  await markDesignGcodePreparing(db, designId, printerId)
+  const dispatched = await dispatchGcodePrepareJob({ designId, printerId })
+  if (!dispatched.ok) {
+    const now = new Date().toISOString()
+    await db.run(
+      `UPDATE designs SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
+      dispatched.error,
+      now,
+      designId,
+    )
+    orderGcodeJobs.set(itemId, {
+      status: 'error',
+      error: dispatched.error,
+      updatedAt: Date.now(),
+    })
+    throw new Error(dispatched.error)
+  }
+
   orderGcodeJobs.set(itemId, { status: 'running', updatedAt: Date.now() })
-  const heartbeat = setInterval(() => {
-    const job = orderGcodeJobs.get(itemId)
-    if (job?.status === 'running') {
-      orderGcodeJobs.set(itemId, { ...job, updatedAt: Date.now() })
+  return { status: 'running' }
+}
+
+async function orderItemGcodePartCount(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<{ partCount: number; parts: { index: number; label: string }[] }> {
+  const meta = await orderItemGcodePartMeta(db, itemId)
+  if (!meta?.targets.length) return { partCount: 1, parts: [{ index: 0, label: '' }] }
+  return {
+    partCount: meta.targets.length,
+    parts: meta.targets.map((t, i) => ({
+      index: t.partIndex ?? i,
+      label: t.label,
+    })),
+  }
+}
+
+async function orderItemGcodeStatus(
+  db: Awaited<ReturnType<typeof getDb>>,
+  itemId: string,
+): Promise<{
+  status: 'idle' | 'running' | 'ready' | 'error'
+  error?: string
+  partCount?: number
+  parts?: { index: number; label: string }[]
+}> {
+  pruneOrderGcodeJobs()
+  const partInfo = await orderItemGcodePartCount(db, itemId)
+  if (await orderItemGcodeReady(db, itemId)) {
+    return { status: 'ready', ...partInfo }
+  }
+
+  const item = await db.get<{ design_id: string; assigned_printer_id: string | null }>(
+    'SELECT design_id, assigned_printer_id FROM order_items WHERE id = ?',
+    itemId,
+  )
+  if (!item) return { status: 'error', error: 'Order item not found.', ...partInfo }
+
+  const designRow = await db.get<Record<string, unknown>>(
+    'SELECT slice_status, slice_error, updated_at FROM designs WHERE id = ?',
+    String(item.design_id || ''),
+  )
+  if (!designRow) {
+    return { status: 'error', error: 'Design not found for this order item.', ...partInfo }
+  }
+
+  const sliceError = String(designRow.slice_error || '').trim()
+  const updatedAt = Date.parse(String(designRow.updated_at || '')) || 0
+  const age = Number.isFinite(updatedAt) ? Date.now() - updatedAt : 0
+
+  if (designGcodePrepareInFlight(designRow)) {
+    return { status: 'running', ...partInfo }
+  }
+
+  // Stale "Preparing…" left behind when GH Actions never finished.
+  if (isPreparingGcodeMessage(sliceError) && age >= GCODE_PREPARE_STALE_MS) {
+    return {
+      status: 'error',
+      error:
+        'G-code prepare timed out waiting for GitHub Actions. Check the prepare-gcode workflow, then tap Download again.',
+      ...partInfo,
     }
-  }, 30_000)
-  void (async () => {
-    try {
-      const db = await getDb()
-      if (await orderItemGcodeReady(db, itemId)) {
-        orderGcodeJobs.set(itemId, { status: 'ready', updatedAt: Date.now() })
-        return
-      }
-      const item = await db.get<{ design_id: string; assigned_printer_id: string | null }>(
-        'SELECT design_id, assigned_printer_id FROM order_items WHERE id = ?',
-        itemId,
-      )
-      if (!item) throw new Error('Order item not found.')
-      const printerId = String(item.assigned_printer_id || '').trim()
-      if (!printerId) throw new Error('Claim this item with a printer before downloading G-code.')
-      const designId = String(item.design_id || '')
-      await markDesignGcodePreparing(db, designId, printerId)
-      const dispatched = await dispatchGcodePrepareJob({ designId, printerId })
-      if (!dispatched.ok) {
-        throw new Error(dispatched.error)
-      }
-      // Poll storage — GH Actions uploads gcode_paths_json when done.
-      const deadline = Date.now() + 14 * 60_000
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 5000))
-        if (await orderItemGcodeReady(db, itemId)) {
-          orderGcodeJobs.set(itemId, { status: 'ready', updatedAt: Date.now() })
-          return
-        }
-        const running = orderGcodeJobs.get(itemId)
-        if (running?.status === 'running') {
-          orderGcodeJobs.set(itemId, { ...running, updatedAt: Date.now() })
-        }
-      }
-      throw new Error(
-        'Timed out waiting for GitHub Actions to store G-code. Check the prepare-gcode workflow, then tap Download again.',
-      )
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'G-code prepare failed'
-      console.error('[gcode] prepare failed', itemId, message)
-      orderGcodeJobs.set(itemId, { status: 'error', error: message, updatedAt: Date.now() })
-    } finally {
-      clearInterval(heartbeat)
-      pruneOrderGcodeJobs()
+  }
+
+  if (sliceError && !isPreparingGcodeMessage(sliceError)) {
+    const status = String(designRow.slice_status || '').trim()
+    if (status === 'error' || status === 'slicing') {
+      return { status: 'error', error: sliceError, ...partInfo }
     }
-  })()
+  }
+
+  const job = orderGcodeJobs.get(itemId)
+  if (job?.status === 'running') return { status: 'running', ...partInfo }
+  if (job?.status === 'error') {
+    return { status: 'error', error: job.error || 'G-code prepare failed', ...partInfo }
+  }
+
+  return { status: 'idle', ...partInfo }
 }
 
 /** Prepare stored G-code for a design+printer via GitHub Actions (admin Designs UI). */
@@ -788,14 +925,24 @@ export async function startDesignGcodePrepare(
 ): Promise<{ status: 'ready' | 'running'; error?: string }> {
   const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
   if (!designRow) throw new Error('Design not found.')
+  const design = rowToDesign(designRow)
+  const targets = designGcodeSliceTargets(design)
   const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
-  if (gcodePaths[printerId]) {
+  if (printerHasStoredGcodes(gcodePaths, printerId, targets.length)) {
     if (objectStorageConfigured()) return { status: 'ready' }
     const uploadsDir = await getUploadsDir()
-    if (fs.existsSync(path.join(uploadsDir, gcodePaths[printerId]!))) return { status: 'ready' }
+    const allLocal = targets.every((t) => {
+      const name = gcodePaths[t.storageKey(printerId)]
+      return Boolean(name && fs.existsSync(path.join(uploadsDir, name)))
+    })
+    if (allLocal) return { status: 'ready' }
   }
-  if (!String(designRow.stl_path || '').trim()) {
-    throw new Error('Design has no model file to slice.')
+  if (!targets.length) {
+    throw new Error(
+      design.multicolorOnly
+        ? 'Multicolor design is missing part STLs to slice.'
+        : 'Design has no model file to slice.',
+    )
   }
   await markDesignGcodePreparing(db, designId, printerId)
   const dispatched = await dispatchGcodePrepareJob({ designId, printerId })
@@ -993,6 +1140,100 @@ export function stripeClient(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY?.trim()
   if (!key) return null
   return new Stripe(key)
+}
+
+/** Mark a shop order paid from a Checkout Session (webhook + success-page recovery). */
+async function confirmShopOrderFromCheckoutSession(
+  db: Awaited<ReturnType<typeof getDb>>,
+  stripe: Stripe,
+  sessionId: string,
+): Promise<boolean> {
+  const loaded = await loadCheckoutShipping(stripe, sessionId)
+  const session = loaded.session
+  if (session.payment_status !== 'paid' && session.status !== 'complete') return false
+
+  const orderId = session.metadata?.orderId || session.client_reference_id
+  if (!orderId) return false
+
+  const existing = await db.get<{ status: string }>(
+    `SELECT status FROM orders WHERE id = ?`,
+    orderId,
+  )
+  if (!existing) return false
+  if (existing.status !== 'pending_payment') return true
+
+  const ship = loaded.ship
+  const shippingMethod = await resolveShippingMethodName(stripe, session, ship.shippingMethod)
+  const now = new Date().toISOString()
+  const paymentIntent =
+    typeof session.payment_intent === 'string' ? session.payment_intent : null
+  const stripeEmail = ship.customerEmail
+  const stripeName = ship.customerName
+  const customerUserId = session.metadata?.customerUserId?.trim() || ''
+
+  await db.run(
+    `UPDATE orders SET
+      status = 'paid',
+      customer_name = CASE WHEN ? != '' THEN ? ELSE customer_name END,
+      customer_email = CASE WHEN ? != '' THEN ? ELSE customer_email END,
+      shipping_name = ?,
+      shipping_line1 = ?,
+      shipping_line2 = ?,
+      shipping_city = ?,
+      shipping_state = ?,
+      shipping_postal = ?,
+      shipping_country = ?,
+      shipping_method = ?,
+      shipping_usd = ?,
+      subtotal_usd = COALESCE(?, subtotal_usd),
+      total_usd = COALESCE(?, total_usd),
+      stripe_session_id = COALESCE(stripe_session_id, ?),
+      stripe_payment_intent = ?,
+      paid_at = ?,
+      updated_at = ?,
+      user_id = COALESCE(user_id, NULLIF(?, ''))
+     WHERE id = ? AND status = 'pending_payment'`,
+    stripeName,
+    stripeName,
+    stripeEmail,
+    stripeEmail,
+    ship.shippingName || stripeName,
+    ship.shippingLine1,
+    ship.shippingLine2,
+    ship.shippingCity,
+    ship.shippingState,
+    ship.shippingPostal,
+    ship.shippingCountry,
+    shippingMethod,
+    ship.shippingUsd,
+    ship.amountTotalUsd != null
+      ? Math.max(0, roundMoney(ship.amountTotalUsd - (ship.shippingUsd || 0)))
+      : null,
+    ship.amountTotalUsd,
+    session.id,
+    paymentIntent,
+    now,
+    now,
+    customerUserId,
+    orderId,
+  )
+  try {
+    await ensureOrderTrackCode(db, String(orderId))
+  } catch (err) {
+    console.warn(
+      '[printx] Could not assign track code',
+      orderId,
+      err instanceof Error ? err.message : err,
+    )
+  }
+  runInBackground('push-order-paid', () =>
+    notifyAdminsWithPermission(db, 'orders', {
+      title: 'New shop order',
+      body: `${stripeName || stripeEmail || 'Customer'} placed a paid order`,
+      url: '/orders',
+    }),
+  )
+  return true
 }
 
 export function publicOrigin(req: IncomingMessage): string {
@@ -1312,7 +1553,29 @@ export async function handleCatalogApi(
       send(res, 404, { error: 'Order not found for this checkout session.' })
       return true
     }
-    const status = String(row.status || '')
+    let status = String(row.status || '')
+    // Webhook can lag (or miss after host moves). Confirm from Stripe on the success page.
+    if (status === 'pending_payment') {
+      const stripe = stripeClient()
+      if (stripe) {
+        try {
+          const confirmed = await confirmShopOrderFromCheckoutSession(db, stripe, sessionId)
+          if (confirmed) {
+            row = (await db.get<Record<string, unknown>>(
+              `SELECT * FROM orders WHERE stripe_session_id = ? LIMIT 1`,
+              sessionId,
+            ))!
+            status = String(row?.status || '')
+          }
+        } catch (err) {
+          console.warn(
+            '[printx] order-success Stripe confirm failed',
+            sessionId,
+            err instanceof Error ? err.message : err,
+          )
+        }
+      }
+    }
     if (status === 'pending_payment') {
       send(res, 404, { error: 'Payment not confirmed yet. Refresh in a moment.' })
       return true
@@ -1880,41 +2143,41 @@ export async function handleCatalogApi(
     }
     let event: Stripe.Event
     try {
-      event = stripe.webhooks.constructEvent(raw, sig, secret)
+      // Use exact UTF-8 bytes Stripe signed (Workers Buffer → string).
+      event = stripe.webhooks.constructEvent(raw.toString('utf8'), sig, secret.trim())
     } catch (err) {
+      console.warn('[stripe-webhook] signature', err instanceof Error ? err.message : err)
       send(res, 400, { error: err instanceof Error ? err.message : 'Invalid signature' })
       return true
     }
     if (event.type === 'checkout.session.completed') {
-      let session = event.data.object as Stripe.Checkout.Session
-      const now = new Date().toISOString()
-      const paymentIntent =
-        typeof session.payment_intent === 'string' ? session.payment_intent : null
-      // Webhook payload may omit nested ship-to; always re-fetch session + PI/charge/customer.
-      let ship = parseCheckoutShipping(session)
-      if (session.id) {
-        try {
-          const loaded = await loadCheckoutShipping(stripe, session.id)
-          session = loaded.session
-          ship = loaded.ship
-        } catch (err) {
-          console.warn(
-            '[printx] Could not re-fetch Checkout shipping after webhook',
-            session.id,
-            err instanceof Error ? err.message : err,
-          )
-        }
-      }
-      const shippingMethod = await resolveShippingMethodName(
-        stripe,
-        session,
-        ship.shippingMethod,
-      )
-      const stripeEmail = ship.customerEmail
-      const stripeName = ship.customerName
-      const customerUserId = session.metadata?.customerUserId?.trim() || ''
+      const session = event.data.object as Stripe.Checkout.Session
       const customRequestId = session.metadata?.customRequestId?.trim()
       if (customRequestId) {
+        const now = new Date().toISOString()
+        let ship = parseCheckoutShipping(session)
+        let fullSession = session
+        if (session.id) {
+          try {
+            const loaded = await loadCheckoutShipping(stripe, session.id)
+            fullSession = loaded.session
+            ship = loaded.ship
+          } catch (err) {
+            console.warn(
+              '[printx] Could not re-fetch Checkout shipping after webhook',
+              session.id,
+              err instanceof Error ? err.message : err,
+            )
+          }
+        }
+        const shippingMethod = await resolveShippingMethodName(
+          stripe,
+          fullSession,
+          ship.shippingMethod,
+        )
+        const stripeEmail = ship.customerEmail
+        const stripeName = ship.customerName
+        const customerUserId = fullSession.metadata?.customerUserId?.trim() || ''
         await db.run(
           `UPDATE custom_requests SET
             status = 'new',
@@ -1947,82 +2210,21 @@ export async function handleCatalogApi(
           ship.shippingCountry,
           shippingMethod,
           ship.shippingUsd,
-          session.id,
+          fullSession.id,
           now,
           now,
           customerUserId,
           customRequestId,
         )
-        void notifyAdminsWithPermission(db, 'requests', {
-          title: 'Custom print paid',
-          body: `${stripeName || stripeEmail || 'Customer'} paid for a custom print`,
-          url: '/requests',
-        }).catch((err) => console.warn('[push] custom paid', err))
-      } else {
-        const orderId = session.metadata?.orderId || session.client_reference_id
-        if (orderId) {
-          await db.run(
-            `UPDATE orders SET
-              status = 'paid',
-              customer_name = CASE WHEN ? != '' THEN ? ELSE customer_name END,
-              customer_email = CASE WHEN ? != '' THEN ? ELSE customer_email END,
-              shipping_name = ?,
-              shipping_line1 = ?,
-              shipping_line2 = ?,
-              shipping_city = ?,
-              shipping_state = ?,
-              shipping_postal = ?,
-              shipping_country = ?,
-              shipping_method = ?,
-              shipping_usd = ?,
-              subtotal_usd = COALESCE(?, subtotal_usd),
-              total_usd = COALESCE(?, total_usd),
-              stripe_session_id = COALESCE(stripe_session_id, ?),
-              stripe_payment_intent = ?,
-              paid_at = ?,
-              updated_at = ?,
-              user_id = COALESCE(user_id, NULLIF(?, ''))
-             WHERE id = ? AND status = 'pending_payment'`,
-            stripeName,
-            stripeName,
-            stripeEmail,
-            stripeEmail,
-            ship.shippingName || stripeName,
-            ship.shippingLine1,
-            ship.shippingLine2,
-            ship.shippingCity,
-            ship.shippingState,
-            ship.shippingPostal,
-            ship.shippingCountry,
-            shippingMethod,
-            ship.shippingUsd,
-            // Items actually paid after discounts (not pre-discount catalog subtotal).
-            ship.amountTotalUsd != null
-              ? Math.max(0, roundMoney(ship.amountTotalUsd - (ship.shippingUsd || 0)))
-              : null,
-            ship.amountTotalUsd,
-            session.id,
-            paymentIntent,
-            now,
-            now,
-            customerUserId,
-            orderId,
-          )
-          try {
-            await ensureOrderTrackCode(db, String(orderId))
-          } catch (err) {
-            console.warn(
-              '[printx] Could not assign track code',
-              orderId,
-              err instanceof Error ? err.message : err,
-            )
-          }
-          void notifyAdminsWithPermission(db, 'orders', {
-            title: 'New shop order',
-            body: `${stripeName || stripeEmail || 'Customer'} placed a paid order`,
-            url: '/orders',
-          }).catch((err) => console.warn('[push] order paid', err))
-        }
+        runInBackground('push-custom-paid', () =>
+          notifyAdminsWithPermission(db, 'requests', {
+            title: 'Custom print paid',
+            body: `${stripeName || stripeEmail || 'Customer'} paid for a custom print`,
+            url: '/requests',
+          }),
+        )
+      } else if (session.id) {
+        await confirmShopOrderFromCheckoutSession(db, stripe, session.id)
       }
     }
     send(res, 200, { received: true })
@@ -2151,13 +2353,20 @@ export async function handleCatalogApi(
       send(res, 404, { error: 'Design not found' })
       return true
     }
+    const design = rowToDesign(designRow)
+    const targets = designGcodeSliceTargets(design)
     const gcodePaths = parseDesignIdMap(designRow.gcode_paths_json)
-    const stored = gcodePaths[printerId] || ''
-    if (stored) {
-      send(res, 200, { status: 'ready' as const, storedName: stored })
+    if (printerHasStoredGcodes(gcodePaths, printerId, targets.length)) {
+      const storedNames = targets.map((t) => gcodePaths[t.storageKey(printerId)]!).filter(Boolean)
+      send(res, 200, {
+        status: 'ready' as const,
+        storedName: storedNames[0] || '',
+        partCount: targets.length,
+        storedNames,
+      })
       return true
     }
-    send(res, 200, { status: 'idle' as const })
+    send(res, 200, { status: 'idle' as const, partCount: Math.max(1, targets.length) })
     return true
   }
 
@@ -2539,11 +2748,13 @@ export async function handleCatalogApi(
       // Approvals are main-admin only — ping their devices when someone else submits.
       if (!admin.isMainAdmin) {
         const who = admin.displayName || admin.email || 'An admin'
-        void notifyMainAdmins(db, {
-          title: 'Design needs approval',
-          body: `${who} submitted “${design.name}”`,
-          url: '/approvals',
-        }).catch((err) => console.warn('[push] design submit', err))
+        runInBackground('push-design-submit', () =>
+          notifyMainAdmins(db, {
+            title: 'Design needs approval',
+            body: `${who} submitted “${design.name}”`,
+            url: '/approvals',
+          }),
+        )
       }
       send(res, 200, { ...designDto(design), sliceWarning })
       return true
@@ -3879,37 +4090,7 @@ export async function handleCatalogApi(
       })
       return true
     }
-    if (await orderItemGcodeReady(db, itemId)) {
-      send(res, 200, { status: 'ready' as const })
-      return true
-    }
-    const job = orderGcodeJobs.get(itemId)
-    if (job?.status === 'running') {
-      if (Date.now() - job.updatedAt > GCODE_JOB_STALE_MS) {
-        orderGcodeJobs.set(itemId, {
-          status: 'error',
-          error: 'G-code prepare timed out. Try Download again.',
-          updatedAt: Date.now(),
-        })
-        send(res, 200, {
-          status: 'error' as const,
-          error: 'G-code prepare timed out. Try Download again.',
-        })
-        return true
-      }
-      send(res, 200, { status: 'running' as const })
-      return true
-    }
-    if (job?.status === 'ready') {
-      // Ready without buffer/storage — treat as idle so client can retry prepare.
-      send(res, 200, { status: 'idle' as const })
-      return true
-    }
-    if (job?.status === 'error') {
-      send(res, 200, { status: 'error' as const, error: job.error || 'G-code prepare failed' })
-      return true
-    }
-    send(res, 200, { status: 'idle' as const })
+    send(res, 200, await orderItemGcodeStatus(db, itemId))
     return true
   }
 
@@ -3927,10 +4108,6 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'G-code download is disabled after the order is marked shipped.' })
       return true
     }
-    if (await orderItemGcodeReady(db, itemId)) {
-      send(res, 200, { status: 'ready' as const })
-      return true
-    }
     const item = await db.get<{ assigned_printer_id: string | null }>(
       'SELECT assigned_printer_id FROM order_items WHERE id = ?',
       itemId,
@@ -3943,8 +4120,15 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'Claim this item with a printer before downloading G-code.' })
       return true
     }
-    startOrderGcodePrep(itemId)
-    send(res, 200, { status: 'running' as const })
+    try {
+      const result = await startOrderGcodePrep(db, itemId)
+      send(res, 200, result)
+    } catch (err) {
+      send(res, 200, {
+        status: 'error' as const,
+        error: err instanceof Error ? err.message : 'G-code prepare failed',
+      })
+    }
     return true
   }
 
@@ -3960,9 +4144,15 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'G-code download is disabled after the order is marked shipped.' })
       return true
     }
+    const partRaw = new URL(req.url || '', 'http://local').searchParams.get('part')
+    const partIndex = partRaw == null || partRaw === '' ? 0 : Math.floor(Number(partRaw))
+    if (!Number.isFinite(partIndex) || partIndex < 0) {
+      send(res, 400, { error: 'Invalid part index.' })
+      return true
+    }
     try {
       // Fast path only — slicing runs via /gcode/prepare so proxies do not time out.
-      const file = await openOrderItemGcode(db, itemId)
+      const file = await openOrderItemGcode(db, itemId, partIndex)
       if (!file) {
         const job = orderGcodeJobs.get(itemId)
         if (job?.status === 'error') {
@@ -3983,18 +4173,12 @@ export async function handleCatalogApi(
       )
       res.setHeader('Cache-Control', 'private, no-store')
       if (file.kind === 'stream') {
-        const stream = fs.createReadStream(file.path)
-        stream.on('close', () => file.cleanup?.())
-        stream.on('error', () => {
+        try {
+          const buf = await fs.promises.readFile(file.path)
+          res.end(buf)
+        } finally {
           file.cleanup?.()
-          if (!res.headersSent) {
-            res.statusCode = 500
-            res.end('Error')
-          } else {
-            res.destroy()
-          }
-        })
-        stream.pipe(res)
+        }
       } else {
         res.end(file.buffer)
       }
@@ -4467,6 +4651,7 @@ export async function handleCatalogApi(
           label: String(o.customer_name || o.customer_email || 'Customer'),
           email: String(o.customer_email ?? ''),
           amountUsd: roundMoney(Number(o.item_earnings_usd) || 0),
+          shippingUsd: roundMoney(Number(o.shipping_usd) || 0),
           status: String(o.status ?? ''),
           paidAt: o.paid_at != null ? String(o.paid_at) : null,
           stripeSessionId: o.stripe_session_id != null ? String(o.stripe_session_id) : null,
@@ -4477,6 +4662,7 @@ export async function handleCatalogApi(
           label: String(o.name || o.email || 'Custom print'),
           email: String(o.email ?? ''),
           amountUsd: roundMoney(Number(o.catalog_price_usd) || 0),
+          shippingUsd: roundMoney(Number(o.shipping_usd) || 0),
           status: String(o.status ?? ''),
           paidAt: o.paid_at != null ? String(o.paid_at) : null,
           stripeSessionId: o.stripe_session_id != null ? String(o.stripe_session_id) : null,

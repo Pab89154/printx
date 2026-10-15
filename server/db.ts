@@ -1004,7 +1004,7 @@ async function seed(database: DbApi) {
   )
 
   const defaults: WebsiteContent = {
-    heroHeadline: 'Your Ideas. Made Real.',
+    heroHeadline: 'Your Ideas.\nMade Real.',
     heroDescription: 'Student-made 3D prints, sold locally at school stands throughout the DFW area.',
     aboutText: 'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across the DFW area — where students can see, touch, and buy 3D-printed products made by people their age.',
     aboutTeam: 'We believe in learning by doing — combining creativity, entrepreneurship, and technology to build something real for our community.',
@@ -1067,8 +1067,7 @@ END $$;
   }
 }
 
-async function initDb(): Promise<DbApi> {
-  const database = await getDbApi()
+async function runMigrationsAndSeed(database: DbApi): Promise<void> {
   await migrate(database)
   await migrateUserAuth(database)
   await migratePrinterCloudSlicer(database)
@@ -1096,6 +1095,28 @@ async function initDb(): Promise<DbApi> {
   await ensurePrimaryAdmin(database)
   const { seedCatalogDefaults } = await import('./catalog.ts')
   await seedCatalogDefaults(database)
+}
+
+async function initDb(): Promise<DbApi> {
+  const database = await getDbApi()
+  // Workers: schema is already on Postgres — don't block every cold isolate on full migrate.
+  // Run migrations in the background once a quick probe succeeds.
+  const onWorker =
+    process.env.PRINTX_REQUIRE_OBJECT_STORAGE === '1' ||
+    typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined'
+  if (onWorker) {
+    try {
+      await database.get('SELECT id FROM users LIMIT 1')
+      ready = true
+      void runMigrationsAndSeed(database).catch((err) => {
+        console.warn('[printx] background migrate failed', err)
+      })
+      return database
+    } catch {
+      /* fall through to synchronous migrate for empty/new DBs */
+    }
+  }
+  await runMigrationsAndSeed(database)
   ready = true
   return database
 }
@@ -1206,7 +1227,7 @@ export async function getWebsiteContent(database: DbApi): Promise<WebsiteContent
   }
 
   const defaults: WebsiteContent = {
-    heroHeadline: 'Your Ideas. Made Real.',
+    heroHeadline: 'Your Ideas.\nMade Real.',
     heroDescription: 'Student-made 3D prints, sold locally at school stands throughout the DFW area.',
     aboutText:
       'PrintX was created by students who wanted to turn 3D printing into a real local business. What started as a passion for making things grew into a stand at schools across the DFW area — where students can see, touch, and buy 3D-printed products made by people their age.',

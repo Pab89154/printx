@@ -167,6 +167,8 @@ export type MoneyPaymentLineDto = {
   label: string
   email: string
   amountUsd: number
+  /** UPS pass-through collected with this payment (not PrintX profit). */
+  shippingUsd?: number
   status: string
   paidAt: string | null
   stripeSessionId: string | null

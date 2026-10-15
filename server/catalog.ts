@@ -25,7 +25,7 @@ export type DesignStatus = 'draft' | 'pending_review' | 'approved' | 'rejected' 
 
 export type SliceStatus = 'idle' | 'slicing' | 'ready' | 'error'
 
-/** One STL per color region for multicolor preview (slicing still uses stlPath). */
+/** One STL per color region for multicolor preview + per-part G-code slicing. */
 export type DesignPart = {
   label: string
   stlPath: string

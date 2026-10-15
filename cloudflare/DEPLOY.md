@@ -45,6 +45,10 @@ npm run cf:deploy
 
 9. Suspend/delete the Render web service when `https://printx.pw/api/health` shows `"runtime"` / object storage OK.
 
+## iOS Home Screen blank screen
+
+Missing `/assets/index-*.js` must **not** fall back to `index.html` (that breaks module scripts on installed PWAs). After deploys, open `https://portal.printx.pw/reset-pwa` on the phone once, or use the in-app **Refresh app** prompt.
+
 ## G-code
 
 Download never slices on the Worker. Use **Designs → Prepare G-code · P1S** (GitHub Actions) or run:

@@ -1,11 +1,54 @@
-/* PrintX portal service worker — Web Push → Notification Center (iOS PWA + Android). */
+/* PrintX portal service worker — Web Push + keep iOS PWA off stale shells.
+ * Cache version bump forces activate() to drop old Cache Storage entries.
+ */
+const CACHE_VERSION = 'printx-sw-v5'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting())
 })
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim())
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys()
+      await Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)))
+      await self.clients.claim()
+    })(),
+  )
+})
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+  }
+})
+
+// Network-first for navigations / HTML so home-screen apps don't stick on old index.html.
+self.addEventListener('fetch', (event) => {
+  const req = event.request
+  if (req.method !== 'GET') return
+  const url = new URL(req.url)
+  if (url.origin !== self.location.origin) return
+
+  const accept = req.headers.get('accept') || ''
+  const isNavigate = req.mode === 'navigate' || accept.includes('text/html')
+  const isShell =
+    url.pathname === '/' ||
+    url.pathname === '/index.html' ||
+    url.pathname === '/sw.js' ||
+    url.pathname === '/manifest.webmanifest'
+
+  if (!isNavigate && !isShell) return
+
+  event.respondWith(
+    fetch(req)
+      .then((res) => res)
+      .catch(async () => {
+        const cached = await caches.match(req)
+        if (cached) return cached
+        return new Response('Offline', { status: 503, statusText: 'Offline' })
+      }),
+  )
 })
 
 self.addEventListener('push', (event) => {
@@ -36,6 +79,8 @@ self.addEventListener('push', (event) => {
       data: { url: data.url },
       tag: `printx-${data.url}`,
       renotify: true,
+      // Helps Android/Chrome surface the alert when the portal is open in background.
+      requireInteraction: false,
     }),
   )
 })
