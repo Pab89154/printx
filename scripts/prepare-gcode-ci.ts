@@ -10,6 +10,11 @@ import { ensureModelBucket, resolveStoredFile } from '../server/objectStorage.ts
 import { storeGcodeBuffer } from '../server/gcodeStorage.ts'
 import { sliceStlLocally, localSlicerAvailable } from '../server/localSlicer.ts'
 import { designGcodeSliceTargets } from '../server/gcodePartPaths.ts'
+import {
+  cloudSlicerConfigured,
+  quoteStlForPrintxPrinter,
+  type CloudSlicerCreds,
+} from '../server/cloudSlicer.ts'
 
 function parseIdMap(raw: unknown): Record<string, string> {
   if (!raw) return {}
@@ -26,15 +31,40 @@ function parseIdMap(raw: unknown): Record<string, string> {
   }
 }
 
+async function loadPrinterCreds(
+  db: Awaited<ReturnType<typeof getDb>>,
+  printerId: string,
+): Promise<CloudSlicerCreds | null> {
+  const row = await db.get<{
+    cloud_slicer_token: string | null
+    cloud_slicer_printer_id: string | null
+    cloud_slicer_filament_id: string | null
+  }>(
+    `SELECT
+       CASE WHEN TRIM(COALESCE(p.cloud_slicer_token, '')) != ''
+         THEN p.cloud_slicer_token ELSE u.cloud_slicer_token END as cloud_slicer_token,
+       CASE WHEN TRIM(COALESCE(p.cloud_slicer_printer_id, '')) != ''
+         THEN p.cloud_slicer_printer_id ELSE u.cloud_slicer_printer_id END as cloud_slicer_printer_id,
+       CASE WHEN TRIM(COALESCE(p.cloud_slicer_filament_id, '')) != ''
+         THEN p.cloud_slicer_filament_id ELSE u.cloud_slicer_filament_id END as cloud_slicer_filament_id
+     FROM printers p
+     LEFT JOIN users u ON u.id = p.owner_user_id
+     WHERE p.id = ?`,
+    printerId,
+  )
+  if (!row) return null
+  const creds: CloudSlicerCreds = {
+    token: String(row.cloud_slicer_token || ''),
+    printerId: String(row.cloud_slicer_printer_id || ''),
+    filamentId: String(row.cloud_slicer_filament_id || ''),
+  }
+  return cloudSlicerConfigured(creds) ? creds : null
+}
+
 async function main() {
   const designId = process.env.PRINTX_DESIGN_ID?.trim()
   const printerId = process.env.PRINTX_PRINTER_ID?.trim() || 'pablo_p1s'
   if (!designId) throw new Error('PRINTX_DESIGN_ID is required')
-  if (!localSlicerAvailable(printerId)) {
-    throw new Error(
-      `Local slicer not available for ${printerId}. Check PRINTX_SLICER_BIN / profiles.`,
-    )
-  }
 
   await ensureDbReady()
   await ensureModelBucket()
@@ -54,10 +84,13 @@ async function main() {
 
   const gcodePaths = parseIdMap(designRow.gcode_paths_json)
   const quoteIds = parseIdMap(designRow.quote_ids_json)
+  const fileIds = parseIdMap(designRow.file_ids_json)
   let totalGrams = 0
   let totalHours = 0
+  let gcodeNote = ''
 
   try {
+    const creds = await loadPrinterCreds(db, printerId)
     for (const target of targets) {
       const resolved = await resolveStoredFile(target.stlPath)
       if (!resolved) throw new Error(`STL missing in storage: ${target.stlPath}`)
@@ -66,20 +99,49 @@ async function main() {
           target.partIndex != null
             ? `part ${target.partIndex + 1} (${target.label})`
             : 'model'
-        console.log('[prepare-gcode-ci] slicing', designId, printerId, label, target.stlPath)
-        const local = await sliceStlLocally(resolved.path, printerId)
-        const hint =
-          target.partIndex != null
-            ? `${designId.slice(0, 8)}-${printerId}-p${target.partIndex}`
-            : `${designId.slice(0, 8)}-${printerId}`
-        const storedName = await storeGcodeBuffer(local.buffer, { hint })
-        gcodePaths[target.storageKey(printerId)] = storedName
-        totalGrams += local.grams
-        totalHours += local.hours
-        console.log('[prepare-gcode-ci] stored', storedName, `${local.grams}g`, `${local.hours}h`)
+        if (creds && target.partIndex == null) {
+          console.log('[prepare-gcode-ci] cloud quote', designId, printerId, target.stlPath)
+          const quoted = await quoteStlForPrintxPrinter(printerId, resolved.path, creds, {
+            prefer: 'cloud',
+            captureGcode: false,
+            allowLocalFallback: false,
+          })
+          totalGrams += quoted.grams
+          totalHours += quoted.hours
+          if (quoted.quoteId) quoteIds[printerId] = quoted.quoteId
+          if (quoted.fileId) fileIds[printerId] = quoted.fileId
+          console.log('[prepare-gcode-ci] cloud quote', `${quoted.grams}g`, `${quoted.hours}h`)
+        }
+        if (localSlicerAvailable(printerId) && !(totalGrams > 0)) {
+          try {
+            console.log('[prepare-gcode-ci] slicing', designId, printerId, label, target.stlPath)
+            const local = await sliceStlLocally(resolved.path, printerId)
+            const hint =
+              target.partIndex != null
+                ? `${designId.slice(0, 8)}-${printerId}-p${target.partIndex}`
+                : `${designId.slice(0, 8)}-${printerId}`
+            const storedName = await storeGcodeBuffer(local.buffer, { hint })
+            gcodePaths[target.storageKey(printerId)] = storedName
+            if (totalGrams <= 0) totalGrams += local.grams
+            if (totalHours <= 0) totalHours += local.hours
+            console.log('[prepare-gcode-ci] stored', storedName, `${local.grams}g`, `${local.hours}h`)
+          } catch (sliceErr) {
+            const message = sliceErr instanceof Error ? sliceErr.message : String(sliceErr)
+            console.warn('[prepare-gcode-ci] local slice skipped:', message.slice(0, 300))
+            if (!gcodeNote) gcodeNote = 'G-code was not stored. Grams/hours are from Cloud Slicer.'
+          }
+        }
       } finally {
         resolved.cleanup?.()
       }
+    }
+
+    if (!(totalGrams > 0) || !(totalHours > 0)) {
+      throw new Error(
+        creds
+          ? 'Quoting finished without grams/hours.'
+          : `No Cloud Slicer credentials for ${printerId}, and the local slicer did not produce grams/hours.`,
+      )
     }
 
     quoteIds[printerId] = quoteIds[printerId] || `local-${Date.now().toString(36)}`
@@ -108,16 +170,19 @@ async function main() {
       `UPDATE designs SET
          gcode_paths_json = ?,
          quote_ids_json = ?,
+         file_ids_json = ?,
          ${gramsCol} = ?,
          ${hoursCol} = ?,
          slice_status = 'ready',
-         slice_error = '',
+         slice_error = ?,
          updated_at = ?
        WHERE id = ?`,
       JSON.stringify(gcodePaths),
       JSON.stringify(quoteIds),
+      JSON.stringify(fileIds),
       grams,
       hours,
+      gcodeNote.slice(0, 500),
       new Date().toISOString(),
       designId,
     )
