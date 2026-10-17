@@ -15,6 +15,7 @@ import {
   quoteStlForPrintxPrinter,
   type CloudSlicerCreds,
 } from '../server/cloudSlicer.ts'
+import { PRINTER_BED_MM, fitStlToBed } from '../server/stlFit.ts'
 
 function parseIdMap(raw: unknown): Record<string, string> {
   if (!raw) return {}
@@ -100,12 +101,26 @@ async function main() {
             ? `part ${target.partIndex + 1} (${target.label})`
             : 'model'
         if (creds && target.partIndex == null) {
+          const bedMm = PRINTER_BED_MM[printerId] ?? 220
+          const fitted = fitStlToBed(resolved.path, bedMm)
+          if (fitted.scaled) {
+            console.log(
+              '[prepare-gcode-ci] scaled STL to fit bed',
+              `${fitted.sizeMm.toFixed(0)}mm -> ${bedMm}mm`,
+              `factor ${fitted.factor.toFixed(4)}`,
+            )
+          }
           console.log('[prepare-gcode-ci] cloud quote', designId, printerId, target.stlPath)
-          const quoted = await quoteStlForPrintxPrinter(printerId, resolved.path, creds, {
-            prefer: 'cloud',
-            captureGcode: false,
-            allowLocalFallback: false,
-          })
+          let quoted
+          try {
+            quoted = await quoteStlForPrintxPrinter(printerId, fitted.path, creds, {
+              prefer: 'cloud',
+              captureGcode: false,
+              allowLocalFallback: false,
+            })
+          } finally {
+            fitted.cleanup?.()
+          }
           totalGrams += quoted.grams
           totalHours += quoted.hours
           if (quoted.quoteId) quoteIds[printerId] = quoted.quoteId
