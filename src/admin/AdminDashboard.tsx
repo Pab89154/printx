@@ -41,10 +41,13 @@ export function AdminDashboard() {
   }, [can])
 
   const owedToMeUsd = useMemo(() => {
-    if (!money || !email) return 0
+    if (!money) return 0
+    if (money.youEarnTotalUsd != null) return money.youEarnTotalUsd
+    if (!email) return 0
     const me = email.trim().toLowerCase()
     const mine = money.owedByPerson.find((p) => p.email.trim().toLowerCase() === me)
-    return mine?.totalOwedUsd ?? 0
+    const printPay = mine?.totalOwedUsd ?? 0
+    return printPay + (money.myProfitShareUsd ?? 0)
   }, [money, email])
 
   const online = stats?.websiteOnline !== false
@@ -150,15 +153,7 @@ export function AdminDashboard() {
               Open Money →
             </span>
           </div>
-          <div className="mt-6 grid gap-6 sm:grid-cols-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
-                What you earn
-              </p>
-              <p className="mt-2 text-4xl font-extrabold tracking-tight tabular-nums sm:text-5xl">
-                {money ? `$${money.earnings.totalUsd.toFixed(2)}` : '—'}
-              </p>
-            </div>
+          <div className="mt-6 grid gap-6 sm:grid-cols-2">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
                 Owed to me
@@ -166,6 +161,12 @@ export function AdminDashboard() {
               <p className="mt-2 text-4xl font-extrabold tracking-tight tabular-nums text-cyan sm:text-5xl">
                 {money ? `$${owedToMeUsd.toFixed(2)}` : '—'}
               </p>
+              {money ? (
+                <p className="mt-2 text-sm text-white/55">
+                  Print pay ${(money.myPrintPayUsd ?? 0).toFixed(2)} + share $
+                  {(money.myProfitShareUsd ?? 0).toFixed(2)}
+                </p>
+              ) : null}
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-white/55">

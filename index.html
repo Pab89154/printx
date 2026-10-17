@@ -213,6 +213,8 @@
           resolveReady()
         }
 
+        window.__PRINTX_DISMISS_WAKE__ = finish
+
         function schedule(ms) {
           if (timer) clearTimeout(timer)
           timer = window.setTimeout(ping, ms)

@@ -23,6 +23,33 @@
 
 html {
   scroll-behavior: smooth;
+  overflow-x: clip;
+}
+
+/* iOS Safari: flex-wrap rows often refuse to shrink (min-content = sum of children). */
+.action-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.action-row > .btn {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (min-width: 640px) {
+  .action-row {
+    display: flex;
+    width: auto;
+    flex-wrap: wrap;
+  }
+
+  .action-row > .btn {
+    width: auto;
+  }
 }
 
 /* Clear sticky header when jumping to in-page sections */
@@ -35,6 +62,7 @@ body {
   color: var(--color-navy);
   background: #ffffff;
   -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
 }
 
 /* Logo-matched dark field (navy → light electric blue) */
@@ -239,13 +267,28 @@ a.btn {
 /* Press squash — keep scale modest so iOS doesn’t get horizontal overflow */
 .btn[data-btn-pop='pressing']:not(:disabled),
 .press-pop[data-btn-pop='pressing'] {
-  transform: translateY(1px) scale(0.97) !important;
+  transform: translateY(1px) scale(0.98) !important;
   transition-duration: 60ms !important;
 }
 
 .btn[data-btn-pop='popping']:not(:disabled),
 .press-pop[data-btn-pop='popping'] {
   animation: btn-host-pop 480ms cubic-bezier(0.22, 1.55, 0.36, 1);
+}
+
+/* Touch / coarse pointers: skip lift animation — it clips and causes sideways bounce on iPhone */
+@media (hover: none), (pointer: coarse) {
+  .btn,
+  .press-pop {
+    --btn-lift-y: 0px;
+    --btn-lift-scale: 1;
+  }
+
+  .btn[data-btn-pop='popping']:not(:disabled),
+  .press-pop[data-btn-pop='popping'] {
+    animation: none;
+    transform: none;
+  }
 }
 
 @keyframes btn-host-pop {

@@ -273,6 +273,13 @@ export async function handleWorkerFetch(request: Request, env: WorkerEnv): Promi
         }
       })
 
+      // Model uploads write to disk then Supabase; 20s was cutting them off.
+      const isUpload =
+        request.method === 'POST' &&
+        (pathname.includes('/upload') ||
+          pathname.endsWith('/quote-tick') ||
+          (request.headers.get('content-type') || '').includes('multipart/form-data'))
+      const timeoutMs = isUpload ? 28_000 : 20_000
       // Always settle — never leave the portal fetch hanging on a stuck stream.
       return await Promise.race([
         done,
@@ -280,7 +287,7 @@ export async function handleWorkerFetch(request: Request, env: WorkerEnv): Promi
         new Promise<Response>((resolve) =>
           setTimeout(
             () => resolve(Response.json({ error: 'Request timed out' }, { status: 504 })),
-            20_000,
+            timeoutMs,
           ),
         ),
       ])

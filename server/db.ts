@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { resolveImageUrl } from '../shared/imageUrl.ts'
 import { setPrimaryAdminUserId } from '../shared/permissions.ts'
 import type { Stand, WebsiteContent } from './types.ts'
-import { closeDbApi, getDbApi, usingPostgres, UPLOADS_DIR, type DbApi } from './dbClient.ts'
+import { closeDbApi, ensureUploadsDir, getDbApi, usingPostgres, type DbApi } from './dbClient.ts'
 
 export type Db = DbApi
 
@@ -389,6 +389,41 @@ async function migrateCheckoutShipping(database: DbApi) {
   }
 }
 
+/** Cash school-pickup sales and the checkout notice saved with an order. */
+async function migrateCashAndConsent(database: DbApi) {
+  const orderCols: [string, string][] = [
+    ['payment_method', `TEXT NOT NULL DEFAULT 'stripe'`],
+    ['cash_recorded_by', `TEXT`],
+    ['classmate_code', `TEXT NOT NULL DEFAULT ''`],
+    ['agreement_name', `TEXT NOT NULL DEFAULT ''`],
+    ['agreement_text', `TEXT NOT NULL DEFAULT ''`],
+    ['agreement_payment_checked', `INTEGER NOT NULL DEFAULT 0`],
+    ['agreement_terms_checked', `INTEGER NOT NULL DEFAULT 0`],
+    ['agreement_at', `TEXT`],
+  ]
+  for (const [name, def] of orderCols) {
+    try {
+      await database.exec(`ALTER TABLE orders ADD COLUMN ${name} ${def}`)
+    } catch {
+      /* exists */
+    }
+  }
+  const customCols: [string, string][] = [
+    ['agreement_name', `TEXT NOT NULL DEFAULT ''`],
+    ['agreement_text', `TEXT NOT NULL DEFAULT ''`],
+    ['agreement_payment_checked', `INTEGER NOT NULL DEFAULT 0`],
+    ['agreement_terms_checked', `INTEGER NOT NULL DEFAULT 0`],
+    ['agreement_at', `TEXT`],
+  ]
+  for (const [name, def] of customCols) {
+    try {
+      await database.exec(`ALTER TABLE custom_requests ADD COLUMN ${name} ${def}`)
+    } catch {
+      /* exists */
+    }
+  }
+}
+
 /** Public customer accounts, order ownership, tracking, refund requests, discounts. */
 async function migrateCustomerAccounts(database: DbApi) {
   try {
@@ -403,6 +438,8 @@ async function migrateCustomerAccounts(database: DbApi) {
     ['tracking_carrier', `TEXT NOT NULL DEFAULT ''`],
     ['tracking_url', `TEXT NOT NULL DEFAULT ''`],
     ['shipped_at', `TEXT`],
+    // Dedupes shop-order push when webhook + success-page both confirm.
+    ['paid_notified_at', `TEXT`],
   ]
   for (const table of ['orders', 'custom_requests'] as const) {
     for (const [name, def] of orderCols) {
@@ -787,6 +824,14 @@ async function migrateMailSchedule(database: DbApi) {
   }
 }
 
+async function migrateMailDrafts(database: DbApi) {
+  try {
+    await database.exec(`ALTER TABLE mail_messages ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0`)
+  } catch {
+    /* column already exists */
+  }
+}
+
 /** Clear the old demo expiry that kept announcements hidden after Sept 2026. */
 async function migrateStaleAnnouncementExpiry(database: DbApi) {
   const row = await database.get<{ value: string }>(
@@ -1067,6 +1112,23 @@ END $$;
   }
 }
 
+export async function migrateShippingToProfit(database: DbApi) {
+  for (const table of ['orders', 'custom_requests'] as const) {
+    try {
+      // IF NOT EXISTS works on modern Postgres (Supabase) and SQLite 3.35+.
+      await database.exec(
+        `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS shipping_to_profit_at TEXT`,
+      )
+    } catch {
+      try {
+        await database.exec(`ALTER TABLE ${table} ADD COLUMN shipping_to_profit_at TEXT`)
+      } catch {
+        /* column already exists */
+      }
+    }
+  }
+}
+
 async function runMigrationsAndSeed(database: DbApi): Promise<void> {
   await migrate(database)
   await migrateUserAuth(database)
@@ -1077,6 +1139,7 @@ async function runMigrationsAndSeed(database: DbApi): Promise<void> {
   await migrateMailArchive(database)
   await migrateMailTrash(database)
   await migrateMailSchedule(database)
+  await migrateMailDrafts(database)
   await migrateStaleAnnouncementExpiry(database)
   await migrateEmojiToIcons(database)
   await migrateContactEmail(database)
@@ -1090,6 +1153,8 @@ async function runMigrationsAndSeed(database: DbApi): Promise<void> {
   await migrateDesignPartsJson(database)
   await migrateOrderItemFilamentColors(database)
   await migrateCustomerAccounts(database)
+  await migrateCashAndConsent(database)
+  await migrateShippingToProfit(database)
   await migrateRlsLockdown(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
@@ -1175,7 +1240,7 @@ export async function getDb(): Promise<DbApi> {
 
 export async function getUploadsDir(): Promise<string> {
   await ensureDbReady()
-  return UPLOADS_DIR
+  return ensureUploadsDir()
 }
 
 export function rowToStand(row: Record<string, unknown>): Stand {

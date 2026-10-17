@@ -143,7 +143,7 @@ export async function sendTestPushToUser(
   for (const row of rows) {
     const result = await sendToSubscription(row, {
       title: 'PrintX',
-      body: 'Test notification — your Pixel (or phone) is connected.',
+      body: 'This is a test notification for PrintX notifications.',
       url: '/settings',
     })
     if (result === 'ok') sent += 1

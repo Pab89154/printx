@@ -165,7 +165,7 @@ export async function handleCustomerApi(
     const rows = await db.all<Record<string, unknown>>(
       `SELECT code, kind, percent_off, amount_off_cents, max_redemptions, created_at
        FROM discounts
-       WHERE active = 1 AND visible_to_customers = 1
+       WHERE active = 1 AND visible_to_customers = 1 AND kind <> 'school_pickup'
        ORDER BY created_at DESC
        LIMIT 50`,
     )

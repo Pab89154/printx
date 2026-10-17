@@ -43,9 +43,11 @@ export function AdminOrders() {
   const [refundBusyId, setRefundBusyId] = useState<string | null>(null)
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null)
   const [gcodeBusyId, setGcodeBusyId] = useState<string | null>(null)
+  const [stlBusyId, setStlBusyId] = useState<string | null>(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [shipTracking, setShipTracking] = useState<Record<string, string>>({})
   const [shipBusyId, setShipBusyId] = useState<string | null>(null)
+  const [arriveBusyId, setArriveBusyId] = useState<string | null>(null)
   const [pendingRefund, setPendingRefund] = useState<OrderDto | null>(null)
   const [pendingDeleteOrder, setPendingDeleteOrder] = useState<OrderDto | null>(null)
   const [pendingDeclineRefund, setPendingDeclineRefund] = useState<{ id: string } | null>(null)
@@ -102,6 +104,19 @@ export function AdminOrders() {
       setError(e instanceof Error ? e.message : 'Ship update failed')
     } finally {
       setShipBusyId(null)
+    }
+  }
+
+  async function markArrived(order: OrderDto) {
+    setArriveBusyId(order.id)
+    setError('')
+    try {
+      await api.catalog.orders.markArrived(order.id)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not mark arrived')
+    } finally {
+      setArriveBusyId(null)
     }
   }
 
@@ -190,9 +205,9 @@ export function AdminOrders() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+    <div className="min-w-0 max-w-full space-y-6 overflow-x-clip">
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-navy">Orders</h1>
           <p className="mt-1 text-sm text-muted">
             Claim a paid item with your printer. When done, Money tracks what to pay the printer
@@ -222,7 +237,7 @@ export function AdminOrders() {
                   {r.customerName || r.customerEmail} · ${money(r.amountUsd)}
                 </p>
                 <p className="text-muted">{r.reason}</p>
-                <div className="mt-2 flex flex-wrap gap-2">
+                <div className="action-row mt-2">
                   <button
                     type="button"
                     className="btn btn-primary btn-compact"
@@ -249,12 +264,15 @@ export function AdminOrders() {
       )}
 
       {orders.map((order) => (
-        <section key={order.id} className="rounded-2xl border bg-white p-6">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
+        <section key={order.id} className="min-w-0 overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
+          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+            <div className="min-w-0">
               <p className="font-semibold text-navy">
                 {order.customerName || 'Customer'} · {order.customerEmail}
               </p>
+              {order.paymentMethod === 'cash' ? (
+                <p className="mt-1 text-xs font-semibold text-navy">Cash · school pickup</p>
+              ) : null}
               <p className="text-xs text-muted">
                 {publicOrderStatusLabel(order.status)} · ${money(order.totalUsd)}
                 {order.subtotalUsd > 0 && order.shippingUsd > 0
@@ -268,7 +286,20 @@ export function AdminOrders() {
                   {order.trackCodeShownAt ? ' · shown to customer' : ' · not shown yet'}
                 </p>
               ) : null}
-              {(order.shippingName ||
+              {order.paymentMethod === 'cash' ? (
+                <div className="mt-2 text-xs text-muted">
+                  <p>School pickup · no shipping</p>
+                  {order.cashRecordedByName ? <p>Cash recorded by {order.cashRecordedByName}</p> : null}
+                  {order.agreementName ? (
+                    <p>
+                      Agreement: {order.agreementName}
+                      {order.agreementAt ? ` · ${new Date(order.agreementAt).toLocaleString()}` : ''}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {order.paymentMethod !== 'cash' &&
+              (order.shippingName ||
                 order.shippingLine1 ||
                 order.shippingMethod ||
                 order.shippingUsd > 0) && (
@@ -314,7 +345,7 @@ export function AdminOrders() {
                   Customer refund request: {order.pendingRefundRequest.reason}
                 </p>
               ) : null}
-              {order.status !== 'refunded' && !order.shippedAt && (
+              {order.paymentMethod !== 'cash' && order.status !== 'refunded' && !order.shippedAt && (
                 <div className="mt-3 flex flex-wrap items-end gap-2">
                   <label className="text-xs text-muted">
                     UPS tracking
@@ -337,9 +368,23 @@ export function AdminOrders() {
                   </button>
                 </div>
               )}
+              {order.status !== 'refunded' &&
+                Boolean(order.shippedAt) &&
+                order.status === 'shipped' && (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-compact"
+                      disabled={arriveBusyId === order.id}
+                      onClick={() => void markArrived(order)}
+                    >
+                      {arriveBusyId === order.id ? 'Saving…' : 'Mark arrived / delivered'}
+                    </button>
+                  </div>
+                )}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {order.status !== 'refunded' && (
+            <div className="action-row sm:w-auto">
+              {order.paymentMethod !== 'cash' && order.status !== 'refunded' && (
                 <button
                   type="button"
                   className="btn btn-ghost btn-compact text-red-600"
@@ -366,10 +411,10 @@ export function AdminOrders() {
               return (
               <div
                 key={item.id}
-                className="rounded-xl border border-slate-100 px-4 py-3 text-sm"
+                className="min-w-0 overflow-hidden rounded-xl border border-slate-100 px-3 py-3 text-sm sm:px-4"
               >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
+                <div className="flex min-w-0 flex-col gap-3">
+                  <div className="min-w-0">
                     <p className="font-medium text-navy">
                       {item.designName ?? 'Design'} · {item.colorName} × {item.qty}
                     </p>
@@ -401,9 +446,9 @@ export function AdminOrders() {
                   </div>
 
                   {order.status !== 'refunded' && item.printStatus === 'unclaimed' && (
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                       <select
-                        className="rounded-lg border px-2 py-1.5 text-sm"
+                        className="w-full min-w-0 rounded-lg border px-2 py-1.5 text-sm sm:w-auto"
                         value={claimPrinter[item.id] ?? ''}
                         onChange={(e) =>
                           setClaimPrinter((m) => ({ ...m, [item.id]: e.target.value }))
@@ -417,7 +462,7 @@ export function AdminOrders() {
                       </select>
                       <button
                         type="button"
-                        className="btn btn-primary btn-compact"
+                        className="btn btn-primary btn-compact w-full sm:w-auto"
                         onClick={() =>
                           void api.catalog.orders
                             .claim(item.id, claimPrinter[item.id] || printers[0]?.id || '')
@@ -433,7 +478,29 @@ export function AdminOrders() {
                   {order.status !== 'refunded' &&
                     !order.shippedAt &&
                     (item.printStatus === 'claimed' || isPrinted(item.printStatus)) && (
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="action-row">
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-compact"
+                          disabled={stlBusyId === item.id}
+                          onClick={() => {
+                            setStlBusyId(item.id)
+                            setError('')
+                            void api.catalog.orders
+                              .downloadStl(item.id)
+                              .then(() => setError(''))
+                              .catch((e) =>
+                                setError(e instanceof Error ? e.message : 'STL download failed'),
+                              )
+                              .finally(() => setStlBusyId(null))
+                          }}
+                        >
+                          {stlBusyId === item.id
+                            ? 'Downloading…'
+                            : (item.filamentColorIds?.length || 0) > 1
+                              ? 'Download STLs'
+                              : 'Download STL'}
+                        </button>
                         <button
                           type="button"
                           className="btn btn-secondary btn-compact"
@@ -453,24 +520,15 @@ export function AdminOrders() {
                           }}
                         >
                           {gcodeBusyId === item.id
-                            ? 'Slicing / downloading…'
-                            : `${
-                                (item.filamentColorIds?.length || 0) > 1
-                                  ? 'Download G-codes'
-                                  : 'Download G-code'
-                              }${
-                                item.assignedPrinterId
-                                  ? ` · ${
-                                      printers.find((p) => p.id === item.assignedPrinterId)
-                                        ?.ownerLabel ?? item.assignedPrinterId
-                                    }`
-                                  : ''
-                              }`}
+                            ? 'Slicing…'
+                            : (item.filamentColorIds?.length || 0) > 1
+                              ? 'Download G-codes'
+                              : 'Download G-code'}
                         </button>
                         {item.printStatus === 'claimed' && (
                           <button
                             type="button"
-                            className="btn btn-primary btn-compact"
+                            className="btn btn-primary btn-compact col-span-2 sm:col-span-1"
                             onClick={() =>
                               void api.catalog.orders
                                 .complete(item.id)

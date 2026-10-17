@@ -1,7 +1,9 @@
 /**
  * Cloud Slicer quoting + worst-cost pricing for custom print requests.
  */
+import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { DbApi } from './dbClient.ts'
 import { getPricingSettings, listPrinters } from './catalog.ts'
 import {
@@ -17,9 +19,11 @@ import {
 } from './cloudSlicer.ts'
 import { localSlicerAvailable, sliceStlLocally } from './localSlicer.ts'
 import { loadStoredGcode, storeGcodeBuffer } from './gcodeStorage.ts'
-import { resolveStoredFile } from './objectStorage.ts'
+import { objectStorageRequired, resolveStoredFile, uploadStoredFile } from './objectStorage.ts'
 import { priceDesign, type PrinterCostInput } from './pricing.ts'
 import { SLICEABLE_EXTS } from '../shared/modelFormats.ts'
+import { parseGcodeMetrics, writeGcodePreviewStl } from './gcodeToStl.ts'
+import { getUploadsDir } from './db.ts'
 
 const PRINTER_IDS = ['pablo_p1s', 'court_ender', 'josh_kobra'] as const
 
@@ -168,6 +172,73 @@ async function credsForPrinter(
   return cloudSlicerConfigured(creds) ? creds : null
 }
 
+/** Price a custom request from the G-code header and store a toolpath STL for preview. */
+async function quoteCustomRequestFromGcode(
+  db: DbApi,
+  requestId: string,
+  gcodeName: string,
+  localPath: string,
+): Promise<void> {
+  const now = new Date().toISOString()
+  const text = fs.readFileSync(localPath, 'utf8')
+  const metrics = parseGcodeMetrics(text)
+  if (metrics.grams == null || metrics.hours == null) {
+    await db.run(
+      `UPDATE custom_requests SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
+      'This G-code has no filament weight or print time. Export it from the slicer again.',
+      now,
+      requestId,
+    )
+    return
+  }
+  const previewName = `${randomUUID()}.stl`
+  const previewPath = path.join(await getUploadsDir(), previewName)
+  writeGcodePreviewStl(text, previewPath)
+  if (objectStorageRequired()) await uploadStoredFile(previewPath, previewName)
+
+  const printers = await listPrinters(db)
+  const byId = Object.fromEntries(printers.map((p) => [p.id, p]))
+  const inputs: PrinterCostInput[] = PRINTER_IDS.map((id) => ({
+    printerId: id,
+    grams: metrics.grams as number,
+    hours: metrics.hours as number,
+    avgPowerKw: byId[id]?.avgPowerKw ?? 0.22,
+  }))
+  const settings = await getPricingSettings(db)
+  const priced = priceDesign(inputs, settings)
+  const gcodePaths = {
+    source: gcodeName,
+    pablo_p1s: gcodeName,
+    court_ender: gcodeName,
+    josh_kobra: gcodeName,
+  }
+  await db.run(
+    `UPDATE custom_requests SET
+      uploaded_file = ?,
+      grams_pablo_p1s = ?, hours_pablo_p1s = ?,
+      grams_court_ender = ?, hours_court_ender = ?,
+      grams_josh_kobra = ?, hours_josh_kobra = ?,
+      quote_ids_json = '{}', file_ids_json = '{}', gcode_paths_json = ?,
+      worst_printer_id = ?, worst_cost_usd = ?, catalog_price_usd = ?,
+      slice_status = 'ready', slice_error = '', quoted_at = ?, updated_at = ?
+     WHERE id = ?`,
+    previewName,
+    metrics.grams,
+    metrics.hours,
+    metrics.grams,
+    metrics.hours,
+    metrics.grams,
+    metrics.hours,
+    JSON.stringify(gcodePaths),
+    priced.worstPrinterId,
+    priced.worstCostUsd,
+    priced.catalogPriceUsd,
+    now,
+    now,
+    requestId,
+  )
+}
+
 /** Background quote for a custom request — worst-cost price across available printers. */
 export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<void> {
   const row = await db.get<Record<string, unknown>>(
@@ -180,7 +251,7 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
   if (!fileName) {
     await db.run(
       `UPDATE custom_requests SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
-      'A .stl or .3mf model is required to estimate cost.',
+      'An .stl or .gcode file is required to estimate cost.',
       new Date().toISOString(),
       requestId,
     )
@@ -188,10 +259,10 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
   }
 
   const ext = path.extname(fileName).toLowerCase()
-  if (!SLICEABLE_EXTS.has(ext)) {
+  if (!SLICEABLE_EXTS.has(ext) && ext !== '.gcode') {
     await db.run(
       `UPDATE custom_requests SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
-      'Upload a .stl or .3mf file so we can quote. .obj is not auto-quoted.',
+      'Upload an .stl or .gcode file so we can quote.',
       new Date().toISOString(),
       requestId,
     )
@@ -210,6 +281,10 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
   }
 
   try {
+    if (ext === '.gcode') {
+      await quoteCustomRequestFromGcode(db, requestId, fileName, resolved.path)
+      return
+    }
     await db.run(
       `UPDATE custom_requests SET slice_status = 'slicing', slice_error = '', updated_at = ? WHERE id = ?`,
       new Date().toISOString(),
@@ -345,6 +420,13 @@ export async function quoteCustomRequest(db: DbApi, requestId: string): Promise<
       warningParts.join('\n\n').slice(0, 2000),
       now,
       now,
+      requestId,
+    )
+  } catch (err) {
+    await db.run(
+      `UPDATE custom_requests SET slice_status = 'error', slice_error = ?, updated_at = ? WHERE id = ?`,
+      (err instanceof Error ? err.message : 'Could not read this G-code.').slice(0, 500),
+      new Date().toISOString(),
       requestId,
     )
   } finally {

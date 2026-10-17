@@ -53,6 +53,30 @@ export function AdminApprovals() {
     if (isMainAdmin) void load().catch((e) => setError(e instanceof Error ? e.message : 'Load failed'))
   }, [isMainAdmin])
 
+  const slicingId = designs.find((d) => d.sliceStatus === 'slicing')?.id ?? ''
+  useEffect(() => {
+    if (!isMainAdmin || !slicingId) return
+    let cancelled = false
+    const pump = async () => {
+      while (!cancelled) {
+        try {
+          const next = await api.catalog.designs.quoteTick(slicingId)
+          if (cancelled) return
+          setDesigns((prev) => prev.map((d) => (d.id === next.id ? next : d)))
+          if (next.sliceStatus !== 'slicing') return
+          await new Promise((r) => setTimeout(r, 15000))
+        } catch (err) {
+          if (!cancelled) setError(err instanceof Error ? err.message : 'Quoting failed')
+          await new Promise((r) => setTimeout(r, 4000))
+        }
+      }
+    }
+    void pump()
+    return () => {
+      cancelled = true
+    }
+  }, [isMainAdmin, slicingId])
+
   if (!isMainAdmin) return <Navigate to={adminHomePath()} replace />
 
   const pending = designs.filter((d) => d.status === 'pending_review')
@@ -91,6 +115,11 @@ export function AdminApprovals() {
       return (
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">3D preview</p>
+          {d.fromGcode ? (
+            <p className="mb-2 text-xs text-muted">
+              This preview is the printed toolpath from the uploaded G-code, not the original solid.
+            </p>
+          ) : null}
           <StlViewer url={api.catalog.designs.stlUrl(d.id)} height={240} />
         </div>
       )
@@ -167,7 +196,7 @@ export function AdminApprovals() {
                           <p className="mt-2 text-sm text-muted line-clamp-3">{d.description}</p>
                         ) : null}
                       </div>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="action-row">
                         <button
                           type="button"
                           className="btn btn-primary btn-compact"

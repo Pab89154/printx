@@ -45,6 +45,7 @@ import {
 } from './bootstrapCache.ts'
 import { syncStandLifecycle } from './standLifecycle.ts'
 import { CUSTOMER_ACCOUNTS_ENABLED } from '../shared/customerAccounts.ts'
+import { stripeAgreementText } from '../shared/checkoutConsent.ts'
 import type { PermissionKey } from '../shared/permissions.ts'
 import { validateStandSchedule } from '../shared/standSchedule.ts'
 import type { RequestStatus, StandStatus } from './types.ts'
@@ -73,6 +74,7 @@ import { publicOrigin, stripeClient } from './catalogApi.ts'
 import {
   stripeAccountSavedPaymentFields,
   stripeCheckoutShippingFields,
+  stripeTermsConsentFields,
 } from './stripeShipping.ts'
 import { roundMoney } from './pricing.ts'
 import {
@@ -81,8 +83,8 @@ import {
   setCustomerStripeId,
 } from './auth.ts'
 
-const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.obj'])
-const CUSTOM_REQUEST_MODEL_EXT = new Set(['.stl', '.obj', '.3mf'])
+const ALLOWED_UPLOAD_EXT = new Set(['.stl', '.gcode'])
+const CUSTOM_REQUEST_MODEL_EXT = new Set(['.stl', '.gcode'])
 const ALLOWED_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 const MAX_CUSTOM_MODEL_BYTES = 50 * 1024 * 1024
@@ -198,7 +200,7 @@ async function parseMultipart(
   },
 ): Promise<{ fields: Record<string, string>; filePath: string | null }> {
   const allowedExt = opts?.allowedExt ?? ALLOWED_UPLOAD_EXT
-  const invalidTypeMessage = opts?.invalidTypeMessage ?? 'Invalid file type. Only .stl and .obj allowed.'
+  const invalidTypeMessage = opts?.invalidTypeMessage ?? 'Invalid file type. Only .stl and .gcode allowed.'
   const uploadsDir = await getUploadsDir()
   const form = formidable({
     uploadDir: uploadsDir,
@@ -267,7 +269,9 @@ export async function flushDueScheduledMail(db: Awaited<ReturnType<typeof getDb>
   const due = await db.all<{ id: string; subject: string }>(
     `
     SELECT id, subject FROM mail_messages
-    WHERE scheduled_at IS NOT NULL AND scheduled_at <= ?
+    WHERE scheduled_at IS NOT NULL
+      AND scheduled_at <= ?
+      AND COALESCE(is_draft, 0) = 0
   `,
     now,
   )
@@ -400,9 +404,11 @@ async function loadMailMessage(
     sender_display_name: string | null
     sender_deleted_at: string | null
     scheduled_at: string | null
+    is_draft: number | null
   }>(
     `
     SELECT m.id, m.subject, m.body, m.created_at, m.sender_id, m.sender_deleted_at, m.scheduled_at,
+           COALESCE(m.is_draft, 0) as is_draft,
            u.email as sender_email, u.display_name as sender_display_name
     FROM mail_messages m
     JOIN users u ON u.id = m.sender_id
@@ -412,11 +418,13 @@ async function loadMailMessage(
   )
   if (!msg) return null
 
+  const isDraft = Boolean(Number(msg.is_draft))
   let readAt: string | null = null
   let archivedAt: string | null = null
   let deletedAt: string | null = null
   if (asRecipient) {
-    // Hold scheduled messages until flush delivers them.
+    // Hold scheduled / draft messages until they are actually delivered.
+    if (isDraft) return null
     if (msg.scheduled_at && msg.scheduled_at > new Date().toISOString()) return null
     const mine = await db.get<{
       read_at: string | null
@@ -459,12 +467,43 @@ async function loadMailMessage(
     deletedAt,
     senderDeletedAt: msg.sender_deleted_at,
     scheduledAt: msg.scheduled_at,
+    isDraft,
     recipients: recipients.map((r) => ({
       id: r.id,
       email: r.email,
       displayName: r.display_name,
     })),
   }
+}
+
+async function replaceMailRecipients(
+  db: Awaited<ReturnType<typeof getDb>>,
+  messageId: string,
+  recipientIds: string[],
+) {
+  await db.run('DELETE FROM mail_recipients WHERE message_id = ?', messageId)
+  for (const recipientId of recipientIds) {
+    await db.run(
+      'INSERT INTO mail_recipients (id, message_id, recipient_id, read_at) VALUES (?, ?, ?, ?)',
+      randomUUID(),
+      messageId,
+      recipientId,
+      null,
+    )
+  }
+}
+
+async function resolveAdminRecipientIds(
+  db: Awaited<ReturnType<typeof getDb>>,
+  recipientIds: string[],
+): Promise<string[]> {
+  if (recipientIds.length === 0) return []
+  const rows = await db.all<{ id: string }>(
+    `SELECT id FROM users
+     WHERE role = 'admin' AND id IN (${recipientIds.map(() => '?').join(',')})`,
+    ...recipientIds,
+  )
+  return rows.map((r) => r.id)
 }
 
 export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPath: string, method: string): Promise<boolean> {
@@ -580,7 +619,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     try {
       const { fields, filePath } = await parseMultipart(req, {
         allowedExt: CUSTOM_REQUEST_MODEL_EXT,
-        invalidTypeMessage: 'Invalid file type. Upload .stl, .3mf, or .obj.',
+        invalidTypeMessage: 'Invalid file type. Upload .stl or .gcode.',
         maxFileSize: MAX_CUSTOM_MODEL_BYTES,
       })
       const now = new Date().toISOString()
@@ -590,7 +629,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       const email = sanitizeEmail(fields.email) || ''
       const school = sanitizeText(fields.school, 200)
       if (!filePath) {
-        send(res, 400, { error: 'A 3D model file (.stl or .3mf preferred) is required.' })
+        send(res, 400, { error: 'A 3D model file (.stl or .gcode) is required.' })
         return true
       }
       // Description/size come from the model file; keep optional DB fields filled for display.
@@ -619,18 +658,14 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       )
       const { scheduleCustomRequestQuote } = await import('./catalogApi.ts')
       scheduleCustomRequestQuote(id)
-      void (async () => {
-        try {
-          const bg = await getDb()
-          await notifyAdminsWithPermission(bg, 'requests', {
-            title: 'New custom print estimate',
-            body: 'A customer uploaded a model for pricing.',
-            url: '/requests',
-          })
-        } catch (err) {
-          console.warn('[push] custom estimate', err)
-        }
-      })()
+      runInBackground('push-custom-estimate', async () => {
+        const bg = await getDb()
+        await notifyAdminsWithPermission(bg, 'requests', {
+          title: 'New custom print estimate',
+          body: 'A customer uploaded a model for pricing.',
+          url: '/requests',
+        })
+      })
       send(res, 201, { ok: true, id, sliceStatus: 'slicing' })
     } catch (e) {
       send(res, 400, { error: e instanceof Error ? e.message : 'Upload failed' })
@@ -740,6 +775,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
           ...(account ? { customerUserId: account.id } : { guest: '1' }),
         },
         ...stripeCheckoutShippingFields({ guest: !account }),
+        ...stripeTermsConsentFields(`${origin}/terms-and-conditions`),
         line_items: [
           {
             quantity: 1,
@@ -754,11 +790,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
           },
         ],
       })
+      const agreedAt = new Date().toISOString()
       await db.run(
-        `UPDATE custom_requests SET stripe_session_id = ?, user_id = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE custom_requests SET stripe_session_id = ?, user_id = ?, updated_at = ?,
+           agreement_name = ?, agreement_text = ?,
+           agreement_payment_checked = 0, agreement_terms_checked = 0
+         WHERE id = ?`,
         session.id,
         account?.id ?? null,
-        new Date().toISOString(),
+        agreedAt,
+        account?.displayName || '',
+        stripeAgreementText(),
         id,
       )
       send(res, 200, { url: session.url, sessionId: session.id })
@@ -1000,7 +1042,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     }
     if (!requirePerm(adminUser, 'requests', res)) return true
     const filename = uploadMatch[1] ?? ''
-    if (!/^[\w-]+\.(stl|obj|3mf)$/i.test(filename)) {
+    if (!/^[\w-]+\.(stl|gcode)$/i.test(filename)) {
       send(res, 400, { error: 'Invalid file name' })
       return true
     }
@@ -1387,8 +1429,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
 
   if (urlPath === '/api/admin/mail/recipients' && method === 'GET') {
     if (!requirePerm(admin, 'mail', res)) return true
+    // Admin-only mailbox — never list customer accounts as recipients.
     const rows = await db.all<MailUserRow>(
-      'SELECT id, email, display_name FROM users ORDER BY lower(email) ASC',
+      `SELECT id, email, display_name FROM users
+       WHERE role = 'admin'
+       ORDER BY lower(email) ASC`,
     )
     send(
       res,
@@ -1410,6 +1455,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         AND r.read_at IS NULL
         AND r.deleted_at IS NULL
         AND m.scheduled_at IS NULL
+        AND COALESCE(m.is_draft, 0) = 0
     `,
       admin.id,
     )
@@ -1428,6 +1474,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         AND r.read_at IS NULL
         AND r.deleted_at IS NULL
         AND m.scheduled_at IS NULL
+        AND COALESCE(m.is_draft, 0) = 0
       ORDER BY m.created_at DESC
       LIMIT 1
     `,
@@ -1472,6 +1519,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         AND r.archived_at IS NULL
         AND r.deleted_at IS NULL
         AND m.scheduled_at IS NULL
+        AND COALESCE(m.is_draft, 0) = 0
       ORDER BY m.created_at DESC
     `,
       admin.id,
@@ -1498,6 +1546,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
         AND r.archived_at IS NOT NULL
         AND r.deleted_at IS NULL
         AND m.scheduled_at IS NULL
+        AND COALESCE(m.is_draft, 0) = 0
       ORDER BY r.archived_at DESC
     `,
       admin.id,
@@ -1521,6 +1570,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       WHERE sender_id = ?
         AND scheduled_at IS NOT NULL
         AND scheduled_at > ?
+        AND COALESCE(is_draft, 0) = 0
         AND sender_deleted_at IS NULL
       ORDER BY scheduled_at ASC
     `,
@@ -1533,6 +1583,84 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       if (full) messages.push(full)
     }
     send(res, 200, messages)
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/drafts' && method === 'GET') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    const rows = await db.all<{ id: string }>(
+      `
+      SELECT id FROM mail_messages
+      WHERE sender_id = ?
+        AND COALESCE(is_draft, 0) = 1
+        AND sender_deleted_at IS NULL
+      ORDER BY created_at DESC
+    `,
+      admin.id,
+    )
+    const messages = []
+    for (const row of rows) {
+      const full = await loadMailMessage(db, row.id, admin.id, false)
+      if (full) messages.push(full)
+    }
+    send(res, 200, messages)
+    return true
+  }
+
+  if (urlPath === '/api/admin/mail/drafts' && method === 'POST') {
+    if (!requirePerm(admin, 'mail', res)) return true
+    const body = await readJson(req)
+    const subject = sanitizeText(body.subject, 200)
+    const messageBody = sanitizeText(body.body, 8000)
+    const draftId = typeof body.id === 'string' ? body.id.trim() : ''
+    const recipientIds = Array.isArray(body.recipientIds)
+      ? [...new Set(body.recipientIds.map((id) => String(id)).filter(Boolean))]
+      : []
+    if (!subject.trim() && !messageBody.trim() && recipientIds.length === 0) {
+      send(res, 400, { error: 'Nothing to save in this draft.' })
+      return true
+    }
+    const validRecipientIds = await resolveAdminRecipientIds(db, recipientIds)
+    const now = new Date().toISOString()
+    if (draftId) {
+      const existing = await db.get<{ id: string }>(
+        `SELECT id FROM mail_messages
+         WHERE id = ? AND sender_id = ? AND COALESCE(is_draft, 0) = 1`,
+        draftId,
+        admin.id,
+      )
+      if (!existing) {
+        send(res, 404, { error: 'Draft not found' })
+        return true
+      }
+      await db.run(
+        `UPDATE mail_messages
+         SET subject = ?, body = ?, created_at = ?, scheduled_at = NULL, is_draft = 1
+         WHERE id = ?`,
+        subject || '(no subject)',
+        messageBody,
+        now,
+        draftId,
+      )
+      await replaceMailRecipients(db, draftId, validRecipientIds)
+      const full = await loadMailMessage(db, draftId, admin.id, false)
+      send(res, 200, full)
+      return true
+    }
+    const messageId = randomUUID()
+    await db.run(
+      `INSERT INTO mail_messages
+         (id, sender_id, subject, body, created_at, scheduled_at, is_draft)
+       VALUES (?, ?, ?, ?, ?, NULL, 1)`,
+      messageId,
+      admin.id,
+      subject || '(no subject)',
+      messageBody,
+      now,
+    )
+    await replaceMailRecipients(db, messageId, validRecipientIds)
+    const full = await loadMailMessage(db, messageId, admin.id, false)
+    send(res, 201, full)
     return true
   }
 
@@ -1606,6 +1734,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       WHERE sender_id = ?
         AND sender_deleted_at IS NULL
         AND scheduled_at IS NULL
+        AND COALESCE(is_draft, 0) = 0
       ORDER BY created_at DESC
     `,
       admin.id,
@@ -1625,6 +1754,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     const body = await readJson(req)
     const subject = sanitizeText(body.subject, 200)
     const messageBody = sanitizeText(body.body, 8000)
+    const draftId = typeof body.draftId === 'string' ? body.draftId.trim() : ''
     const recipientIds = Array.isArray(body.recipientIds)
       ? [...new Set(body.recipientIds.map((id) => String(id)).filter(Boolean))]
       : []
@@ -1651,48 +1781,80 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       scheduledAt = parsed.toISOString()
     }
 
-    const validRecipients = await db.all<{ id: string }>(
-      `SELECT id FROM users WHERE id IN (${recipientIds.map(() => '?').join(',')})`,
-      ...recipientIds,
-    )
-    if (validRecipients.length === 0) {
-      send(res, 400, { error: 'No valid recipients found.' })
+    const validRecipientIds = await resolveAdminRecipientIds(db, recipientIds)
+    if (validRecipientIds.length === 0) {
+      send(res, 400, { error: 'No valid admin recipients found.' })
       return true
     }
-    const messageId = randomUUID()
     const now = new Date().toISOString()
-    await db.run(
-      'INSERT INTO mail_messages (id, sender_id, subject, body, created_at, scheduled_at) VALUES (?, ?, ?, ?, ?, ?)',
-      messageId,
-      admin.id,
-      subject || '(no subject)',
-      messageBody,
-      now,
-      scheduledAt,
-    )
-    for (const recipient of validRecipients) {
-      await db.run(
-        'INSERT INTO mail_recipients (id, message_id, recipient_id, read_at) VALUES (?, ?, ?, ?)',
-        randomUUID(),
-        messageId,
-        recipient.id,
-        null,
+    let messageId = draftId
+    if (draftId) {
+      const existing = await db.get<{ id: string }>(
+        `SELECT id FROM mail_messages
+         WHERE id = ? AND sender_id = ? AND COALESCE(is_draft, 0) = 1`,
+        draftId,
+        admin.id,
       )
+      if (!existing) {
+        send(res, 404, { error: 'Draft not found' })
+        return true
+      }
+      await db.run(
+        `UPDATE mail_messages
+         SET subject = ?, body = ?, created_at = ?, scheduled_at = ?, is_draft = 0
+         WHERE id = ?`,
+        subject || '(no subject)',
+        messageBody,
+        now,
+        scheduledAt,
+        draftId,
+      )
+      await replaceMailRecipients(db, draftId, validRecipientIds)
+    } else {
+      messageId = randomUUID()
+      await db.run(
+        `INSERT INTO mail_messages
+           (id, sender_id, subject, body, created_at, scheduled_at, is_draft)
+         VALUES (?, ?, ?, ?, ?, ?, 0)`,
+        messageId,
+        admin.id,
+        subject || '(no subject)',
+        messageBody,
+        now,
+        scheduledAt,
+      )
+      await replaceMailRecipients(db, messageId, validRecipientIds)
     }
     if (!scheduledAt) {
       runInBackground('push-mail', () =>
-        notifyAdminUsers(
-          db,
-          validRecipients.map((r) => r.id),
-          {
-            title: 'New PrintX mail',
-            body: subject || '(no subject)',
-            url: '/mail',
-          },
-        ),
+        notifyAdminUsers(db, validRecipientIds, {
+          title: 'New PrintX mail',
+          body: subject || '(no subject)',
+          url: '/mail',
+        }),
       )
     }
+    // Always return a DTO for the sender (scheduled msgs are hidden from recipients until due).
     const created = await loadMailMessage(db, messageId, admin.id, false)
+    if (!created) {
+      send(res, 201, {
+        id: messageId,
+        subject: subject || '(no subject)',
+        body: messageBody,
+        createdAt: now,
+        senderId: admin.id,
+        senderEmail: admin.email,
+        senderDisplayName: admin.displayName,
+        readAt: null,
+        archivedAt: null,
+        deletedAt: null,
+        senderDeletedAt: null,
+        scheduledAt,
+        isDraft: false,
+        recipients: [],
+      })
+      return true
+    }
     send(res, 201, created)
     return true
   }
@@ -1927,6 +2089,24 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
           send(res, 404, { error: 'Message not found in Trash' })
           return true
         }
+        send(res, 200, { ok: true })
+        return true
+      }
+
+      // Drafts: discard permanently (not kept in Trash).
+      if (mailbox === 'drafts') {
+        const draft = await db.get<{ id: string }>(
+          `SELECT id FROM mail_messages
+           WHERE id = ? AND sender_id = ? AND COALESCE(is_draft, 0) = 1`,
+          messageId,
+          admin.id,
+        )
+        if (!draft) {
+          send(res, 404, { error: 'Draft not found' })
+          return true
+        }
+        await db.run('DELETE FROM mail_recipients WHERE message_id = ?', messageId)
+        await db.run('DELETE FROM mail_messages WHERE id = ?', messageId)
         send(res, 200, { ok: true })
         return true
       }

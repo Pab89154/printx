@@ -156,6 +156,13 @@ export type Order = {
   createdAt: string
   updatedAt: string
   paidAt: string | null
+  paymentMethod: string
+  cashRecordedBy: string | null
+  cashRecordedByName: string
+  classmateCode: string
+  agreementName: string
+  agreementText: string
+  agreementAt: string | null
   items?: OrderItem[]
 }
 
@@ -250,6 +257,14 @@ export function rowToOrder(row: Record<string, unknown>): Order {
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     paidAt: (row.paid_at as string | null) ?? null,
+    paymentMethod: (row.payment_method as string) || 'stripe',
+    cashRecordedBy: (row.cash_recorded_by as string | null) ?? null,
+    cashRecordedByName:
+      String(row.cash_recorded_by_name || row.cash_recorded_by_email || '').trim(),
+    classmateCode: String(row.classmate_code || ''),
+    agreementName: String(row.agreement_name || ''),
+    agreementText: String(row.agreement_text || ''),
+    agreementAt: (row.agreement_at as string | null) ?? null,
   }
 }
 

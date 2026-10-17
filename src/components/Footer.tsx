@@ -54,7 +54,7 @@ export function Footer() {
               {links.map((link) => (
                 <li key={link.href}>
                   <a
-                    href={link.href}
+                    href={link.href.startsWith('#') ? `/${link.href}` : link.href}
                     className="text-sm text-slate-400 transition-colors hover:text-cyan"
                     onClick={(e) => onHashLinkClick(e, link.href)}
                   >
@@ -73,7 +73,7 @@ export function Footer() {
               <li>Dallas–Fort Worth, TX</li>
               <li>
                 <a
-                  href="#contact"
+                  href="/#contact"
                   className="transition-colors hover:text-cyan"
                   onClick={(e) => onHashLinkClick(e, '#contact')}
                 >
@@ -110,7 +110,7 @@ export function Footer() {
                 return (
                   <a
                     key={label}
-                    href={href}
+                    href={isHash ? `/${href}` : href}
                     target={isHash ? undefined : '_blank'}
                     rel={isHash ? undefined : 'noopener noreferrer'}
                     aria-label={label}

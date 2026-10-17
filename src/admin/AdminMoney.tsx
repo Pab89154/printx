@@ -9,7 +9,16 @@ function currentUtcMonth(): string {
 }
 
 function personLabel(p: { displayName: string | null; email: string }): string {
-  return p.displayName?.trim() || p.email.split('@')[0] || p.email || 'Printer'
+  const named = p.displayName?.trim()
+  if (named) return named
+  const local = (p.email.split('@')[0] || '').trim()
+  if (!local) return p.email || 'Printer'
+  // court.padilla → Court Padilla
+  return local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ')
 }
 
 function formatMonthLabel(ym: string): string {
@@ -28,6 +37,7 @@ export function AdminMoney() {
   const [data, setData] = useState<MoneySummaryDto | null>(null)
   const [error, setError] = useState('')
   const [busyUserId, setBusyUserId] = useState('')
+  const [busyShipKey, setBusyShipKey] = useState('')
 
   async function load(nextMonth = month) {
     setError('')
@@ -64,12 +74,38 @@ export function AdminMoney() {
     return paymentLines.filter((line) => (line.shippingUsd ?? 0) > 0)
   }, [paymentLines])
 
-  const owedToMeUsd = useMemo(() => {
-    if (!data || !email) return 0
+  const shippingKeptAsProfitUsd = data?.shippingKeptAsProfitUsd ?? 0
+
+  async function setShippingToProfit(line: {
+    id: string
+    kind: 'shop' | 'custom'
+  }, undo: boolean) {
+    const key = `${line.kind}-${line.id}`
+    setBusyShipKey(key)
+    setError('')
+    try {
+      await api.catalog.money.shippingToProfit({ kind: line.kind, id: line.id, undo })
+      await load(month)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update shipping')
+    } finally {
+      setBusyShipKey('')
+    }
+  }
+
+  const printPayUsd = useMemo(() => {
+    if (!data) return 0
+    if (data.myPrintPayUsd != null) return data.myPrintPayUsd
+    if (!email) return 0
     const me = email.trim().toLowerCase()
     const mine = data.owedByPerson.find((p) => p.email.trim().toLowerCase() === me)
     return mine?.totalOwedUsd ?? 0
   }, [data, email])
+
+  const owedToMeUsd = useMemo(() => {
+    if (!data) return 0
+    return data.youEarnTotalUsd ?? printPayUsd + (data.myProfitShareUsd ?? 0)
+  }, [data, printPayUsd])
 
   const shippingTotalUsd = data?.shippingTotalUsd ?? 0
 
@@ -79,9 +115,9 @@ export function AdminMoney() {
         <div>
           <h1 className="text-2xl font-bold text-navy">Money</h1>
           <p className="mt-1 text-sm text-muted">
-            Item earnings and print costs. Shipping sits in its own bucket (for UPS) — not owed
-            and not PrintX profit. Each month&apos;s owed resets for the new month; older months
-            stay in history.
+            Owed to you = print pay + your equal share of PrintX profit. Earned = items + shipping
+            moved to profit − Stripe fees (2.9% + $0.30). Shipping stays for UPS unless you move it
+            to profit.
           </p>
         </div>
         <label className="text-sm font-semibold text-navy">
@@ -100,33 +136,25 @@ export function AdminMoney() {
 
       {data && (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-2xl border bg-white p-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                What you earn
-              </p>
-              <p className="mt-2 text-2xl font-bold text-navy">
-                ${data.earnings.totalUsd.toFixed(2)}
-              </p>
-              <p className="mt-1 text-xs text-muted">
-                Shop ${data.earnings.shopUsd.toFixed(2)} · Custom $
-                {data.earnings.customUsd.toFixed(2)} · items only
-              </p>
-            </div>
-            <div className="rounded-2xl border bg-white p-5">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="rounded-2xl border border-electric/30 bg-electric/5 p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                 Owed to me
               </p>
               <p className="mt-2 text-2xl font-bold text-navy">${owedToMeUsd.toFixed(2)}</p>
-              <p className="mt-1 text-xs text-muted">This month · worst-case cost</p>
-            </div>
-            <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800/80">
-                Shipping · for UPS
-              </p>
-              <p className="mt-2 text-2xl font-bold text-navy">${shippingTotalUsd.toFixed(2)}</p>
               <p className="mt-1 text-xs text-muted">
-                Collected via Stripe · pass-through · not profit or owed
+                Print pay ${printPayUsd.toFixed(2)} + profit share $
+                {(data.myProfitShareUsd ?? 0).toFixed(2)}
+                {data.partnerCount ? ` · split ${data.partnerCount} ways` : ''}
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-white p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Print pay
+              </p>
+              <p className="mt-2 text-2xl font-bold text-navy">${printPayUsd.toFixed(2)}</p>
+              <p className="mt-1 text-xs text-muted">
+                Claimed/printed pay + your share of unclaimed print costs
               </p>
             </div>
             <div className="rounded-2xl border bg-white p-5">
@@ -137,14 +165,32 @@ export function AdminMoney() {
                 ${data.businessKeptUsd.toFixed(2)}
               </p>
               <p className="mt-1 text-xs text-muted">
-                Items $
-                {data.earnings.totalUsd.toFixed(2)} − admins $
-                {(data.adminsEarnAllUsd ?? data.reimbursementsTotalUsd).toFixed(2)}
+                After print pay + Stripe fees · $
+                {(data.myProfitShareUsd ?? 0).toFixed(2)} each
+                {data.partnerCount ? ` · split ${data.partnerCount} ways` : ''}
               </p>
             </div>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800/80">
+                Shipping · for UPS
+              </p>
+              <p className="mt-2 text-2xl font-bold text-navy">${shippingTotalUsd.toFixed(2)}</p>
+              <p className="mt-1 text-xs text-muted">
+                Pass-through for labels
+                {shippingKeptAsProfitUsd > 0
+                  ? ` · $${shippingKeptAsProfitUsd.toFixed(2)} moved to profit`
+                  : ''}
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-white p-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Stripe fees
+              </p>
+              <p className="mt-2 text-2xl font-bold text-navy">
+                ${(data.stripeFeesUsd ?? 0).toFixed(2)}
+              </p>
+              <p className="mt-1 text-xs text-muted">2.9% + $0.30 per successful charge</p>
+            </div>
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                 This year · earned
@@ -152,27 +198,8 @@ export function AdminMoney() {
               <p className="mt-2 text-2xl font-bold text-navy">
                 ${data.totals.year.stripeUsd.toFixed(2)}
               </p>
-              <p className="mt-1 text-xs text-muted">{data.totals.year.year} UTC · items only</p>
-            </div>
-            <div className="rounded-2xl border bg-white p-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                All time · earned
-              </p>
-              <p className="mt-2 text-2xl font-bold text-navy">
-                ${data.totals.allTime.stripeUsd.toFixed(2)}
-              </p>
-              <p className="mt-1 text-xs text-muted">Paid shop + custom · shipping excluded</p>
-            </div>
-            <div className="rounded-2xl border bg-white p-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                Owed to me · totals
-              </p>
-              <p className="mt-2 text-2xl font-bold text-navy">
-                ${data.totals.allTime.owedToMeUsd.toFixed(2)}
-              </p>
               <p className="mt-1 text-xs text-muted">
-                Year ${data.totals.year.owedToMeUsd.toFixed(2)} · all time $
-                {data.totals.allTime.owedToMeUsd.toFixed(2)}
+                {data.totals.year.year} UTC · after Stripe · items + shipping in profit
               </p>
             </div>
           </div>
@@ -190,7 +217,7 @@ export function AdminMoney() {
                   <thead>
                     <tr className="border-b text-xs uppercase tracking-wide text-muted">
                       <th className="py-2 pr-3 font-semibold">Month</th>
-                      <th className="py-2 pr-3 font-semibold">Earned</th>
+                      <th className="py-2 pr-3 font-semibold">Net earned</th>
                       <th className="py-2 pr-3 font-semibold">Owed to me</th>
                       <th className="py-2 pr-3 font-semibold">All printers</th>
                       <th className="py-2 font-semibold">Settled</th>
@@ -246,7 +273,7 @@ export function AdminMoney() {
               <div>
                 <h2 className="text-lg font-bold text-navy">Owed by person</h2>
                 <p className="mt-1 text-sm text-muted">
-                  Everyone who finished prints in {formatMonthLabel(data.month)}.
+                  Print pay + profit share for {formatMonthLabel(data.month)}.
                 </p>
               </div>
               <p className="text-right">
@@ -254,13 +281,16 @@ export function AdminMoney() {
                   Total owed
                 </span>
                 <span className="text-2xl font-bold tabular-nums text-electric">
-                  ${data.reimbursementsTotalUsd.toFixed(2)}
+                  $
+                  {data.owedByPerson
+                    .reduce((sum, p) => sum + p.totalOwedUsd, 0)
+                    .toFixed(2)}
                 </span>
               </p>
             </div>
 
             {data.owedByPerson.length === 0 ? (
-              <p className="mt-4 text-sm text-muted">No printer reimbursements this month.</p>
+              <p className="mt-4 text-sm text-muted">Nothing owed this month.</p>
             ) : (
               <div className="mt-4 space-y-4">
                 {data.owedByPerson.map((person) => (
@@ -271,6 +301,12 @@ export function AdminMoney() {
                         <p className="text-xs text-muted">{person.email}</p>
                         <p className="mt-1 text-lg font-bold text-electric">
                           ${person.totalOwedUsd.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-muted">
+                          Print pay ${(person.printPayUsd ?? person.totalOwedUsd).toFixed(2)}
+                          {(person.profitShareUsd ?? 0) > 0
+                            ? ` + share $${(person.profitShareUsd ?? 0).toFixed(2)}`
+                            : ''}
                         </p>
                         {person.settlement ? (
                           <p className="mt-1 text-xs text-emerald-700">
@@ -301,18 +337,22 @@ export function AdminMoney() {
                         </button>
                       )}
                     </div>
-                    <ul className="mt-3 space-y-1.5 text-xs text-muted">
-                      {person.lines.map((line) => (
-                        <li key={line.id} className="flex flex-wrap justify-between gap-2">
-                          <span>
-                            {line.designName ?? 'Item'}
-                            {line.colorName ? ` · ${line.colorName}` : ''}
-                            {line.qty != null ? ` × ${line.qty}` : ''}
-                          </span>
-                          <span className="tabular-nums text-navy">${line.amountUsd.toFixed(2)}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    {person.lines.length > 0 ? (
+                      <ul className="mt-3 space-y-1.5 text-xs text-muted">
+                        {person.lines.map((line) => (
+                          <li key={line.id} className="flex flex-wrap justify-between gap-2">
+                            <span>
+                              {line.designName ?? 'Item'}
+                              {line.colorName ? ` · ${line.colorName}` : ''}
+                              {line.qty != null ? ` × ${line.qty}` : ''}
+                            </span>
+                            <span className="tabular-nums text-navy">${line.amountUsd.toFixed(2)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (person.profitShareUsd ?? 0) > 0 ? (
+                      <p className="mt-3 text-xs text-muted">Profit share only — no print pay lines.</p>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -324,17 +364,22 @@ export function AdminMoney() {
               <div>
                 <h2 className="text-lg font-bold text-navy">Shipping money</h2>
                 <p className="mt-1 text-sm text-muted">
-                  Customer-paid shipping held for UPS labels in {formatMonthLabel(data.month)}. Not
-                  counted in owed or PrintX profit.
+                  Held for UPS by default. Tap <span className="font-medium text-navy">Add to profit</span>{' '}
+                  on an order if that shipping should count as PrintX profit instead.
                 </p>
               </div>
               <p className="text-right">
                 <span className="block text-xs font-semibold uppercase tracking-wide text-amber-800/80">
-                  Total shipping
+                  For UPS
                 </span>
                 <span className="text-2xl font-bold tabular-nums text-navy">
                   ${shippingTotalUsd.toFixed(2)}
                 </span>
+                {shippingKeptAsProfitUsd > 0 ? (
+                  <span className="mt-1 block text-xs text-electric">
+                    +${shippingKeptAsProfitUsd.toFixed(2)} in profit
+                  </span>
+                ) : null}
               </p>
             </div>
 
@@ -342,68 +387,108 @@ export function AdminMoney() {
               <p className="mt-4 text-sm text-muted">No shipping collected this month.</p>
             ) : (
               <div className="mt-4 space-y-2">
-                {shippingLines.map((line) => (
-                  <div
-                    key={`ship-${line.kind}-${line.id}`}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-100 bg-white px-4 py-3 text-sm"
-                  >
-                    <div>
-                      <p className="font-medium text-navy">
-                        {line.label}
-                        <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-900/70">
-                          {line.kind === 'shop' ? 'Shop' : 'Custom'}
-                        </span>
-                      </p>
-                      <p className="text-xs text-muted">
-                        {line.email || '—'}
-                        {line.paidAt ? ` · ${new Date(line.paidAt).toLocaleString()}` : ''}
-                      </p>
+                {shippingLines.map((line) => {
+                  const shipKey = `${line.kind}-${line.id}`
+                  const asProfit = Boolean(line.shippingToProfitAt)
+                  return (
+                    <div
+                      key={`ship-${shipKey}`}
+                      className={`flex min-w-0 flex-col gap-3 rounded-xl border bg-white px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between ${
+                        asProfit ? 'border-electric/30' : 'border-amber-100'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium text-navy">
+                          {line.label}
+                          <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-900/70">
+                            {line.kind === 'shop' ? 'Shop' : 'Custom'}
+                          </span>
+                          {asProfit ? (
+                            <span className="ml-2 rounded-full bg-electric/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-electric">
+                              In profit
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="text-xs text-muted">
+                          {line.email || '—'}
+                          {line.paidAt ? ` · ${new Date(line.paidAt).toLocaleString()}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                        <p className="text-base font-bold tabular-nums text-navy">
+                          ${(line.shippingUsd ?? 0).toFixed(2)}
+                        </p>
+                        <button
+                          type="button"
+                          className={`btn btn-compact ${asProfit ? 'btn-ghost' : 'btn-secondary'}`}
+                          disabled={busyShipKey === shipKey}
+                          onClick={() => void setShippingToProfit(line, asProfit)}
+                        >
+                          {busyShipKey === shipKey
+                            ? 'Saving…'
+                            : asProfit
+                              ? 'Undo → UPS'
+                              : 'Add to profit'}
+                        </button>
+                      </div>
                     </div>
-                    <p className="text-base font-bold tabular-nums text-navy">
-                      ${(line.shippingUsd ?? 0).toFixed(2)}
-                    </p>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </section>
 
           <section className="rounded-2xl border bg-white p-6">
-            <h2 className="text-lg font-bold text-navy">Item payments</h2>
+            <h2 className="text-lg font-bold text-navy">Payments</h2>
             <p className="mt-1 text-sm text-muted">
-              Paid shop checkouts and custom prints in {formatMonthLabel(data.month)} (item amount
-              only).
+              Net earned per checkout in {formatMonthLabel(data.month)}: items + shipping moved to
+              profit, minus Stripe fees. UPS shipping is not counted.
             </p>
 
             {paymentLines.length === 0 ? (
               <p className="mt-4 text-sm text-muted">No Stripe payments this month.</p>
             ) : (
               <div className="mt-4 space-y-2">
-                {paymentLines.map((line) => (
-                  <div
-                    key={`${line.kind}-${line.id}`}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-100 px-4 py-3 text-sm"
-                  >
-                    <div>
-                      <p className="font-medium text-navy">
-                        {line.label}
-                        <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                          {line.kind === 'shop' ? 'Shop' : 'Custom'}
-                        </span>
-                      </p>
-                      <p className="text-xs text-muted">
-                        {line.email || '—'}
-                        {line.paidAt ? ` · ${new Date(line.paidAt).toLocaleString()}` : ''}
-                        {(line.shippingUsd ?? 0) > 0
-                          ? ` · shipping $${(line.shippingUsd ?? 0).toFixed(2)}`
-                          : ''}
+                {paymentLines.map((line) => {
+                  const charge =
+                    line.chargeUsd ??
+                    Math.round((line.amountUsd + (line.shippingUsd ?? 0)) * 100) / 100
+                  const fee = line.stripeFeeUsd ?? 0
+                  const ship = line.shippingUsd ?? 0
+                  const shipKept = line.shippingToProfitAt ? ship : 0
+                  const net =
+                    Math.round(Math.max(0, line.amountUsd + shipKept - fee) * 100) / 100
+                  return (
+                    <div
+                      key={`${line.kind}-${line.id}`}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-100 px-4 py-3 text-sm"
+                    >
+                      <div>
+                        <p className="font-medium text-navy">
+                          {line.label}
+                          <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                            {line.kind === 'shop' ? 'Shop' : 'Custom'}
+                          </span>
+                        </p>
+                        <p className="text-xs text-muted">
+                          {line.email || '—'}
+                          {line.paidAt ? ` · ${new Date(line.paidAt).toLocaleString()}` : ''}
+                          {` · charged $${charge.toFixed(2)}`}
+                          {` · items $${line.amountUsd.toFixed(2)}`}
+                          {ship > 0
+                            ? line.shippingToProfitAt
+                              ? ` · shipping $${ship.toFixed(2)} in profit`
+                              : ` · shipping $${ship.toFixed(2)} for UPS`
+                            : ''}
+                          {fee > 0 ? ` · Stripe fee $${fee.toFixed(2)}` : ''}
+                        </p>
+                      </div>
+                      <p className="text-base font-bold tabular-nums text-electric">
+                        ${net.toFixed(2)}
                       </p>
                     </div>
-                    <p className="text-base font-bold tabular-nums text-electric">
-                      ${line.amountUsd.toFixed(2)}
-                    </p>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </section>

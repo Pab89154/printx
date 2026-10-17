@@ -41,6 +41,23 @@ export function stripeAccountSavedPaymentFields(): Pick<
   }
 }
 
+/** Stripe Checkout's own required terms checkbox, with a link to our terms page. */
+export function stripeTermsConsentFields(termsUrl: string): Pick<
+  Stripe.Checkout.SessionCreateParams,
+  'consent_collection' | 'custom_text'
+> {
+  return {
+    consent_collection: {
+      terms_of_service: 'required',
+    },
+    custom_text: {
+      terms_of_service_acceptance: {
+        message: `I agree to the [terms and conditions](${termsUrl}).`,
+      },
+    },
+  }
+}
+
 /** Fields to merge into checkout.sessions.create for shipping + name collection. */
 export function stripeCheckoutShippingFields(opts?: {
   /** Waive Standard shipping (used with item+shipping promo codes). */

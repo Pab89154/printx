@@ -7,7 +7,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { SpellCheckedField } from '../components/SpellCheckedField'
 import { useAdminAuth } from '../context/AdminAuthContext'
 
-type Tab = 'inbox' | 'sent' | 'scheduled' | 'archived' | 'trash' | 'compose'
+type Tab = 'inbox' | 'sent' | 'scheduled' | 'drafts' | 'archived' | 'trash' | 'compose'
 type ComposeMode = 'new' | 'reply' | 'reply-all' | 'forward'
 
 function daysLeftInTrash(msg: MailMessage) {
@@ -69,13 +69,16 @@ export function AdminMail() {
   const [archived, setArchived] = useState<MailMessage[]>([])
   const [sent, setSent] = useState<MailMessage[]>([])
   const [scheduled, setScheduled] = useState<MailMessage[]>([])
+  const [drafts, setDrafts] = useState<MailMessage[]>([])
   const [trash, setTrash] = useState<MailMessage[]>([])
   const [recipients, setRecipients] = useState<MailRecipientOption[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [signature, setSignature] = useState('')
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
+  const [savingDraft, setSavingDraft] = useState(false)
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [scheduleLocal, setScheduleLocal] = useState(defaultScheduleLocal)
   const [error, setError] = useState('')
@@ -88,19 +91,22 @@ export function AdminMail() {
   const [sendingNow, setSendingNow] = useState(false)
 
   async function loadLists() {
-    const [inboxRows, archivedRows, sentRows, scheduledRows, trashRows, people, sig] = await Promise.all([
-      api.admin.mail.inbox(),
-      api.admin.mail.archived(),
-      api.admin.mail.sent(),
-      api.admin.mail.scheduled(),
-      api.admin.mail.trash(),
-      api.admin.mail.recipients(),
-      api.admin.mail.getSignature(),
-    ])
+    const [inboxRows, archivedRows, sentRows, scheduledRows, draftRows, trashRows, people, sig] =
+      await Promise.all([
+        api.admin.mail.inbox(),
+        api.admin.mail.archived(),
+        api.admin.mail.sent(),
+        api.admin.mail.scheduled(),
+        api.admin.mail.drafts(),
+        api.admin.mail.trash(),
+        api.admin.mail.recipients(),
+        api.admin.mail.getSignature(),
+      ])
     setInbox(inboxRows)
     setArchived(archivedRows)
     setSent(sentRows)
     setScheduled(scheduledRows)
+    setDrafts(draftRows)
     setTrash(trashRows)
     setRecipients(people)
     setSignature(sig.signature)
@@ -130,6 +136,7 @@ export function AdminMail() {
   }, [])
 
   const openMessage = useMemo(() => {
+    if (tab === 'drafts' || tab === 'compose') return null
     const list =
       tab === 'sent'
         ? sent
@@ -208,24 +215,82 @@ export function AdminMail() {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
+  function composeHasContent() {
+    const sig = signatureBlock(signature)
+    const bodyWithoutSig = sig && body.endsWith(sig) ? body.slice(0, -sig.length) : body
+    return (
+      selectedIds.length > 0 ||
+      subject.trim().length > 0 ||
+      bodyWithoutSig.trim().length > 0
+    )
+  }
+
   function resetCompose() {
+    setComposeMode('new')
+    setSubject('')
+    setBody(signatureBlock(signature))
+    setSelectedIds([])
+    setEditingDraftId(null)
+    setScheduleOpen(false)
+    setScheduleLocal(defaultScheduleLocal())
+  }
+
+  async function saveCurrentDraft(): Promise<string | null> {
+    if (!composeHasContent()) return editingDraftId
+    setSavingDraft(true)
+    setError('')
+    try {
+      const saved = await api.admin.mail.saveDraft({
+        id: editingDraftId ?? undefined,
+        recipientIds: selectedIds,
+        subject: subject.trim() || '(no subject)',
+        body,
+      })
+      setEditingDraftId(saved.id)
+      await loadLists()
+      return saved.id
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save draft')
+      return null
+    } finally {
+      setSavingDraft(false)
+    }
+  }
+
+  async function leaveCompose(nextTab: Tab = 'inbox') {
+    if (tab === 'compose' && composeHasContent()) {
+      await saveCurrentDraft()
+    }
+    resetCompose()
+    setOpenId(null)
+    setError('')
+    setTab(nextTab)
+  }
+
+  function startCompose() {
+    setEditingDraftId(null)
     setComposeMode('new')
     setSubject('')
     setBody(signatureBlock(signature))
     setSelectedIds([])
     setScheduleOpen(false)
     setScheduleLocal(defaultScheduleLocal())
-  }
-
-  function startCompose() {
     setTab('compose')
     setOpenId(null)
     setError('')
-    if (composeMode === 'new' && !subject.trim() && !body.trim()) {
-      setBody(signatureBlock(signature))
-    } else if (composeMode !== 'new' && !subject && !body) {
-      resetCompose()
-    }
+  }
+
+  function openDraft(msg: MailMessage) {
+    setEditingDraftId(msg.id)
+    setComposeMode('new')
+    setSelectedIds(msg.recipients.map((r) => r.id))
+    setSubject(msg.subject === '(no subject)' ? '' : msg.subject)
+    setBody(msg.body)
+    setScheduleOpen(false)
+    setScheduleLocal(defaultScheduleLocal())
+    setOpenId(null)
+    setError('')
+    setTab('compose')
   }
 
   function startReply(msg: MailMessage, all: boolean) {
@@ -239,20 +304,24 @@ export function AdminMail() {
       ids.add(msg.senderId)
     }
 
+    setEditingDraftId(null)
     setComposeMode(all ? 'reply-all' : 'reply')
     setSelectedIds([...ids])
     setSubject(withPrefix(msg.subject, 'Re:'))
     setBody(`${signatureBlock(signature)}${quotedOriginal(msg)}`)
+    setScheduleOpen(false)
     setOpenId(null)
     setError('')
     setTab('compose')
   }
 
   function startForward(msg: MailMessage) {
+    setEditingDraftId(null)
     setComposeMode('forward')
     setSelectedIds([])
     setSubject(withPrefix(msg.subject, 'Fwd:'))
     setBody(`${signatureBlock(signature)}${quotedOriginal(msg)}`)
+    setScheduleOpen(false)
     setOpenId(null)
     setError('')
     setTab('compose')
@@ -261,6 +330,7 @@ export function AdminMail() {
   async function sendMail(opts?: { scheduledAt?: string }) {
     setError('')
     setSending(true)
+    setScheduleOpen(false)
     try {
       const recipientIds = selectedIds
       await api.admin.mail.send({
@@ -268,6 +338,7 @@ export function AdminMail() {
         body,
         recipientIds,
         scheduledAt: opts?.scheduledAt,
+        draftId: editingDraftId ?? undefined,
       })
       resetCompose()
       await loadLists()
@@ -295,20 +366,42 @@ export function AdminMail() {
     await sendMail({ scheduledAt: when.toISOString() })
   }
 
+  async function discardDraft() {
+    setError('')
+    const wasDraft = Boolean(editingDraftId)
+    if (editingDraftId) {
+      setDeleting(true)
+      try {
+        await api.admin.mail.delete(editingDraftId, { mailbox: 'drafts' })
+        await loadLists()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not discard draft')
+        return
+      } finally {
+        setDeleting(false)
+      }
+    }
+    resetCompose()
+    setTab(wasDraft ? 'drafts' : 'compose')
+  }
+
   async function confirmDelete() {
     if (!pendingDelete) return
     setDeleting(true)
     try {
       const forever = tab === 'trash'
       const mailbox =
-        tab === 'inbox' || tab === 'archived' || tab === 'sent' || tab === 'trash' ? tab : 'inbox'
+        tab === 'inbox' || tab === 'archived' || tab === 'sent' || tab === 'drafts' || tab === 'trash'
+          ? tab
+          : 'inbox'
       const trashedId = pendingDelete.id
-      await api.admin.mail.delete(trashedId, { mailbox, forever })
+      await api.admin.mail.delete(trashedId, { mailbox, forever: forever || tab === 'drafts' })
       setPendingDelete(null)
       await loadLists()
       bumpMailUnread({ silent: true })
-      if (forever) {
+      if (forever || tab === 'drafts') {
         if (openId === trashedId) setOpenId(null)
+        if (tab === 'drafts') setOpenId(null)
       } else {
         setTab('trash')
         setOpenId(trashedId)
@@ -325,6 +418,11 @@ export function AdminMail() {
       const updated = await api.admin.mail.restore(msg.id)
       await loadLists()
       bumpMailUnread({ silent: true })
+      if (updated.isDraft) {
+        setTab('drafts')
+        setOpenId(null)
+        return
+      }
       const source = updated.trashSource ?? msg.trashSource
       if (source === 'sent') setTab('sent')
       else if (updated.archivedAt) setTab('archived')
@@ -374,9 +472,11 @@ export function AdminMail() {
         ? archived
         : tab === 'scheduled'
           ? scheduled
-          : tab === 'trash'
-            ? trash
-            : inbox
+          : tab === 'drafts'
+            ? drafts
+            : tab === 'trash'
+              ? trash
+              : inbox
   const composeTitle =
     composeMode === 'reply'
       ? 'Reply'
@@ -384,7 +484,9 @@ export function AdminMail() {
         ? 'Reply all'
         : composeMode === 'forward'
           ? 'Forward'
-          : 'New message'
+          : editingDraftId
+            ? 'Edit draft'
+            : 'New message'
 
   const readingOnMobile = Boolean(openMessage) && tab !== 'compose'
 
@@ -411,6 +513,10 @@ export function AdminMail() {
                     id: 'scheduled' as const,
                     label: scheduled.length ? `Scheduled (${scheduled.length})` : 'Scheduled',
                   },
+                  {
+                    id: 'drafts' as const,
+                    label: drafts.length ? `Drafts (${drafts.length})` : 'Drafts',
+                  },
                   { id: 'archived' as const, label: archived.length ? `Archive (${archived.length})` : 'Archive' },
                   { id: 'trash' as const, label: trash.length ? `Trash (${trash.length})` : 'Trash' },
                 ]
@@ -420,6 +526,10 @@ export function AdminMail() {
                   type="button"
                   className={`btn btn-compact shrink-0 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => {
+                    if (tab === 'compose') {
+                      void leaveCompose(t.id)
+                      return
+                    }
                     setTab(t.id)
                     setOpenId(null)
                     setError('')
@@ -433,7 +543,13 @@ export function AdminMail() {
           <button
             type="button"
             className={`btn btn-compact shrink-0 ${tab === 'compose' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={startCompose}
+            onClick={() => {
+              if (tab === 'compose' && composeHasContent()) {
+                void saveCurrentDraft().then(() => startCompose())
+                return
+              }
+              startCompose()
+            }}
           >
             <Pencil size={14} />
             Compose
@@ -447,12 +563,32 @@ export function AdminMail() {
         <div className="mt-4 min-w-0 rounded-2xl border border-slate-200 bg-white p-4 sm:mt-6 sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-semibold text-navy">{composeTitle}</h2>
-            {composeMode !== 'new' && (
-              <button type="button" className="btn btn-ghost" onClick={resetCompose}>
-                Start fresh
-              </button>
-            )}
+            <div className="flex flex-wrap gap-2">
+              {composeHasContent() && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={sending || savingDraft}
+                  onClick={() => void saveCurrentDraft()}
+                >
+                  {savingDraft ? 'Saving…' : 'Save draft'}
+                </button>
+              )}
+              {(composeMode !== 'new' || editingDraftId) && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={sending || savingDraft || deleting}
+                  onClick={() => void discardDraft()}
+                >
+                  {editingDraftId ? 'Discard draft' : 'Start fresh'}
+                </button>
+              )}
+            </div>
           </div>
+          <p className="mt-1 text-xs text-muted">
+            Leaving compose auto-saves to Drafts so you can finish later.
+          </p>
           <div className="mt-4 space-y-4">
             <div>
               <p className="mb-2 text-sm font-medium text-navy">To</p>
@@ -480,7 +616,7 @@ export function AdminMail() {
                 You can include yourself. Self-mail shows in Inbox; other sends also appear in Sent.
               </p>
               {recipients.length === 0 && (
-                <p className="text-sm text-muted">No admin accounts found.</p>
+                <p className="text-sm text-muted">No admin accounts found (Pablo, Josh, Court).</p>
               )}
             </div>
             <label className="block text-sm font-medium text-navy">
@@ -510,16 +646,17 @@ export function AdminMail() {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={sending || selectedIds.length === 0}
+                disabled={sending || savingDraft || selectedIds.length === 0}
                 onClick={() => void sendMail()}
               >
-                {sending && !scheduleOpen ? 'Sending…' : 'Send'}
+                {sending ? 'Sending…' : 'Send'}
               </button>
               <button
                 type="button"
                 className="btn btn-secondary"
-                disabled={sending || selectedIds.length === 0}
+                disabled={sending || savingDraft || selectedIds.length === 0}
                 onClick={() => {
+                  setError('')
                   setScheduleOpen((open) => !open)
                   setScheduleLocal(defaultScheduleLocal())
                 }}
@@ -539,11 +676,14 @@ export function AdminMail() {
                     onChange={(e) => setScheduleLocal(e.target.value)}
                   />
                 </label>
-                <p className="mt-2 text-xs text-muted">Uses your local timezone. Cancel anytime from Scheduled.</p>
+                <p className="mt-2 text-xs text-muted">
+                  Uses your local timezone. Sends within about 5 minutes of the time you pick. Cancel anytime from
+                  Scheduled.
+                </p>
                 <button
                   type="button"
                   className="btn btn-primary mt-3"
-                  disabled={sending || selectedIds.length === 0 || !scheduleLocal}
+                  disabled={sending || savingDraft || selectedIds.length === 0 || !scheduleLocal}
                   onClick={() => void scheduleMail()}
                 >
                   {sending ? 'Scheduling…' : 'Confirm schedule'}
@@ -563,16 +703,23 @@ export function AdminMail() {
                     ? 'No archived messages.'
                     : tab === 'scheduled'
                       ? 'No scheduled sends.'
-                      : tab === 'trash'
-                        ? 'Trash is empty.'
-                        : 'No mail yet.'}
+                      : tab === 'drafts'
+                        ? 'No drafts. Unfinished compose messages show up here.'
+                        : tab === 'trash'
+                          ? 'Trash is empty.'
+                          : 'No mail yet.'}
               </p>
             )}
             {tab === 'trash' && list.length > 0 && (
               <p className="text-xs text-muted">Messages are permanently deleted after 30 days.</p>
             )}
             {tab === 'scheduled' && list.length > 0 && (
-              <p className="text-xs text-muted">These send automatically at the scheduled time.</p>
+              <p className="text-xs text-muted">
+                These send automatically within about 5 minutes of the scheduled time.
+              </p>
+            )}
+            {tab === 'drafts' && list.length > 0 && (
+              <p className="text-xs text-muted">Open a draft to keep editing, then send when ready.</p>
             )}
             {list.map((msg) => {
               const unread = (tab === 'inbox' || tab === 'archived') && !msg.readAt
@@ -581,7 +728,13 @@ export function AdminMail() {
                 <button
                   key={msg.id}
                   type="button"
-                  onClick={() => void openAndMark(msg)}
+                  onClick={() => {
+                    if (tab === 'drafts') {
+                      openDraft(msg)
+                      return
+                    }
+                    void openAndMark(msg)
+                  }}
                   className={`w-full max-w-full rounded-xl border bg-white p-4 text-left transition-colors hover:border-electric/40 ${
                     openId === msg.id ? 'border-electric/50' : 'border-slate-200'
                   } ${unread ? 'border-electric/40' : ''}`}
@@ -600,14 +753,19 @@ export function AdminMail() {
                     )}
                   </div>
                   <p className="mt-1 break-words text-sm text-muted">
-                    {tab === 'sent' || tab === 'scheduled' || msg.trashSource === 'sent'
+                    {tab === 'sent' ||
+                    tab === 'scheduled' ||
+                    tab === 'drafts' ||
+                    msg.trashSource === 'sent'
                       ? `To ${msg.recipients.map(labelFor).join(', ') || '—'}`
                       : `From ${labelFor({ email: msg.senderEmail, displayName: msg.senderDisplayName })}`}
                   </p>
                   <p className="mt-1 text-xs text-muted">
                     {tab === 'scheduled' && msg.scheduledAt
                       ? `Sends ${new Date(msg.scheduledAt).toLocaleString()}`
-                      : new Date(msg.createdAt).toLocaleString()}
+                      : tab === 'drafts'
+                        ? `Saved ${new Date(msg.createdAt).toLocaleString()}`
+                        : new Date(msg.createdAt).toLocaleString()}
                   </p>
                 </button>
               )
@@ -617,7 +775,7 @@ export function AdminMail() {
           <div
             className={`min-w-0 rounded-xl border border-slate-200 bg-white p-4 sm:p-5 ${
               openMessage ? '' : 'hidden lg:block'
-            }`}
+            } ${tab === 'drafts' ? 'lg:hidden' : ''}`}
           >
             {!openMessage ? (
               <p className="text-sm text-muted">Select a message to read it.</p>
@@ -753,15 +911,17 @@ export function AdminMail() {
 
       <ConfirmDialog
         open={Boolean(pendingDelete)}
-        title={tab === 'trash' ? 'Delete forever?' : 'Move to Trash?'}
+        title={
+          tab === 'trash' || tab === 'drafts' ? 'Delete forever?' : 'Move to Trash?'
+        }
         message={
           pendingDelete
-            ? tab === 'trash'
+            ? tab === 'trash' || tab === 'drafts'
               ? `Permanently delete “${pendingDelete.subject}”? This cannot be undone.`
               : `Move “${pendingDelete.subject}” to Trash? You can restore it within 30 days.`
             : ''
         }
-        confirmLabel={tab === 'trash' ? 'Delete forever' : 'Move to Trash'}
+        confirmLabel={tab === 'trash' || tab === 'drafts' ? 'Delete forever' : 'Move to Trash'}
         danger
         busy={deleting}
         onCancel={() => setPendingDelete(null)}

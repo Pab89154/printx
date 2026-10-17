@@ -173,6 +173,7 @@ export type MailMessage = {
   deletedAt: string | null
   senderDeletedAt: string | null
   scheduledAt: string | null
+  isDraft?: boolean
   /** Present on Trash mailbox items — controls restore destination. */
   trashSource?: MailTrashSource
   recipients: MailRecipientOption[]

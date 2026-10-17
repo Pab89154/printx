@@ -1,4 +1,5 @@
 import type { MouseEvent } from 'react'
+import { BTN_POP_NAV_EVENT } from './buttonPop'
 import { isPortalHost } from './portal'
 
 function stickyOffset(): number {
@@ -47,10 +48,7 @@ export function onHashLinkClick(event: MouseEvent<HTMLAnchorElement>, href: stri
     scrollToHash(href)
     return
   }
-  // From /shop (or other routes), return to the marketing home with that section.
-  if (isPortalHost()) {
-    window.location.assign(`/sandbox${href}`)
-    return
-  }
-  window.location.assign(`/${href}`)
+  // Stay in the app. A full reload drops the catalog behind the startup screen.
+  const to = isPortalHost() ? `/sandbox${href}` : `/${href}`
+  window.dispatchEvent(new CustomEvent(BTN_POP_NAV_EVENT, { detail: { to } }))
 }

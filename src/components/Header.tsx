@@ -22,7 +22,7 @@ export function Header() {
     <header className="sticky top-0 z-50 border-b border-navy/8 bg-white/90 backdrop-blur-lg">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
         <a
-          href="#home"
+          href="/#home"
           className="group flex items-center gap-3"
           onClick={(e) => onHashLinkClick(e, '#home')}
         >
@@ -37,7 +37,7 @@ export function Header() {
           {links.map((link) => (
             <a
               key={link.href}
-              href={link.href}
+              href={link.href.startsWith('#') ? `/${link.href}` : link.href}
               className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-electric"
               onClick={(e) => onHashLinkClick(e, link.href)}
             >
@@ -78,7 +78,7 @@ export function Header() {
             {links.map((link) => (
               <a
                 key={link.href}
-                href={link.href}
+                href={link.href.startsWith('#') ? `/${link.href}` : link.href}
                 className="rounded-xl px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-electric"
                 onClick={(e) => {
                   onHashLinkClick(e, link.href)

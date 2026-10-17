@@ -17,7 +17,9 @@ import {
   disableAdminPush,
   enableAdminPush,
   getPushSetupState,
+  isBraveBrowser,
   isIosDevice,
+  resetAdminPushDevice,
   type PushSetupState,
 } from '../lib/adminPush'
 
@@ -372,7 +374,7 @@ export function AdminSettings() {
   }
 
   return (
-    <div>
+    <div className="min-w-0 max-w-full overflow-x-clip">
       <h1 className="text-2xl font-bold text-navy">Settings</h1>
       <p className="mt-1 text-muted">
         {isMainAdmin
@@ -380,7 +382,7 @@ export function AdminSettings() {
           : 'Manage your account.'}
       </p>
 
-      <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+      <div className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
         <h2 className="mb-2 font-semibold">Your account</h2>
         <p className="text-sm text-muted">Signed in as</p>
         <p className="font-medium text-navy">{label}</p>
@@ -421,14 +423,21 @@ export function AdminSettings() {
         )}
       </div>
 
-      <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+      <div className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
         <h2 className="mb-1 font-semibold">Phone notifications</h2>
         <p className="text-sm text-muted">
           Get Inbox, Mail, Orders, and Custom Requests alerts in your phone Notification Center (iPhone
           and Pixel).
         </p>
         <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs text-muted">
-          {isIosDevice() ? (
+          {isBraveBrowser() ? (
+            <>
+              <li>Open brave://settings/privacy</li>
+              <li>Turn on Use Google services for push messaging</li>
+              <li>Lion icon on this site → allow notifications</li>
+              <li>Tap Enable below</li>
+            </>
+          ) : isIosDevice() ? (
             <>
               <li>Safari → Share → Add to Home Screen</li>
               <li>Open PrintX from the Home Screen icon (not a Safari tab)</li>
@@ -469,10 +478,10 @@ export function AdminSettings() {
         )}
         {pushError && <p className="mt-2 text-sm text-red-600">{pushError}</p>}
         {pushMessage && <p className="mt-2 text-sm text-green-600">{pushMessage}</p>}
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="action-row mt-4">
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-primary btn-compact"
             disabled={
               pushBusy ||
               pushState === 'loading' ||
@@ -498,12 +507,12 @@ export function AdminSettings() {
                 .finally(() => setPushBusy(false))
             }}
           >
-            {pushBusy ? 'Working…' : pushState === 'enabled' ? 'Re-enable on this device' : 'Enable notifications'}
+            {pushBusy ? 'Working…' : pushState === 'enabled' ? 'Re-enable' : 'Enable'}
           </button>
           {pushState === 'enabled' && (
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-compact"
               disabled={pushBusy}
               onClick={() => {
                 setPushBusy(true)
@@ -529,10 +538,39 @@ export function AdminSettings() {
               Send test
             </button>
           )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-compact"
+            disabled={pushBusy || pushState === 'loading' || pushState === 'unsupported' || pushState === 'needs_homescreen'}
+            onClick={() => {
+              setPushBusy(true)
+              setPushError('')
+              setPushMessage('')
+              void resetAdminPushDevice()
+                .then(() => enableAdminPush())
+                .then((next) => {
+                  setPushState(next)
+                  if (next === 'enabled') {
+                    setPushMessage('Push reset and re-enabled on this device.')
+                  } else if (next === 'no_vapid') {
+                    setPushError('Push is not configured on the server (VAPID keys).')
+                  } else if (next === 'denied') {
+                    setPushError('Permission denied.')
+                  } else {
+                    setPushMessage('Push data cleared on this device. Tap Enable notifications.')
+                    setPushState('ready')
+                  }
+                })
+                .catch((e) => setPushError(e instanceof Error ? e.message : 'Could not reset push'))
+                .finally(() => setPushBusy(false))
+            }}
+          >
+            Reset
+          </button>
           {pushState === 'enabled' && (
             <button
               type="button"
-              className="btn btn-ghost"
+              className="btn btn-ghost btn-compact"
               disabled={pushBusy}
               onClick={() => {
                 setPushBusy(true)
@@ -553,7 +591,7 @@ export function AdminSettings() {
         </div>
       </div>
 
-      <form onSubmit={saveCloudSlicer} className="mt-8 max-w-md rounded-2xl border bg-white p-6" autoComplete="off">
+      <form onSubmit={saveCloudSlicer} className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6" autoComplete="off">
         <h2 className="mb-1 font-semibold">Cloud Slicer API</h2>
         <p className="text-sm text-muted">
           Each printer owner uses their own free Cloud Slicer account. Create a printer + filament there, then
@@ -621,8 +659,8 @@ export function AdminSettings() {
         </p>
         {csError && <p className="mt-3 text-sm text-red-600">{csError}</p>}
         {csMessage && <p className="mt-3 text-sm text-green-600">{csMessage}</p>}
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button type="submit" disabled={csSaving} className="btn btn-primary">
+        <div className="action-row mt-4">
+          <button type="submit" disabled={csSaving} className="btn btn-primary btn-compact">
             {csSaving ? 'Saving…' : 'Save Cloud Slicer'}
           </button>
           {csHasToken ? (
@@ -647,7 +685,7 @@ export function AdminSettings() {
       </form>
 
       {can('mail') && (
-        <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+        <div className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
           <h2 className="mb-1 font-semibold">Mail signature</h2>
           <p className="text-sm text-muted">
             Added at the end of new messages, replies, and forwards. Leave blank for no signature.
@@ -684,7 +722,7 @@ export function AdminSettings() {
       )}
 
       {can('website_status') && (
-        <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+        <div className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
           <h2 className="mb-1 font-semibold">Public website</h2>
           <p className="mb-4 text-sm text-muted">
             Temporarily pause the public site. Visitors will see “Currently Planning Prints!” Admins can still try the full site in the sandbox.
@@ -724,7 +762,7 @@ export function AdminSettings() {
       )}
 
       {isMainAdmin && can('manage_admins') && (
-        <div className="mt-8 max-w-2xl rounded-2xl border bg-white p-6">
+        <div className="mt-8 w-full min-w-0 max-w-2xl overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
           <h2 className="mb-1 font-semibold">Admin accounts & access</h2>
           <p className="mb-4 text-sm text-muted">
             As main admin you can create regular admins, choose what they can see, change their emails and
@@ -739,70 +777,70 @@ export function AdminSettings() {
 
           <ul className="space-y-3">
             {admins.map((admin) => (
-              <li key={admin.id} className="rounded-xl border px-4 py-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+              <li key={admin.id} className="min-w-0 overflow-hidden rounded-xl border px-3 py-3 sm:px-4">
+                <div className="flex min-w-0 flex-col gap-3">
                   <div className="min-w-0">
-                    <p className="font-medium text-navy">{admin.displayName?.trim() || admin.email}</p>
+                    <p className="break-words font-medium text-navy">
+                      {admin.displayName?.trim() || admin.email}
+                    </p>
                     {admin.displayName?.trim() && (
-                      <p className="text-sm text-muted">{admin.email}</p>
+                      <p className="break-all text-sm text-muted">{admin.email}</p>
                     )}
                     <p className="text-xs text-muted">
                       {admin.isMainAdmin ? 'Main admin — full access' : 'Regular admin'} · Joined{' '}
                       {new Date(admin.createdAt).toLocaleDateString()}
                     </p>
                   </div>
-                  <div className="flex shrink-0 flex-wrap items-center gap-2">
-                    {admin.isMainAdmin ? (
-                      <span className="text-xs font-medium text-electric">You</span>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            editingId === admin.id
-                              ? (setEditingId(null), setEditPerms(null))
-                              : startEdit(admin)
-                          }
-                          className="btn btn-secondary"
-                        >
-                          {editingId === admin.id ? 'Close' : 'Edit access'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEmailTargetId((id) => (id === admin.id ? null : admin.id))
-                            setResetEmail(admin.email)
-                            setResetEmailError('')
-                            setResetEmailMessage('')
-                            setPasswordTargetId(null)
-                          }}
-                          className="btn btn-secondary"
-                        >
-                          {emailTargetId === admin.id ? 'Close' : 'Change email'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPasswordTargetId((id) => (id === admin.id ? null : admin.id))
-                            setResetPassword('')
-                            setResetPasswordError('')
-                            setResetPasswordMessage('')
-                            setEmailTargetId(null)
-                          }}
-                          className="btn btn-secondary"
-                        >
-                          {passwordTargetId === admin.id ? 'Close' : 'Set password'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPendingRemove(admin)}
-                          className="btn btn-danger"
-                        >
-                          Delete account
-                        </button>
-                      </>
-                    )}
-                  </div>
+                  {admin.isMainAdmin ? (
+                    <span className="text-xs font-medium text-electric">You</span>
+                  ) : (
+                    <div className="action-row">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          editingId === admin.id
+                            ? (setEditingId(null), setEditPerms(null))
+                            : startEdit(admin)
+                        }
+                        className="btn btn-secondary btn-compact"
+                      >
+                        {editingId === admin.id ? 'Close' : 'Edit access'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmailTargetId((id) => (id === admin.id ? null : admin.id))
+                          setResetEmail(admin.email)
+                          setResetEmailError('')
+                          setResetEmailMessage('')
+                          setPasswordTargetId(null)
+                        }}
+                        className="btn btn-secondary btn-compact"
+                      >
+                        {emailTargetId === admin.id ? 'Close' : 'Change email'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPasswordTargetId((id) => (id === admin.id ? null : admin.id))
+                          setResetPassword('')
+                          setResetPasswordError('')
+                          setResetPasswordMessage('')
+                          setEmailTargetId(null)
+                        }}
+                        className="btn btn-secondary btn-compact"
+                      >
+                        {passwordTargetId === admin.id ? 'Close' : 'Set password'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingRemove(admin)}
+                        className="btn btn-danger btn-compact"
+                      >
+                        Delete account
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {emailTargetId === admin.id && (
@@ -962,7 +1000,7 @@ export function AdminSettings() {
       )}
 
       {isMainAdmin && can('settings') && (
-        <form onSubmit={changeEmail} className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+        <form onSubmit={changeEmail} className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
           <h2 className="mb-4 font-semibold">Change your email</h2>
           <label className="block">
             New email
@@ -998,7 +1036,7 @@ export function AdminSettings() {
       )}
 
       {isMainAdmin && can('settings') && (
-        <form onSubmit={changePassword} className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+        <form onSubmit={changePassword} className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
           <h2 className="mb-4 font-semibold">Change your password</h2>
           <label className="block">
             Current password
@@ -1030,7 +1068,7 @@ export function AdminSettings() {
       )}
 
       {!isMainAdmin && can('settings') && (
-        <div className="mt-8 max-w-md rounded-2xl border bg-white p-6">
+        <div className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
           <h2 className="mb-2 font-semibold">Email & password</h2>
           <p className="text-sm text-muted">
             Regular admins cannot change their own email or password. Ask the main admin to update them for

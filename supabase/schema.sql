@@ -120,10 +120,16 @@ create table if not exists custom_requests (
   shipping_country text not null default '',
   shipping_method text not null default '',
   shipping_usd double precision not null default 0,
+  shipping_to_profit_at text,
   tracking_number text not null default '',
   tracking_carrier text not null default '',
   tracking_url text not null default '',
   shipped_at text,
+  agreement_name text not null default '',
+  agreement_text text not null default '',
+  agreement_payment_checked integer not null default 0,
+  agreement_terms_checked integer not null default 0,
+  agreement_at text,
   created_at text not null,
   updated_at text not null
 );
@@ -247,10 +253,19 @@ create table if not exists orders (
   shipping_country text not null default '',
   shipping_method text not null default '',
   shipping_usd double precision not null default 0,
+  shipping_to_profit_at text,
   tracking_number text not null default '',
   tracking_carrier text not null default '',
   tracking_url text not null default '',
-  shipped_at text
+  shipped_at text,
+  payment_method text not null default 'stripe',
+  cash_recorded_by text,
+  classmate_code text not null default '',
+  agreement_name text not null default '',
+  agreement_text text not null default '',
+  agreement_payment_checked integer not null default 0,
+  agreement_terms_checked integer not null default 0,
+  agreement_at text
 );
 
 create table if not exists order_items (

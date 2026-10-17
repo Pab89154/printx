@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { Button } from './Button'
 import { ScrollReveal } from './ScrollReveal'
@@ -86,7 +87,12 @@ export function CustomPrinting() {
     const file = formData.get('file')
 
     if (!(file instanceof File) || !file.size) {
-      setError('Please attach a .stl or .3mf model file.')
+      setError('Please attach an .stl or .gcode file.')
+      return
+    }
+    const name = file.name.toLowerCase()
+    if (!name.endsWith('.stl') && !name.endsWith('.gcode')) {
+      setError('Please attach an .stl or .gcode file.')
       return
     }
 
@@ -202,13 +208,13 @@ export function CustomPrinting() {
                 {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
                 <label className="mt-4 block">
                   <span className="mb-1.5 block text-sm font-medium text-navy">
-                    Model file <span className="font-normal text-muted">(.stl or .3mf)</span>
+                    Model file <span className="font-normal text-muted">(.stl or .gcode)</span>
                   </span>
                   <input
                     name="file"
                     type="file"
                     required
-                    accept=".stl,.3mf,.obj,model/stl,model/3mf,model/obj"
+                    accept=".stl,.gcode,model/stl"
                     className="mt-1.5 block w-full text-sm text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-electric/10 file:px-3 file:py-2 file:text-sm file:font-medium file:text-electric"
                   />
                 </label>
@@ -228,6 +234,12 @@ export function CustomPrinting() {
                 </p>
                 <p className="mt-2 text-sm text-muted">
                   Worst-cost printer estimate. Payment goes through Checkout (Stripe).
+                </p>
+                <p className="mt-4 text-sm text-navy">
+                  <Link to="/terms-and-conditions" className="text-electric underline">
+                    Click here to read the terms and conditions.
+                  </Link>{' '}
+                  Checkout asks you to agree before you pay.
                 </p>
                 {quote.error ? (
                   <p className="mt-2 whitespace-pre-wrap text-xs text-amber-700">{quote.error}</p>
@@ -260,7 +272,7 @@ export function CustomPrinting() {
               <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-6 sm:p-8">
                 <h3 className="font-semibold text-navy">Could not estimate</h3>
                 <p className="mt-2 whitespace-pre-wrap text-sm text-amber-900">
-                  {quote?.error || error || 'We could not quote this model. Try a .stl/.3mf or adjust the file.'}
+                  {quote?.error || error || 'We could not quote this file. Try an .stl or .gcode export.'}
                 </p>
                 <div className="mt-6 flex flex-wrap gap-3">
                   <Button type="button" onClick={() => void handleCancel()}>

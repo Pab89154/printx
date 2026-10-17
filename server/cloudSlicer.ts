@@ -87,7 +87,7 @@ export async function uploadStlFile(
 }
 
 /** POST /v1/quote/fdm/:fileId — start a Cloud Slicer FDM quote. */
-async function startCloudSlicerQuote(creds: CloudSlicerCreds, fileId: string): Promise<string> {
+export async function startCloudSlicerQuote(creds: CloudSlicerCreds, fileId: string): Promise<string> {
   const res = await fetch(`${apiBase()}/v1/quote/fdm/${encodeURIComponent(fileId)}`, {
     method: 'POST',
     headers: {
@@ -108,6 +108,63 @@ async function startCloudSlicerQuote(creds: CloudSlicerCreds, fileId: string): P
   const quoteId = String(data.quote_id ?? data.id ?? '')
   if (!quoteId) throw new Error('Cloud Slicer quote did not return quote_id.')
   return quoteId
+}
+
+export type QuoteAdvance =
+  | { phase: 'pending'; fileId: string; quoteId: string }
+  | { phase: 'success'; fileId: string; quoteId: string; grams: number; hours: number }
+  | { phase: 'failed'; error: string; fileId: string; quoteId: string }
+
+/**
+ * Start or continue one printer quote, then poll only until `budgetMs`.
+ * Workers die around 30s, so a full quote is finished across later requests.
+ */
+export async function advancePrinterQuote(
+  creds: CloudSlicerCreds,
+  localPath: string,
+  existing: { fileId?: string; quoteId?: string },
+  budgetMs: number,
+): Promise<QuoteAdvance> {
+  const deadline = Date.now() + Math.max(1000, budgetMs)
+  let fileId = existing.fileId?.trim() || ''
+  let quoteId = existing.quoteId?.trim() || ''
+  if (!fileId) {
+    fileId = await uploadStlFile(creds, localPath, path.basename(localPath) || 'design.stl')
+  }
+  if (!quoteId) {
+    quoteId = await startCloudSlicerQuote(creds, fileId)
+  }
+  while (Date.now() < deadline) {
+    const res = await fetch(`${apiBase()}/v1/quote/${encodeURIComponent(quoteId)}`, {
+      headers: authHeaders(creds.token),
+    })
+    const data = await readJsonSafe(res)
+    if (!res.ok) {
+      return {
+        phase: 'failed',
+        error: String(data.error || data.message || data.detail || `Cloud Slicer poll failed (${res.status})`),
+        fileId,
+        quoteId,
+      }
+    }
+    const status = String(data.status || '')
+    if (status === 'success') {
+      const { grams, hours } = extractGramsHours(data)
+      return { phase: 'success', fileId, quoteId, grams, hours }
+    }
+    if (status === 'failed' || status === 'error') {
+      return {
+        phase: 'failed',
+        error: String(data.error_message || data.error || data.message || 'Cloud Slicer quote failed'),
+        fileId,
+        quoteId,
+      }
+    }
+    const wait = Math.min(800, deadline - Date.now())
+    if (wait <= 50) break
+    await sleep(wait)
+  }
+  return { phase: 'pending', fileId, quoteId }
 }
 
 export async function waitForQuote(

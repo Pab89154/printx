@@ -31,6 +31,12 @@ function resolveDataDir(): string {
 export const DATA_DIR = resolveDataDir()
 export const UPLOADS_DIR = path.join(DATA_DIR, 'uploads')
 
+/** Workers skip the DB bootstrap mkdir; formidable still needs this directory. */
+export function ensureUploadsDir(): string {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+  return UPLOADS_DIR
+}
+
 function toPgPlaceholders(sql: string): string {
   let i = 0
   return sql.replace(/\?/g, () => `$${++i}`)

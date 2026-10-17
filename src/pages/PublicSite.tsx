@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { About } from '../components/About'
 import { AnnouncementBanner } from '../components/AnnouncementBanner'
 import { Contact } from '../components/Contact'
@@ -11,6 +13,7 @@ import { WhatWePrint } from '../components/WhatWePrint'
 import { WhereToFindUs } from '../components/WhereToFindUs'
 import { WhyPrintX } from '../components/WhyPrintX'
 import { usePublicData } from '../context/PublicDataContext'
+import { scrollToHash } from '../lib/scroll'
 
 type Props = {
   /** Admin sandbox: always show the full site, never the paused screen. */
@@ -19,6 +22,13 @@ type Props = {
 
 export function PublicSite({ forceOnline = false }: Props) {
   const { data, loading, error } = usePublicData()
+  const location = useLocation()
+
+  useEffect(() => {
+    if (loading || !location.hash) return
+    const timer = window.setTimeout(() => scrollToHash(location.hash), 40)
+    return () => window.clearTimeout(timer)
+  }, [loading, location.hash, location.pathname])
 
   if (loading) {
     return (

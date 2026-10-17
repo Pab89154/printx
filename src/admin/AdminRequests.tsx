@@ -273,7 +273,7 @@ export function AdminRequests() {
                   </div>
                 )}
                 {isMainAdmin && (req.status === 'new' || req.status === 'reviewing') && (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="action-row">
                     <button
                       type="button"
                       className="btn btn-primary btn-compact"
@@ -285,7 +285,7 @@ export function AdminRequests() {
                       }
                       onClick={() => void accept(req)}
                     >
-                      Accept & download G-code
+                      Accept & download
                     </button>
                     <button
                       type="button"

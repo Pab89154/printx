@@ -7,14 +7,15 @@ import './index.css'
 declare global {
   interface Window {
     __PRINTX_API_READY__?: Promise<void>
+    __PRINTX_DISMISS_WAKE__?: () => void
   }
 }
 
-async function boot() {
-  // Wait for the cold-start shell to confirm /api/health (or resolve immediately if missing).
-  if (window.__PRINTX_API_READY__) {
-    await window.__PRINTX_API_READY__
-  }
+function boot() {
+  // Paint the site immediately. Waiting on /api/health left the startup
+  // screen over the catalog, so those buttons could not be clicked.
+  const dismiss = window.__PRINTX_DISMISS_WAKE__
+  if (typeof dismiss === 'function') dismiss()
 
   installButtonPop()
 
@@ -28,4 +29,4 @@ async function boot() {
   )
 }
 
-void boot()
+boot()

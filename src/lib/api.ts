@@ -254,9 +254,29 @@ export const api = {
           body: formData,
           credentials: 'include',
         }).then(async (res) => {
-          const data = await res.json()
+          const data = (await res.json().catch(() => ({}))) as {
+            error?: string
+            stlPath?: string
+            hasStl?: boolean
+            modelExt?: string
+            sourceGcodePath?: string
+            grams?: number | null
+            hours?: number | null
+            fromGcode?: boolean
+          }
           if (!res.ok) throw new Error(data.error ?? 'Model upload failed')
-          return data as { stlPath: string; hasStl: boolean; modelExt: string }
+          if (!data.stlPath || !data.hasStl || !data.modelExt) {
+            throw new Error('Upload finished but the server did not confirm the file. Try again.')
+          }
+          return data as {
+            stlPath: string
+            hasStl: boolean
+            modelExt: string
+            sourceGcodePath?: string
+            grams?: number | null
+            hours?: number | null
+            fromGcode?: boolean
+          }
         })
       },
       uploadModel: (file: File) => {
@@ -267,12 +287,78 @@ export const api = {
           body: formData,
           credentials: 'include',
         }).then(async (res) => {
-          const data = await res.json()
+          const data = (await res.json().catch(() => ({}))) as {
+            error?: string
+            stlPath?: string
+            hasStl?: boolean
+            modelExt?: string
+            sourceGcodePath?: string
+            grams?: number | null
+            hours?: number | null
+            fromGcode?: boolean
+          }
           if (!res.ok) throw new Error(data.error ?? 'Model upload failed')
-          return data as { stlPath: string; hasStl: boolean; modelExt: string }
+          if (!data.stlPath || !data.hasStl || !data.modelExt) {
+            throw new Error('Upload finished but the server did not confirm the file. Try again.')
+          }
+          return data as {
+            stlPath: string
+            hasStl: boolean
+            modelExt: string
+            sourceGcodePath?: string
+            grams?: number | null
+            hours?: number | null
+            fromGcode?: boolean
+          }
         })
       },
       stlUrl: (id: string) => `/api/admin/designs/${id}/stl`,
+      downloadModel: async (design: {
+        id: string
+        name: string
+        hasStl: boolean
+        modelExt?: string
+        multicolorOnly?: boolean
+        parts?: { label: string; hasStl: boolean; modelExt?: string }[]
+      }) => {
+        const slug =
+          design.name
+            .trim()
+            .replace(/[^\w.\-]+/g, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 80) || design.id.slice(0, 8)
+        const parts = design.parts ?? []
+        if (design.multicolorOnly && parts.some((p) => p.hasStl)) {
+          let downloaded = 0
+          for (let i = 0; i < parts.length; i++) {
+            const part = parts[i]
+            if (!part?.hasStl) continue
+            if (downloaded > 0) await new Promise((r) => setTimeout(r, 450))
+            const ext = (part.modelExt || '.stl').replace(/^\./, '') || 'stl'
+            const partSlug =
+              part.label
+                .trim()
+                .replace(/[^\w.\-]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 40) || `part${i + 1}`
+            await downloadAuthFile(
+              `/api/admin/designs/${encodeURIComponent(design.id)}/parts/${i}/stl`,
+              `${slug}-${partSlug}.${ext}`,
+              'STL download failed',
+            )
+            downloaded += 1
+          }
+          if (downloaded === 0) throw new Error('No STL on file for this design.')
+          return
+        }
+        if (!design.hasStl) throw new Error('No model on file for this design.')
+        const ext = (design.modelExt || '.stl').replace(/^\./, '') || 'stl'
+        await downloadAuthFile(
+          `/api/admin/designs/${encodeURIComponent(design.id)}/stl`,
+          `${slug}.${ext}`,
+          'Model download failed',
+        )
+      },
       remove: (id: string) =>
         request<{ ok: true; archived: boolean }>(`/api/admin/designs/${id}`, { method: 'DELETE' }),
       submit: (id: string) =>
@@ -283,6 +369,11 @@ export const api = {
             body: '{}',
           },
         ),
+      quoteTick: (id: string) =>
+        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/quote-tick`, {
+          method: 'POST',
+          body: '{}',
+        }),
       requote: (id: string) =>
         request<import('../types/catalog.ts').Design & { sliceWarning?: string }>(
           `/api/admin/designs/${id}/requote`,
@@ -338,6 +429,26 @@ export const api = {
           orders: import('../types/catalog.ts').OrderDto[]
           printers: import('../types/catalog.ts').PrinterDto[]
         }>('/api/admin/orders'),
+      cashCode: (code: string) =>
+        request<{ valid: true; code: string }>(
+          `/api/admin/cash-sales/code?code=${encodeURIComponent(code)}`,
+        ),
+      cashSale: (body: {
+        code: string
+        customerName: string
+        agreeToPay: boolean
+        agreeToTerms: boolean
+        items: {
+          designId: string
+          colorId: string
+          qty: number
+          filamentColorIds?: string[]
+        }[]
+      }) =>
+        request<{ orderId: string; totalUsd: number; code: string }>('/api/admin/cash-sales', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
       claim: (itemId: string, printerId: string) =>
         request<import('../types/catalog.ts').OrderItemDto>(
           `/api/admin/order-items/${itemId}/claim`,
@@ -357,6 +468,11 @@ export const api = {
         request<import('../types/catalog.ts').OrderDto>(`/api/admin/orders/${orderId}/ship`, {
           method: 'POST',
           body: JSON.stringify(body),
+        }),
+      markArrived: (orderId: string) =>
+        request<import('../types/catalog.ts').OrderDto>(`/api/admin/orders/${orderId}/arrive`, {
+          method: 'POST',
+          body: '{}',
         }),
       refreshShipping: () =>
         request<{
@@ -414,6 +530,7 @@ export const api = {
             | 'free_shipping'
             | 'percent_and_shipping'
             | 'amount_and_shipping'
+            | 'school_pickup'
           percentOff?: number
           amountOffCents?: number
           maxRedemptions?: number | null
@@ -433,6 +550,7 @@ export const api = {
               | 'free_shipping'
               | 'percent_and_shipping'
               | 'amount_and_shipping'
+              | 'school_pickup'
             percentOff?: number
             amountOffCents?: number
             maxRedemptions?: number | null
@@ -471,6 +589,24 @@ export const api = {
           method: 'POST',
           body: JSON.stringify(body),
         }),
+      downloadStl: async (itemId: string) => {
+        const base = `/api/admin/order-items/${encodeURIComponent(itemId)}/stl`
+        const meta = await request<{
+          partCount: number
+          parts: { index: number; label: string; ext: string }[]
+        }>(`${base}/meta`)
+        const partCount = Math.max(1, Number(meta.partCount) || 1)
+        for (let i = 0; i < partCount; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, 450))
+          const part = meta.parts?.[i]
+          const ext = (part?.ext || '.stl').replace(/^\./, '') || 'stl'
+          const url = partCount > 1 ? `${base}?part=${part?.index ?? i}` : base
+          const fallback = `printx-${itemId.slice(0, 8)}${
+            partCount > 1 ? `-part${i + 1}` : ''
+          }.${ext}`
+          await downloadAuthFile(url, fallback, 'STL download failed')
+        }
+      },
       downloadGcode: async (itemId: string) => {
         const base = `/api/admin/order-items/${encodeURIComponent(itemId)}/gcode`
         type PrepStatus = {
@@ -592,6 +728,17 @@ export const api = {
           markedPaidAt: string
           note: string
         }>('/api/admin/money/settle', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+      shippingToProfit: (body: { kind: 'shop' | 'custom'; id: string; undo?: boolean }) =>
+        request<{
+          ok: true
+          kind: 'shop' | 'custom'
+          id: string
+          shippingUsd: number
+          shippingToProfitAt: string | null
+        }>('/api/admin/money/shipping-to-profit', {
           method: 'POST',
           body: JSON.stringify(body),
         }),
@@ -719,8 +866,25 @@ export const api = {
           method: 'PATCH',
           body: JSON.stringify({ signature }),
         }),
-      send: (body: { subject: string; body: string; recipientIds: string[]; scheduledAt?: string }) =>
+      send: (body: {
+        subject: string
+        body: string
+        recipientIds: string[]
+        scheduledAt?: string
+        draftId?: string
+      }) =>
         request<import('../types/api.ts').MailMessage>('/api/admin/mail', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+      drafts: () => request<import('../types/api.ts').MailMessage[]>('/api/admin/mail/drafts'),
+      saveDraft: (body: {
+        id?: string
+        subject: string
+        body: string
+        recipientIds: string[]
+      }) =>
+        request<import('../types/api.ts').MailMessage>('/api/admin/mail/drafts', {
           method: 'POST',
           body: JSON.stringify(body),
         }),
@@ -740,7 +904,7 @@ export const api = {
         request<{ ok: boolean }>(`/api/admin/mail/${id}/cancel-schedule`, { method: 'PATCH' }),
       sendNow: (id: string) =>
         request<import('../types/api.ts').MailMessage>(`/api/admin/mail/${id}/send-now`, { method: 'PATCH' }),
-      delete: (id: string, opts?: { mailbox?: 'inbox' | 'archived' | 'sent' | 'trash'; forever?: boolean }) => {
+      delete: (id: string, opts?: { mailbox?: 'inbox' | 'archived' | 'sent' | 'drafts' | 'trash'; forever?: boolean }) => {
         const params = new URLSearchParams()
         if (opts?.forever || opts?.mailbox === 'trash') params.set('forever', '1')
         if (opts?.mailbox) params.set('mailbox', opts.mailbox)

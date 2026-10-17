@@ -21,11 +21,13 @@ type DiscountKind =
   | 'free_shipping'
   | 'percent_and_shipping'
   | 'amount_and_shipping'
+  | 'school_pickup'
 
 const MAIN_ADMIN_KINDS: DiscountKind[] = [
   'free_shipping',
   'percent_and_shipping',
   'amount_and_shipping',
+  'school_pickup',
 ]
 
 function asDiscountKind(raw: string): DiscountKind {
@@ -33,7 +35,8 @@ function asDiscountKind(raw: string): DiscountKind {
     raw === 'amount' ||
     raw === 'free_shipping' ||
     raw === 'percent_and_shipping' ||
-    raw === 'amount_and_shipping'
+    raw === 'amount_and_shipping' ||
+    raw === 'school_pickup'
   ) {
     return raw
   }
@@ -41,6 +44,7 @@ function asDiscountKind(raw: string): DiscountKind {
 }
 
 function discountLabel(d: Pick<Discount, 'kind' | 'percentOff' | 'amountOffCents'>) {
+  if (d.kind === 'school_pickup') return 'School pickup (classmates, cash only)'
   if (d.kind === 'free_shipping') return 'Free standard shipping'
   if (d.kind === 'percent_and_shipping') return `${d.percentOff}% off + free standard shipping`
   if (d.kind === 'amount_and_shipping') {
@@ -117,7 +121,7 @@ export function AdminDiscounts() {
         percentOff: usesPercent ? Number(percentOff) : undefined,
         amountOffCents: usesAmount ? Math.round(Number(amountDollars) * 100) : undefined,
         maxRedemptions: maxRedemptions.trim() ? Number(maxRedemptions) : null,
-        visibleToCustomers,
+        visibleToCustomers: kind === 'school_pickup' ? false : visibleToCustomers,
       }
       if (editingId) {
         await api.catalog.orders.discounts.update(editingId, body)
@@ -233,6 +237,7 @@ export function AdminDiscounts() {
                   <option value="free_shipping">Free standard shipping</option>
                   <option value="percent_and_shipping">% off + free standard shipping</option>
                   <option value="amount_and_shipping">$ off + free standard shipping</option>
+                  <option value="school_pickup">School pickup (classmates, cash only)</option>
                 </>
               ) : null}
             </select>
@@ -261,6 +266,12 @@ export function AdminDiscounts() {
                 onChange={(e) => setAmountDollars(e.target.value)}
               />
             </label>
+          ) : kind === 'school_pickup' ? (
+            <p className="text-sm text-muted sm:col-span-2">
+              Lets a classmate pay cash at school with no shipment and no shipping charge. It does
+              not discount the item price and it is not sent to Checkout. Only main admins can
+              create these.
+            </p>
           ) : (
             <p className="text-sm text-muted sm:col-span-2">
               Credits the standard shipping rate at Checkout. Only main admins can create these.
@@ -284,14 +295,16 @@ export function AdminDiscounts() {
             />
           </label>
         </div>
-        <label className="flex items-center gap-2 text-sm text-navy">
-          <input
-            type="checkbox"
-            checked={visibleToCustomers}
-            onChange={(e) => setVisibleToCustomers(e.target.checked)}
-          />
-          Show on customer account page (optional — off by default)
-        </label>
+        {kind !== 'school_pickup' ? (
+          <label className="flex items-center gap-2 text-sm text-navy">
+            <input
+              type="checkbox"
+              checked={visibleToCustomers}
+              onChange={(e) => setVisibleToCustomers(e.target.checked)}
+            />
+            Show on customer account page (optional — off by default)
+          </label>
+        ) : null}
         <button type="submit" className="btn btn-primary" disabled={busy}>
           {busy
             ? editing
@@ -299,7 +312,9 @@ export function AdminDiscounts() {
               : 'Creating…'
             : editing
               ? 'Save changes'
-              : 'Create in Stripe'}
+              : kind === 'school_pickup'
+                ? 'Create school pickup code'
+                : 'Create in Stripe'}
         </button>
       </form>
 

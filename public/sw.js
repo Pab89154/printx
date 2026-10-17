@@ -1,7 +1,7 @@
 /* PrintX portal service worker — Web Push + keep iOS PWA off stale shells.
  * Cache version bump forces activate() to drop old Cache Storage entries.
  */
-const CACHE_VERSION = 'printx-sw-v5'
+const CACHE_VERSION = 'printx-sw-v6'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting())
@@ -71,17 +71,18 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  const options = {
+    body: data.body,
+    icon: '/apple-touch-icon.png',
+    badge: '/favicon-32.png',
+    data: { url: data.url },
+    tag: `printx-${data.url || 'alert'}`,
+  }
+  // Brave rejects some newer options (renotify). Fall back so the alert still shows.
   event.waitUntil(
-    self.registration.showNotification(data.title, {
-      body: data.body,
-      icon: '/apple-touch-icon.png',
-      badge: '/favicon-32.png',
-      data: { url: data.url },
-      tag: `printx-${data.url}`,
-      renotify: true,
-      // Helps Android/Chrome surface the alert when the portal is open in background.
-      requireInteraction: false,
-    }),
+    self.registration.showNotification(data.title, { ...options, renotify: true }).catch(() =>
+      self.registration.showNotification(data.title, options),
+    ),
   )
 })
 

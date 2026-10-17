@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Upload } from 'lucide-react'
 import { api } from '../lib/api'
+import { useAdminAuth } from '../context/AdminAuthContext'
 import {
   MULTICOLOR_COLOR_ID,
   MULTICOLOR_SLOT_DEFAULT,
@@ -11,7 +12,7 @@ import {
   defaultMulticolorPartLabel,
   solidBuiltinColors,
 } from '../../shared/colors'
-import { MODEL_ACCEPT, modelLabel, SLICEABLE_EXTS } from '../../shared/modelFormats'
+import { MODEL_ACCEPT, modelLabel } from '../../shared/modelFormats'
 import type { Design } from '../types/catalog'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MultiStlViewer, StlViewer } from '../components/StlViewer'
@@ -23,6 +24,7 @@ type PartForm = {
   modelExt: string
   localPreviewUrl: string
 }
+
 
 function emptyParts(count: number, existing?: PartForm[]): PartForm[] {
   const n = clampMulticolorSlotCount(count)
@@ -47,6 +49,8 @@ const emptyForm = {
   stlPath: '',
   hasStl: false,
   modelExt: '',
+  sourceGcodePath: '',
+  fromGcode: false,
   availableColorIds: ['black', 'white'] as string[],
   multicolorOnly: false,
   multicolorSlotCount: MULTICOLOR_SLOT_DEFAULT,
@@ -54,6 +58,7 @@ const emptyForm = {
 }
 
 export function AdminDesigns() {
+  const { isMainAdmin } = useAdminAuth()
   const [designs, setDesigns] = useState<Design[]>([])
   const [extraColors, setExtraColors] = useState<{ id: string; name: string; hex: string }[]>([])
   const [form, setForm] = useState(emptyForm)
@@ -108,6 +113,30 @@ export function AdminDesigns() {
     return () => clearLocalPreview()
   }, [])
 
+  const slicingId = designs.find((d) => d.sliceStatus === 'slicing')?.id ?? ''
+  useEffect(() => {
+    if (!slicingId) return
+    let cancelled = false
+    const pump = async () => {
+      while (!cancelled) {
+        try {
+          const next = await api.catalog.designs.quoteTick(slicingId)
+          if (cancelled) return
+          setDesigns((prev) => prev.map((d) => (d.id === next.id ? next : d)))
+          if (next.sliceStatus !== 'slicing') return
+          await new Promise((r) => setTimeout(r, 15000))
+        } catch (err) {
+          if (!cancelled) setError(err instanceof Error ? err.message : 'Quoting failed')
+          await new Promise((r) => setTimeout(r, 4000))
+        }
+      }
+    }
+    void pump()
+    return () => {
+      cancelled = true
+    }
+  }, [slicingId])
+
   const colorOptions = [
     ...solidBuiltinColors().map((c) => ({ id: c.id, name: c.name, hex: c.hex })),
     ...extraColors,
@@ -132,6 +161,7 @@ export function AdminDesigns() {
       imageUrl: '',
       // Only send when a new upload is pending — never send '' (that used to wipe stl_path).
       ...(mainStlPath ? { stlPath: mainStlPath } : {}),
+      ...(form.sourceGcodePath ? { sourceGcodePath: form.sourceGcodePath } : {}),
       multicolorOnly: form.multicolorOnly,
       multicolorSlotCount: form.multicolorSlotCount,
       availableColorIds: form.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID),
@@ -167,6 +197,8 @@ export function AdminDesigns() {
       stlPath: '',
       hasStl: d.hasStl,
       modelExt: d.modelExt || '',
+      sourceGcodePath: '',
+      fromGcode: Boolean(d.fromGcode),
       availableColorIds: solids.length ? solids : ['black', 'white'],
       multicolorOnly: Boolean(d.multicolorOnly),
       multicolorSlotCount: slotCount,
@@ -179,6 +211,9 @@ export function AdminDesigns() {
     setError('')
     setMessage('')
     try {
+      if (file.name.toLowerCase().endsWith('.gcode')) {
+        throw new Error('Multicolor parts must be STL files.')
+      }
       const { stlPath, hasStl, modelExt } = await api.catalog.designs.uploadModel(file)
       if (!stlPath || !hasStl) {
         throw new Error('Upload finished but the server did not confirm the file. Try again.')
@@ -215,21 +250,31 @@ export function AdminDesigns() {
     setError('')
     setMessage('')
     try {
-      const { stlPath, hasStl, modelExt } = await api.catalog.designs.uploadModel(file)
-      if (!stlPath || !hasStl) {
+      const uploaded = await api.catalog.designs.uploadModel(file)
+      if (!uploaded.stlPath || !uploaded.hasStl) {
         throw new Error('Upload finished but the server did not confirm the file. Try again.')
       }
       clearLocalPreview()
-      if (modelExt === '.stl' || file.name.toLowerCase().endsWith('.stl')) {
+      const fromGcode = Boolean(uploaded.fromGcode)
+      if (!fromGcode && (uploaded.modelExt === '.stl' || file.name.toLowerCase().endsWith('.stl'))) {
         const blobUrl = URL.createObjectURL(file)
         localPreviewUrlRef.current = blobUrl
         setLocalPreviewUrl(blobUrl)
       }
-      setForm((f) => ({ ...f, stlPath, hasStl: true, modelExt }))
-      const sliceNote = SLICEABLE_EXTS.has(modelExt)
-        ? 'Grams/hours fill automatically when you submit for approval.'
-        : 'Saved for the design. Convert to .stl or .3mf before submit so Cloud Slicer can quote.'
-      setMessage(`${modelLabel(modelExt)} uploaded — click Save draft to attach it to this design. ${sliceNote}`)
+      setForm((f) => ({
+        ...f,
+        stlPath: uploaded.stlPath,
+        hasStl: true,
+        modelExt: fromGcode ? '.gcode' : uploaded.modelExt,
+        sourceGcodePath: uploaded.sourceGcodePath || '',
+        fromGcode,
+      }))
+      const sliceNote = fromGcode
+        ? 'Filament and time come from the file, so it will not be sliced. The 3D preview is the printed toolpath, not the original solid. Save draft to see it.'
+        : 'Grams and hours fill automatically when you submit for approval.'
+      setMessage(
+        `${fromGcode ? 'G-code' : modelLabel(uploaded.modelExt)} uploaded — click Save draft to attach it to this design. ${sliceNote}`,
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Model upload failed')
     } finally {
@@ -238,7 +283,8 @@ export function AdminDesigns() {
   }
 
   const modelOnFile = Boolean(form.hasStl || form.stlPath)
-  const canPreview3d = form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
+  const canPreview3d =
+    form.fromGcode || form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
   // Prefer local blob right after upload; otherwise load from server once the design is saved.
   const previewStlUrl = canPreview3d
     ? localPreviewUrl ||
@@ -253,8 +299,8 @@ export function AdminDesigns() {
       <div>
         <h1 className="text-2xl font-bold text-navy">Designs</h1>
         <p className="mt-1 text-sm text-muted">
-          Same catalog for the online shop and in-person stands. Upload .stl, .obj, .3mf, .step, or .stp —
-          submit with .stl/.3mf to auto-quote via Cloud Slicer.
+          Same catalog for the online shop and in-person stands. Upload .stl or .gcode.
+          An STL is quoted when you submit. G-code already has filament and time, so it is not sliced.
         </p>
       </div>
 
@@ -321,7 +367,9 @@ export function AdminDesigns() {
                   ...f,
                   stlPath: '',
                   hasStl: true,
-                  modelExt: saved.modelExt || f.modelExt,
+                  modelExt: saved.fromGcode ? '.gcode' : saved.modelExt || f.modelExt,
+                  sourceGcodePath: '',
+                  fromGcode: Boolean(saved.fromGcode),
                   skuBase: saved.skuBase,
                   multicolorOnly: Boolean(saved.multicolorOnly),
                   multicolorSlotCount: slotCount,
@@ -399,6 +447,8 @@ export function AdminDesigns() {
                   stlPath: '',
                   hasStl: false,
                   modelExt: '',
+                  sourceGcodePath: '',
+                  fromGcode: false,
                   availableColorIds: f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
                     .length
                     ? f.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID)
@@ -470,14 +520,14 @@ export function AdminDesigns() {
               {uploadingStl
                 ? 'Uploading…'
                 : modelOnFile
-                  ? form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
-                    ? previewStlUrl
-                      ? '3D preview below. Save draft if you just uploaded, then submit for approval.'
-                      : 'Model attached. Save draft, then open Edit again if the preview does not appear.'
-                    : SLICEABLE_EXTS.has(form.modelExt)
-                      ? 'Ready for Cloud Slicer quote on submit (shop preview is STL-only).'
-                      : 'Stored on this design. Use .stl for shop preview and .stl/.3mf to auto-quote.'
-                  : 'Accepts .stl, .obj, .3mf, .step, .stp — max 50MB. Prefer .stl for the shop.'}
+                  ? form.fromGcode
+                    ? 'G-code on file. The 3D preview is the printed toolpath, not the original solid. Download STL saves that preview.'
+                    : form.modelExt === '.stl' || (!form.modelExt && form.hasStl)
+                      ? previewStlUrl
+                        ? '3D preview below. Save draft if you just uploaded, then submit for approval.'
+                        : 'Model attached. Save draft, then open Edit again if the preview does not appear.'
+                      : 'Stored on this design. Upload .stl or .gcode.'
+                  : 'Accepts .stl and .gcode — max 50MB. Multicolor parts stay STL only.'}
             </p>
             {previewStlUrl ? (
               <StlViewer
@@ -658,15 +708,21 @@ export function AdminDesigns() {
               onClick={() => {
                 setBusy(true)
                 setError('')
-                setMessage('Submitting for approval…')
+                setMessage(
+                  isMainAdmin ? 'Publishing (skipping Approvals)…' : 'Submitting for approval…',
+                )
                 void api.catalog.designs
                   .update(editingId, toPayload())
                   .then(() => api.catalog.designs.submit(editingId))
                   .then((res) => {
                     setMessage(
                       res.sliceWarning
-                        ? `Submitted for approval. ${res.sliceWarning}`
-                        : 'Submitted for approval — main admin can review it now.',
+                        ? isMainAdmin
+                          ? res.sliceWarning
+                          : `Submitted for approval. ${res.sliceWarning}`
+                        : isMainAdmin
+                          ? 'Published — quoting started (main admin skip Approvals).'
+                          : 'Submitted for approval — main admin can review it now.',
                     )
                     resetForm()
                     return load()
@@ -675,7 +731,13 @@ export function AdminDesigns() {
                   .finally(() => setBusy(false))
               }}
             >
-              {busy ? 'Submitting…' : 'Submit for approval'}
+              {busy
+                ? isMainAdmin
+                  ? 'Publishing…'
+                  : 'Submitting…'
+                : isMainAdmin
+                  ? 'Publish & quote'
+                  : 'Submit for approval'}
             </button>
           )}
           {editingId && (
@@ -701,20 +763,25 @@ export function AdminDesigns() {
           {designs.filter((d) => d.id !== editingId).map((d) => (
             <div
               key={d.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 px-4 py-3"
+              className="flex min-w-0 flex-col gap-3 overflow-hidden rounded-xl border border-slate-100 px-3 py-3 sm:px-4"
             >
-              <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-surface text-[10px] font-bold text-muted">
-                  {d.hasStl ? modelLabel(d.modelExt || '.stl') : '—'}
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-surface text-[10px] font-bold text-muted">
+                  {d.hasStl ? (d.fromGcode ? 'G-code' : modelLabel(d.modelExt || '.stl')) : '—'}
                 </div>
-                <div>
-                  <p className="font-medium text-navy">{d.name}</p>
+                <div className="min-w-0">
+                  <p className="break-words font-medium text-navy">{d.name}</p>
                   <p className="text-xs text-muted">
                     {d.skuBase} · <span className="uppercase">{d.status.replace('_', ' ')}</span>
-                    {d.hasStl ? ` · ${modelLabel(d.modelExt || '')}` : ' · no model'}
+                    {d.hasStl ? ` · ${d.fromGcode ? 'G-code' : modelLabel(d.modelExt || '')}` : ' · no model'}
                     {d.sliceStatus !== 'idle' ? ` · slice ${d.sliceStatus}` : ''}
                     {d.catalogPriceUsd != null ? ` · $${d.catalogPriceUsd.toFixed(2)}` : ''}
                   </p>
+                  {d.fromGcode ? (
+                    <p className="text-xs text-muted">
+                      Preview and Download STL use the printed toolpath, not the original solid.
+                    </p>
+                  ) : null}
                   {d.sliceStatus === 'ready' ? (
                     <p className="text-xs text-muted">
                       P1S {d.gramsPabloP1s}g / {d.hoursPabloP1s}h · Ender 3v2 {d.gramsCourtEnder}g /{' '}
@@ -731,10 +798,39 @@ export function AdminDesigns() {
                   {d.reviewNote ? <p className="text-xs text-amber-700">{d.reviewNote}</p> : null}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="action-row">
                 <button type="button" className="btn btn-secondary btn-compact" onClick={() => startEdit(d)}>
                   Edit
                 </button>
+                {d.hasStl || (d.multicolorOnly && (d.parts ?? []).some((p) => p.hasStl)) ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-compact"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true)
+                      setError('')
+                      setMessage(
+                        d.multicolorOnly ? 'Downloading STLs…' : 'Downloading model…',
+                      )
+                      void api.catalog.designs
+                        .downloadModel(d)
+                        .then(() =>
+                          setMessage(
+                            d.multicolorOnly
+                              ? 'STLs downloaded.'
+                              : `${modelLabel(d.modelExt || '.stl')} downloaded.`,
+                          ),
+                        )
+                        .catch((err) =>
+                          setError(err instanceof Error ? err.message : 'Download failed'),
+                        )
+                        .finally(() => setBusy(false))
+                    }}
+                  >
+                    {d.multicolorOnly ? 'Download STLs' : 'Download STL'}
+                  </button>
+                ) : null}
                 {d.hasStl ? (
                   <button
                     type="button"
@@ -771,7 +867,7 @@ export function AdminDesigns() {
                         .finally(() => setBusy(false))
                     }}
                   >
-                    Prepare G-code · P1S
+                    Prepare G-code
                   </button>
                 ) : null}
                 {d.status === 'draft' || d.status === 'rejected' ? (
@@ -780,14 +876,18 @@ export function AdminDesigns() {
                     className="btn btn-primary btn-compact"
                     onClick={() => {
                       setBusy(true)
-                      setMessage('Submitting for approval…')
+                      setMessage(
+                        isMainAdmin ? 'Publishing (skipping Approvals)…' : 'Submitting for approval…',
+                      )
                       void api.catalog.designs
                         .submit(d.id)
                         .then((res) => {
                           setMessage(
                             res.sliceWarning
-                              ? `Submitted. Quote note: ${res.sliceWarning}`
-                              : 'Submitted for approval.',
+                              ? res.sliceWarning
+                              : isMainAdmin
+                                ? 'Published — quoting started.'
+                                : 'Submitted for approval.',
                           )
                           return load()
                         })
@@ -795,7 +895,7 @@ export function AdminDesigns() {
                         .finally(() => setBusy(false))
                     }}
                   >
-                    Submit for approval
+                    {isMainAdmin ? 'Publish & quote' : 'Submit'}
                   </button>
                 ) : null}
                 <button

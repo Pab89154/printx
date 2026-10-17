@@ -11,6 +11,15 @@ export type PushSetupState =
   | 'enabled'
   | 'ready'
 
+/** Brave hides "Brave" in the UA. `navigator.brave` is the supported check. */
+export function isBraveBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return Boolean((navigator as Navigator & { brave?: unknown }).brave)
+}
+
+export const BRAVE_PUSH_HELP =
+  'Brave blocks browser notifications until Google push is on. Open brave://settings/privacy, turn on Use Google services for push messaging, allow notifications for this site (lion icon → notifications), then tap Enable again.'
+
 export function isIosDevice(): boolean {
   if (typeof navigator === 'undefined') return false
   const ua = navigator.userAgent || ''
@@ -46,28 +55,118 @@ export async function getPushSetupState(): Promise<PushSetupState> {
   return 'ready'
 }
 
-function applicationServerKeyFromVapid(publicKey: string): Uint8Array {
+/** Exact-sized ArrayBuffer — WebKit rejects views over a larger backing store. */
+function applicationServerKeyBuffer(publicKey: string): ArrayBuffer {
   const bytes = vapidPublicKeyToBytes(publicKey)
   if (!bytes) throw new Error('Invalid VAPID public key from server.')
-  // Exact-sized copy — WebKit rejects ArrayBuffer views / oversized backing buffers.
-  return new Uint8Array(bytes)
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy.buffer
+}
+
+function keysMatch(a: ArrayBuffer | null | undefined, b: ArrayBuffer): boolean {
+  if (!a) return false
+  const left = new Uint8Array(a)
+  const right = new Uint8Array(b)
+  if (left.length !== right.length) return false
+  for (let i = 0; i < left.length; i++) {
+    if (left[i] !== right[i]) return false
+  }
+  return true
+}
+
+function pushServiceUnavailable(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  return (
+    msg.includes('push service') ||
+    msg.includes('not available') ||
+    msg.includes('registration failed') ||
+    msg.includes('abort')
+  )
 }
 
 function pushSubscribeErrorMessage(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err)
+  if (isBraveBrowser() && pushServiceUnavailable(err)) return BRAVE_PUSH_HELP
   const lower = msg.toLowerCase()
   if (
     lower.includes('push service error') ||
     lower.includes('registration failed') ||
     lower.includes('applicationserverkey') ||
+    lower.includes('abort') ||
     lower.includes('invalid')
   ) {
     return (
-      'Push service rejected this device registration. VAPID keys were refreshed on Cloudflare — ' +
-      'close the portal tab, reopen from the Home Screen icon, then tap Enable again.'
+      'Could not register this phone for push. Force-quit the PrintX app, open it again from the Home Screen icon, then tap Enable again. ' +
+      'If it still fails: Settings → Notifications → PrintX → turn off and on, then retry.'
     )
   }
   return msg || 'Could not enable notifications.'
+}
+
+async function dropLocalSubscription(reg: ServiceWorkerRegistration): Promise<void> {
+  const sub = await reg.pushManager.getSubscription()
+  if (!sub) return
+  try {
+    await api.admin.push.unsubscribe(sub.endpoint)
+  } catch {
+    /* local drop still needed */
+  }
+  try {
+    await sub.unsubscribe()
+  } catch {
+    /* continue */
+  }
+}
+
+async function hardResetServiceWorker(): Promise<ServiceWorkerRegistration> {
+  const regs = await navigator.serviceWorker.getRegistrations()
+  for (const reg of regs) {
+    await dropLocalSubscription(reg)
+    try {
+      await reg.unregister()
+    } catch {
+      /* continue */
+    }
+  }
+  if ('caches' in window) {
+    try {
+      const keys = await caches.keys()
+      await Promise.all(keys.map((k) => caches.delete(k)))
+    } catch {
+      /* ignore */
+    }
+  }
+  const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
+  try {
+    await reg.update()
+  } catch {
+    /* ignore */
+  }
+  await navigator.serviceWorker.ready
+  return reg
+}
+
+async function subscribeWithKey(
+  reg: ServiceWorkerRegistration,
+  appKey: ArrayBuffer,
+): Promise<PushSubscription> {
+  return reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: appKey,
+  })
+}
+
+async function persistSubscription(sub: PushSubscription): Promise<void> {
+  const json = sub.toJSON()
+  await api.admin.push.subscribe({
+    endpoint: json.endpoint || sub.endpoint,
+    keys: {
+      p256dh: json.keys?.p256dh || '',
+      auth: json.keys?.auth || '',
+    },
+    userAgent: navigator.userAgent,
+  })
 }
 
 export async function enableAdminPush(): Promise<PushSetupState> {
@@ -88,7 +187,9 @@ export async function enableAdminPush(): Promise<PushSetupState> {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'ready'
 
-  const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
+  const appKey = applicationServerKeyBuffer(publicKey)
+
+  let reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
   try {
     await reg.update()
   } catch {
@@ -96,46 +197,47 @@ export async function enableAdminPush(): Promise<PushSetupState> {
   }
   await navigator.serviceWorker.ready
 
-  const appKey = applicationServerKeyFromVapid(publicKey)
-  let sub = await reg.pushManager.getSubscription()
-  // Stale subs from old VAPID keys (e.g. Render → Cloudflare) must be dropped first.
-  if (sub) {
-    try {
-      await sub.unsubscribe()
-    } catch {
-      /* continue to subscribe */
-    }
-    sub = null
-  }
-  try {
-    sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: appKey,
-    })
-  } catch (err) {
-    throw new Error(pushSubscribeErrorMessage(err))
+  let existing = await reg.pushManager.getSubscription()
+  // Already on the current VAPID key — just refresh the server record.
+  if (existing && keysMatch(existing.options.applicationServerKey ?? null, appKey)) {
+    await persistSubscription(existing)
+    return 'enabled'
   }
 
-  const json = sub.toJSON()
-  await api.admin.push.subscribe({
-    endpoint: json.endpoint || sub.endpoint,
-    keys: {
-      p256dh: json.keys?.p256dh || '',
-      auth: json.keys?.auth || '',
-    },
-    userAgent: navigator.userAgent,
-  })
-  return 'enabled'
+  // Stale sub from a previous VAPID key (Render → Cloudflare, or key rotation).
+  if (existing) {
+    await dropLocalSubscription(reg)
+    existing = null
+  }
+
+  try {
+    const sub = await subscribeWithKey(reg, appKey)
+    await persistSubscription(sub)
+    return 'enabled'
+  } catch (firstErr) {
+    if (isBraveBrowser() && pushServiceUnavailable(firstErr)) {
+      throw new Error(BRAVE_PUSH_HELP)
+    }
+    // iOS / Safari often keep a ghost registration until the SW is fully torn down.
+    try {
+      reg = await hardResetServiceWorker()
+      const sub = await subscribeWithKey(reg, appKey)
+      await persistSubscription(sub)
+      return 'enabled'
+    } catch {
+      throw new Error(pushSubscribeErrorMessage(firstErr))
+    }
+  }
 }
 
 export async function disableAdminPush(): Promise<void> {
   const reg = await navigator.serviceWorker.getRegistration()
-  const sub = await reg?.pushManager.getSubscription()
-  if (!sub) return
-  try {
-    await api.admin.push.unsubscribe(sub.endpoint)
-  } catch {
-    /* still drop local sub */
-  }
-  await sub.unsubscribe()
+  if (!reg) return
+  await dropLocalSubscription(reg)
+}
+
+/** Full local reset used by Settings when Enable keeps failing after a VAPID change. */
+export async function resetAdminPushDevice(): Promise<void> {
+  if (!('serviceWorker' in navigator)) return
+  await hardResetServiceWorker()
 }

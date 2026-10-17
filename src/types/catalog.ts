@@ -54,6 +54,8 @@ export type Design = {
   updatedAt: string
   /** Printer ids that already have stored G-code in Supabase. */
   gcodeReadyPrinters?: string[]
+  /** True when the stored STL is a toolpath preview of an uploaded G-code file. */
+  fromGcode?: boolean
 }
 
 export type PublicCatalogPart = {
@@ -158,6 +160,13 @@ export type OrderDto = {
   createdAt: string
   updatedAt: string
   paidAt: string | null
+  paymentMethod?: string
+  cashRecordedBy?: string | null
+  cashRecordedByName?: string
+  classmateCode?: string
+  agreementName?: string
+  agreementText?: string
+  agreementAt?: string | null
   items?: OrderItemDto[]
 }
 
@@ -167,8 +176,14 @@ export type MoneyPaymentLineDto = {
   label: string
   email: string
   amountUsd: number
-  /** UPS pass-through collected with this payment (not PrintX profit). */
+  /** Shipping collected with this payment. */
   shippingUsd?: number
+  /** Full Stripe charge (items + shipping). */
+  chargeUsd?: number
+  /** Estimated Stripe fee on this charge (2.9% + $0.30). */
+  stripeFeeUsd?: number
+  /** When set, that shipping counts as PrintX profit (not UPS pass-through). */
+  shippingToProfitAt?: string | null
   status: string
   paidAt: string | null
   stripeSessionId: string | null
@@ -190,7 +205,10 @@ export type MoneyOwedPersonDto = {
   userId: string
   email: string
   displayName: string | null
+  /** Print pay + profit share. */
   totalOwedUsd: number
+  printPayUsd?: number
+  profitShareUsd?: number
   lines: MoneyOwedLineDto[]
   settlement: {
     id: string
@@ -202,14 +220,19 @@ export type MoneyOwedPersonDto = {
 
 export type MoneyPeriodTotalsDto = {
   stripeUsd: number
+  /** Print pay + profit share. */
   owedToMeUsd: number
+  /** Print pay only (ledger reimbursements). */
+  printPayUsd?: number
   reimbursementsUsd: number
 }
 
 export type MoneyMonthHistoryDto = {
   month: string
   stripeUsd: number
+  /** Print pay + profit share. */
   owedToMeUsd: number
+  printPayUsd?: number
   reimbursementsUsd: number
   mySettlement: {
     amountUsd: number
@@ -230,10 +253,27 @@ export type MoneySummaryDto = {
   reimbursementsTotalUsd: number
   /** Printer/admin costs combined (ledger or worst-case estimate). */
   adminsEarnAllUsd?: number
+  /** UPS pass-through shipping still held for labels. */
   shippingTotalUsd?: number
+  /** Shipping moved into PrintX profit this month. */
+  shippingKeptAsProfitUsd?: number
+  /** All shipping collected (pass-through + moved to profit). */
+  shippingCollectedUsd?: number
+  /** Stripe processing fees this month (2.9% + $0.30 per charge). */
+  stripeFeesUsd?: number
   /** Customer paid this month (items + shipping). */
   printxEarnedGrossUsd?: number
+  /** Net earned: items + shipping in profit − Stripe fees. */
+  netEarnedUsd?: number
   businessKeptUsd: number
+  /** Admins sharing PrintX profit this month. */
+  partnerCount?: number
+  /** Your print pay this month (ledger reimbursements only). */
+  myPrintPayUsd?: number
+  /** Your equal share of PrintX profit (split at month end). */
+  myProfitShareUsd?: number
+  /** Total owed to you: print pay + PrintX profit share. */
+  youEarnTotalUsd?: number
   canSettle: boolean
   totals: {
     year: MoneyPeriodTotalsDto & { year: number }

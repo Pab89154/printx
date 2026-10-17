@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import { api } from '../lib/api'
 import { colorSwatchStyle, isMulticolorColorId, MULTICOLOR_COLOR } from '../../shared/colors'
@@ -19,6 +19,7 @@ function designMatchesQuery(design: PublicCatalogDesign, query: string): boolean
 }
 
 function ShopCard({ design }: { design: PublicCatalogDesign }) {
+  const navigate = useNavigate()
   const solidColors = design.availableColors.filter((c) => !isMulticolorColorId(c.id))
   const [previewColor, setPreviewColor] = useState<CatalogColor | undefined>(
     () => solidColors[0] ?? design.availableColors[0],
@@ -37,14 +38,24 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
     multiParts.length >= 2
 
   const viewerClass =
-    'absolute inset-0 [&_>div]:h-full [&_>div]:min-h-0 [&_>div]:rounded-none [&_>div]:border-0 [&_>div]:border-transparent'
+    'pointer-events-none absolute inset-0 [&_>div]:h-full [&_>div]:min-h-0 [&_>div]:rounded-none [&_>div]:border-0 [&_>div]:border-transparent'
+  const productPath = `/shop/${encodeURIComponent(design.skuBase)}`
+  const severalColors = !design.multicolorOnly && design.availableColors.length > 1
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition hover:shadow-md">
-      <Link
-        to={`/shop/${encodeURIComponent(design.skuBase)}`}
-        className="group block"
-      >
+    <article
+      role="link"
+      tabIndex={0}
+      className="cursor-pointer overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition hover:shadow-md"
+      onClick={() => navigate(productPath)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          navigate(productPath)
+        }
+      }}
+    >
+      <div className="group block">
         <div className="relative aspect-square overflow-hidden bg-slate-100">
           {useMultiPreview ? (
             <MultiStlViewer
@@ -75,7 +86,7 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
           <p className="font-semibold text-navy">{design.name}</p>
           <p className="mt-1 text-sm text-muted line-clamp-2">{design.description}</p>
         </div>
-      </Link>
+      </div>
 
       <div className="px-4 pb-4 pt-3">
         {design.multicolorOnly ||
@@ -89,7 +100,7 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
             />
             <span className="text-xs text-muted">Multicolor</span>
           </div>
-        ) : design.availableColors.length > 0 ? (
+        ) : severalColors ? (
           <div className="flex flex-wrap items-center gap-2">
             {design.availableColors.map((c) => {
               const selected = previewColor?.id === c.id
@@ -115,6 +126,15 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
               )
             })}
             <span className="text-xs text-muted">{previewColor?.name ?? 'Colors'}</span>
+          </div>
+        ) : design.availableColors[0] ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="h-5 w-5 rounded-full border border-slate-200 shadow-sm ring-2 ring-electric ring-offset-1"
+              style={colorSwatchStyle(design.availableColors[0])}
+              aria-hidden
+            />
+            <span className="text-xs text-muted">{design.availableColors[0].name}</span>
           </div>
         ) : null}
         <p className="mt-3 text-lg font-bold text-electric">

@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 import { api } from '../lib/api'
+import { useCart } from '../context/CartContext'
 
 type SuccessPayload = {
   orderId: string
@@ -21,6 +22,7 @@ type SuccessPayload = {
 }
 
 export function OrderSuccess() {
+  const { clear } = useCart()
   const [params] = useSearchParams()
   const sessionId = params.get('session_id')
   const [data, setData] = useState<SuccessPayload | null>(null)
@@ -46,6 +48,7 @@ export function OrderSuccess() {
         try {
           const payload = await api.catalog.orderSuccess(sessionId)
           if (!cancelled) {
+            clear()
             setData(payload)
             setError('')
             setLoading(false)

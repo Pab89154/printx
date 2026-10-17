@@ -10,6 +10,7 @@ import { NotFound } from './pages/NotFound'
 import { Shop } from './pages/Shop'
 import { ShopProduct } from './pages/ShopProduct'
 import { Cart } from './pages/Cart'
+import { Terms } from './pages/Terms'
 import { OrderSuccess } from './pages/OrderSuccess'
 import { TrackOrder } from './pages/TrackOrder'
 import { Account } from './pages/Account'
@@ -24,6 +25,7 @@ import { AdminStands } from './admin/AdminStands'
 import { AdminDesigns } from './admin/AdminDesigns'
 import { AdminApprovals } from './admin/AdminApprovals'
 import { AdminOrders } from './admin/AdminOrders'
+import { AdminCashSale } from './admin/AdminCashSale'
 import { AdminMoney } from './admin/AdminMoney'
 import { AdminRequests } from './admin/AdminRequests'
 import { AdminMessages } from './admin/AdminMessages'
@@ -51,6 +53,8 @@ function PortalRoutes() {
   return (
     <Routes>
       <Route path="/" element={<AdminLogin />} />
+      <Route path="terms-and-conditions" element={<Terms />} />
+      <Route path="terms" element={<Navigate to="/terms-and-conditions" replace />} />
       {/* Shop lives on the public site, but sandbox Shop links are same-origin on portal — serve them here. */}
       <Route element={<AdminGuard />}>
         <Route path="shop" element={<Shop />} />
@@ -68,6 +72,7 @@ function PortalRoutes() {
           <Route path="designs" element={<AdminDesigns />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
+          <Route path="cash-sale" element={<AdminCashSale />} />
           <Route path="discounts" element={<AdminDiscounts />} />
           <Route path="money" element={<AdminMoney />} />
           <Route path="requests" element={<AdminRequests />} />
@@ -87,6 +92,8 @@ function PublicRoutes() {
       <Route path="/shop" element={<Shop />} />
       <Route path="/shop/:skuBase" element={<ShopProduct />} />
       <Route path="/cart" element={<Cart />} />
+      <Route path="/terms-and-conditions" element={<Terms />} />
+      <Route path="/terms" element={<Navigate to="/terms-and-conditions" replace />} />
       <Route path="/order/success" element={<OrderSuccess />} />
       <Route path="/track" element={<TrackOrder />} />
       {CUSTOMER_ACCOUNTS_ENABLED ? (
@@ -110,6 +117,7 @@ function PublicRoutes() {
           <Route path="designs" element={<AdminDesigns />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
+          <Route path="cash-sale" element={<AdminCashSale />} />
           <Route path="discounts" element={<AdminDiscounts />} />
           <Route path="money" element={<AdminMoney />} />
           <Route path="requests" element={<AdminRequests />} />

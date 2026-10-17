@@ -13,17 +13,34 @@ type UnreadSnapshot = {
   latestFrom: string | null
 }
 
-function showBrowserNotification(input: {
+async function showBrowserNotification(input: {
   title: string
   body: string
   onClick: () => void
 }) {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+  // Brave often drops `new Notification` from the page. The service worker alert still shows.
+  try {
+    let reg = await navigator.serviceWorker?.getRegistration()
+    if (!reg && 'serviceWorker' in navigator) {
+      reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
+      await navigator.serviceWorker.ready
+    }
+    if (reg) {
+      await reg.showNotification(input.title, {
+        body: input.body,
+        tag: 'printx-mail-unread',
+        data: { url: '/mail' },
+      })
+      return
+    }
+  } catch {
+    /* fall through to the page Notification API */
+  }
   try {
     const n = new Notification(input.title, {
       body: input.body,
       tag: 'printx-mail-unread',
-      renotify: true,
     })
     n.onclick = () => {
       window.focus()

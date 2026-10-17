@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   Sparkles,
   Tag,
+  Wallet,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -38,6 +39,7 @@ const links: {
   { section: 'designs', label: 'Designs', icon: Printer3d as LucideIcon, perm: 'products' },
   { section: 'approvals', label: 'Approvals & Pricing', icon: ClipboardCheck, perm: 'main_only' },
   { section: 'orders', label: 'Orders', icon: ShoppingBag, perm: 'orders' },
+  { section: 'cash-sale', label: 'Cash sale', icon: Wallet, perm: 'orders' },
   { section: 'discounts', label: 'Discounts', icon: Tag, perm: 'orders' },
   { section: 'requests', label: 'Custom Requests', icon: Sparkles, perm: 'requests' },
   { section: 'settings', label: 'Settings', icon: Settings, perm: 'settings' },
@@ -96,7 +98,7 @@ export function AdminLayout() {
   }
 
   return (
-    <div className="flex min-h-dvh max-w-[100vw] bg-slate-50">
+    <div className="flex min-h-dvh max-w-[100vw] overflow-x-clip bg-slate-50">
       <header className="fixed inset-x-0 top-0 z-40 flex min-h-14 items-center gap-3 border-b border-slate-200 bg-navy px-4 pb-0 pt-[env(safe-area-inset-top,0px)] text-white md:hidden">
         <div className="flex h-14 w-full min-w-0 items-center gap-3">
           <button
@@ -225,8 +227,8 @@ export function AdminLayout() {
         </div>
       </aside>
 
-      <main className="min-w-0 max-w-full flex-1 px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[calc(3.5rem+env(safe-area-inset-top,0px)+0.75rem)] md:ml-64 md:p-8 md:pt-8">
-        <div className="mx-auto w-full min-w-0 max-w-6xl">
+      <main className="min-w-0 max-w-full flex-1 overflow-x-clip px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[calc(3.5rem+env(safe-area-inset-top,0px)+0.75rem)] md:ml-64 md:p-8 md:pt-8">
+        <div className="mx-auto w-full min-w-0 max-w-6xl overflow-x-clip">
           <Outlet />
         </div>
       </main>

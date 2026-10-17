@@ -9,7 +9,7 @@ import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 
 export function Cart() {
-  const { lines, setQty, remove, subtotal, clear } = useCart()
+  const { lines, setQty, remove, subtotal } = useCart()
   const { loading } = useCustomerAuth()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -28,7 +28,6 @@ export function Cart() {
           ...(l.filamentColorIds?.length ? { filamentColorIds: l.filamentColorIds } : {}),
         })),
       })
-      clear()
       window.location.href = url
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Checkout failed')
@@ -111,7 +110,14 @@ export function Cart() {
             </label>
 
             <p className="mt-4 text-sm text-muted">
-              Promo codes are entered here only — not on Stripe Checkout.
+              Promo codes are entered here only — not in Checkout.
+            </p>
+
+            <p className="mt-4 text-sm text-navy">
+              <Link to="/terms-and-conditions" className="text-electric underline">
+                Click here to read the terms and conditions.
+              </Link>{' '}
+              Checkout asks you to agree before you pay.
             </p>
 
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
