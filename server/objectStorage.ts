@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ServerResponse } from 'node:http'
 import { getUploadsDir } from './db.ts'
+import { GITHUB_MODEL_FILES } from '../shared/githubModels.ts'
 
 const DEFAULT_BUCKET = 'printx-models'
 const FILE_SIZE_LIMIT = 50 * 1024 * 1024
@@ -112,6 +113,13 @@ export function isSafeStoredFileName(fileName: string): boolean {
 
 function objectKey(fileName: string): string {
   return `uploads/${fileName}`
+}
+
+/** Public CDN in front of the GitHub repo. Shop previews use this instead of Supabase. */
+function githubModelUrl(fileName: string): string {
+  const repo = (process.env.PRINTX_GITHUB_REPO || 'Pab89154/printx').trim()
+  const ref = (process.env.PRINTX_GITHUB_REF || 'main').trim() || 'main'
+  return `https://cdn.jsdelivr.net/gh/${repo}@${ref}/models/${encodeURIComponent(fileName)}`
 }
 
 function assertKeyLooksValid(): void {
@@ -231,6 +239,39 @@ export async function uploadStoredFile(
   console.log(`[object-storage] uploaded ${bucket}/${key} (${body.length} bytes)`)
 }
 
+/** Short-lived URL so the browser fetches the file from Storage, not through the Worker. */
+export async function signedStoredFileUrl(
+  fileName: string,
+  expiresIn = 600,
+): Promise<string | null> {
+  if (!objectStorageConfigured() || !isSafeStoredFileName(fileName)) return null
+  try {
+    assertKeyLooksValid()
+    const bucket = bucketName()
+    const res = await storageFetch(
+      `/object/sign/${encodeURIComponent(bucket)}/${objectKey(fileName)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expiresIn }),
+      },
+    )
+    if (!res.ok) {
+      console.warn('[object-storage] sign failed:', await readStorageError(res))
+      return null
+    }
+    const data = (await res.json()) as { signedURL?: string; signedUrl?: string }
+    const signed = String(data.signedURL || data.signedUrl || '')
+    if (!signed) return null
+    if (signed.startsWith('http://') || signed.startsWith('https://')) return signed
+    const pathPart = signed.startsWith('/') ? signed : `/${signed}`
+    return `${supabaseUrl()}/storage/v1${pathPart}`
+  } catch (err) {
+    console.warn('[object-storage] sign failed:', err instanceof Error ? err.message : err)
+    return null
+  }
+}
+
 async function downloadStoredFile(fileName: string): Promise<Buffer | null> {
   if (!objectStorageConfigured() || !isSafeStoredFileName(fileName)) return null
   const bucket = bucketName()
@@ -292,6 +333,65 @@ export async function sendStoredFile(
   cacheControl: string,
   headers?: Record<string, string>,
 ): Promise<boolean> {
+  if (isSafeStoredFileName(fileName)) {
+    const repoCopy = path.join(process.cwd(), 'models', fileName)
+    if (fs.existsSync(repoCopy)) {
+      const buf = await fsPromises.readFile(repoCopy)
+      if (buf.length) {
+        res.statusCode = 200
+        res.setHeader('Content-Type', contentType)
+        res.setHeader('Cache-Control', cacheControl)
+        res.setHeader('Content-Length', String(buf.byteLength))
+        if (headers) {
+          for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
+        }
+        res.end(buf)
+        return true
+      }
+    }
+  }
+
+  if (GITHUB_MODEL_FILES.has(fileName)) {
+    res.statusCode = 302
+    res.setHeader('Location', githubModelUrl(fileName))
+    res.setHeader('Cache-Control', 'public, max-age=300')
+    res.end()
+    return true
+  }
+
+  if (isSafeStoredFileName(fileName)) {
+    try {
+      const uploadsDir = await getUploadsDir()
+      const localPath = path.join(uploadsDir, fileName)
+      if (fs.existsSync(localPath)) {
+        const buf = await fsPromises.readFile(localPath)
+        if (buf.length) {
+          res.statusCode = 200
+          res.setHeader('Content-Type', contentType)
+          res.setHeader('Cache-Control', cacheControl)
+          res.setHeader('Content-Length', String(buf.byteLength))
+          if (headers) {
+            for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
+          }
+          res.end(buf)
+          return true
+        }
+      }
+    } catch {
+      /* fall through to Storage */
+    }
+  }
+
+  // Proxying a multi‑MB STL through the Worker hits the 20s request cap (504).
+  const signed = await signedStoredFileUrl(fileName)
+  if (signed) {
+    res.statusCode = 302
+    res.setHeader('Location', signed)
+    res.setHeader('Cache-Control', 'private, no-store')
+    res.end()
+    return true
+  }
+
   const resolved = await resolveStoredFile(fileName)
   if (!resolved) return false
   try {
