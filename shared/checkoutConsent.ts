@@ -6,6 +6,8 @@ export const STRIPE_TERMS_BODY = `Name, email, shipping address, and phone are e
 
 PrintX stores the name, email, address, and order total on the order in its database to print, ship, and show the order. PrintX does not store the card number.
 
+We store this in our database (GitHub and Supabase).
+
 Stripe processes the card and can save the payment method. Stripe’s own terms apply to the card data.
 
 This information is used to complete the order. It is not sold.
@@ -17,6 +19,8 @@ export const CASH_PAYMENT_LABEL = 'I will pay cash.'
 export const CASH_TERMS_LABEL = 'I agree to the terms and conditions.'
 
 export const CASH_TERMS_BODY = `Your name and this agreement are stored in the PrintX order database so the sale can be filled and this agreement can be shown later. Card numbers are not collected on this screen. The record is kept for the order and is not sold.
+
+We store this in our database (GitHub and Supabase).
 
 This is a written record of the sale. It is not a lawyer-drafted contract, and it does not decide a court outcome.`
 

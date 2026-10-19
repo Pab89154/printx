@@ -15,20 +15,72 @@ export const PRINTER_BED_MM: Record<string, number> = {
 
 type Box = { dx: number; dy: number; dz: number }
 
+export type StlBounds = {
+  minX: number
+  minY: number
+  minZ: number
+  maxX: number
+  maxY: number
+  maxZ: number
+}
+
+function finiteBounds(b: StlBounds): boolean {
+  return [b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ].every((n) => Number.isFinite(n))
+}
+
+export function boundsSizeMm(b: StlBounds): { xMm: number; yMm: number; zMm: number } | null {
+  if (!finiteBounds(b)) return null
+  const xMm = b.maxX - b.minX
+  const yMm = b.maxY - b.minY
+  const zMm = b.maxZ - b.minZ
+  if (xMm <= 0 || yMm <= 0 || zMm <= 0) return null
+  return { xMm, yMm, zMm }
+}
+
+export function unionBounds(list: StlBounds[]): StlBounds | null {
+  if (!list.length) return null
+  const out: StlBounds = {
+    minX: Infinity,
+    minY: Infinity,
+    minZ: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity,
+    maxZ: -Infinity,
+  }
+  for (const b of list) {
+    if (!finiteBounds(b)) continue
+    out.minX = Math.min(out.minX, b.minX)
+    out.minY = Math.min(out.minY, b.minY)
+    out.minZ = Math.min(out.minZ, b.minZ)
+    out.maxX = Math.max(out.maxX, b.maxX)
+    out.maxY = Math.max(out.maxY, b.maxY)
+    out.maxZ = Math.max(out.maxZ, b.maxZ)
+  }
+  return finiteBounds(out) ? out : null
+}
+
+export function measureStlBuffer(buf: Buffer): StlBounds | null {
+  if (buf.length < 84) return null
+  if (isBinaryStl(buf)) return binaryBounds(buf)
+  return asciiBounds(buf.toString('utf8'))
+}
+
 function isBinaryStl(buf: Buffer): boolean {
   if (buf.length < 84) return false
   const count = buf.readUInt32LE(80)
   return count > 0 && buf.length === 84 + count * 50
 }
 
-function binaryBox(buf: Buffer): Box {
+function binaryBounds(buf: Buffer): StlBounds {
   const count = buf.readUInt32LE(80)
-  let minX = Infinity
-  let minY = Infinity
-  let minZ = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  let maxZ = -Infinity
+  const out: StlBounds = {
+    minX: Infinity,
+    minY: Infinity,
+    minZ: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity,
+    maxZ: -Infinity,
+  }
   for (let i = 0; i < count; i++) {
     const base = 84 + i * 50 + 12
     for (let v = 0; v < 3; v++) {
@@ -36,15 +88,20 @@ function binaryBox(buf: Buffer): Box {
       const x = buf.readFloatLE(o)
       const y = buf.readFloatLE(o + 4)
       const z = buf.readFloatLE(o + 8)
-      if (x < minX) minX = x
-      if (y < minY) minY = y
-      if (z < minZ) minZ = z
-      if (x > maxX) maxX = x
-      if (y > maxY) maxY = y
-      if (z > maxZ) maxZ = z
+      if (x < out.minX) out.minX = x
+      if (y < out.minY) out.minY = y
+      if (z < out.minZ) out.minZ = z
+      if (x > out.maxX) out.maxX = x
+      if (y > out.maxY) out.maxY = y
+      if (z > out.maxZ) out.maxZ = z
     }
   }
-  return { dx: maxX - minX, dy: maxY - minY, dz: maxZ - minZ }
+  return out
+}
+
+function binaryBox(buf: Buffer): Box {
+  const b = binaryBounds(buf)
+  return { dx: b.maxX - b.minX, dy: b.maxY - b.minY, dz: b.maxZ - b.minZ }
 }
 
 function scaleBinary(buf: Buffer, factor: number): Buffer {
@@ -58,6 +115,29 @@ function scaleBinary(buf: Buffer, factor: number): Buffer {
       out.writeFloatLE(out.readFloatLE(o + 4) * factor, o + 4)
       out.writeFloatLE(out.readFloatLE(o + 8) * factor, o + 8)
     }
+  }
+  return out
+}
+
+function asciiBounds(text: string): StlBounds {
+  const out: StlBounds = {
+    minX: Infinity,
+    minY: Infinity,
+    minZ: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity,
+    maxZ: -Infinity,
+  }
+  for (const match of text.matchAll(/vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g)) {
+    const x = Number(match[1])
+    const y = Number(match[2])
+    const z = Number(match[3])
+    if (x < out.minX) out.minX = x
+    if (y < out.minY) out.minY = y
+    if (z < out.minZ) out.minZ = z
+    if (x > out.maxX) out.maxX = x
+    if (y > out.maxY) out.maxY = y
+    if (z > out.maxZ) out.maxZ = z
   }
   return out
 }

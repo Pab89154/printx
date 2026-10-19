@@ -14,6 +14,7 @@ import {
 } from '../../shared/colors'
 import { MODEL_ACCEPT, modelLabel } from '../../shared/modelFormats'
 import type { Design } from '../types/catalog'
+import { formatSizeMm } from '../../shared/sizeLabel'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { MultiStlViewer, StlViewer } from '../components/StlViewer'
 
@@ -51,7 +52,11 @@ const emptyForm = {
   modelExt: '',
   sourceGcodePath: '',
   fromGcode: false,
+  sizeXMm: null as number | null,
+  sizeYMm: null as number | null,
+  sizeZMm: null as number | null,
   availableColorIds: ['black', 'white'] as string[],
+  mainColorId: 'black',
   multicolorOnly: false,
   multicolorSlotCount: MULTICOLOR_SLOT_DEFAULT,
   parts: emptyParts(MULTICOLOR_SLOT_DEFAULT) as PartForm[],
@@ -61,6 +66,7 @@ export function AdminDesigns() {
   const { isMainAdmin } = useAdminAuth()
   const [designs, setDesigns] = useState<Design[]>([])
   const [extraColors, setExtraColors] = useState<{ id: string; name: string; hex: string }[]>([])
+  const [stockIds, setStockIds] = useState<string[]>([])
   const [form, setForm] = useState(emptyForm)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -96,11 +102,13 @@ export function AdminDesigns() {
   }
 
   async function load() {
-    const [list, pricing] = await Promise.all([
+    const [list, pricing, filaments] = await Promise.all([
       api.catalog.designs.list(),
       api.catalog.pricing.get().catch(() => null),
+      api.admin.settings.filamentColors().catch(() => null),
     ])
     setDesigns(list)
+    if (filaments) setStockIds(filaments.inStock)
     if (pricing) {
       setExtraColors(
         pricing.customColors.filter((c) => c.name.trim()).map((c) => ({ id: c.id, name: c.name, hex: c.hex })),
@@ -112,6 +120,19 @@ export function AdminDesigns() {
     void load().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
     return () => clearLocalPreview()
   }, [])
+
+  useEffect(() => {
+    if (editingId || !stockIds.length) return
+    setForm((f) => {
+      const untouched =
+        !f.name &&
+        f.availableColorIds.length === 2 &&
+        f.availableColorIds.includes('black') &&
+        f.availableColorIds.includes('white')
+      if (!untouched) return f
+      return { ...f, availableColorIds: stockIds, mainColorId: stockIds[0] || f.mainColorId }
+    })
+  }, [stockIds, editingId])
 
   const slicingId = designs.find((d) => d.sliceStatus === 'slicing')?.id ?? ''
   useEffect(() => {
@@ -137,8 +158,9 @@ export function AdminDesigns() {
     }
   }, [slicingId])
 
+  const stockedBasics = solidBuiltinColors().filter((c) => !stockIds.length || stockIds.includes(c.id))
   const colorOptions = [
-    ...solidBuiltinColors().map((c) => ({ id: c.id, name: c.name, hex: c.hex })),
+    ...stockedBasics.map((c) => ({ id: c.id, name: c.name, hex: c.hex })),
     ...extraColors,
   ]
 
@@ -165,6 +187,7 @@ export function AdminDesigns() {
       multicolorOnly: form.multicolorOnly,
       multicolorSlotCount: form.multicolorSlotCount,
       availableColorIds: form.availableColorIds.filter((id) => id !== MULTICOLOR_COLOR_ID),
+      mainColorId: form.mainColorId,
       parts,
     }
   }
@@ -199,7 +222,12 @@ export function AdminDesigns() {
       modelExt: d.modelExt || '',
       sourceGcodePath: '',
       fromGcode: Boolean(d.fromGcode),
+      sizeXMm: d.sizeXMm ?? null,
+      sizeYMm: d.sizeYMm ?? null,
+      sizeZMm: d.sizeZMm ?? null,
       availableColorIds: solids.length ? solids : ['black', 'white'],
+      mainColorId:
+        d.mainColorId && solids.includes(d.mainColorId) ? d.mainColorId : solids[0] || 'black',
       multicolorOnly: Boolean(d.multicolorOnly),
       multicolorSlotCount: slotCount,
       parts,
@@ -268,6 +296,9 @@ export function AdminDesigns() {
         modelExt: fromGcode ? '.gcode' : uploaded.modelExt,
         sourceGcodePath: uploaded.sourceGcodePath || '',
         fromGcode,
+        sizeXMm: uploaded.sizeXMm ?? f.sizeXMm,
+        sizeYMm: uploaded.sizeYMm ?? f.sizeYMm,
+        sizeZMm: uploaded.sizeZMm ?? f.sizeZMm,
       }))
       const sliceNote = fromGcode
         ? 'Filament and time come from the file, so it will not be sliced. The 3D preview is the printed toolpath, not the original solid. Save draft to see it.'
@@ -370,6 +401,9 @@ export function AdminDesigns() {
                   modelExt: saved.fromGcode ? '.gcode' : saved.modelExt || f.modelExt,
                   sourceGcodePath: '',
                   fromGcode: Boolean(saved.fromGcode),
+                  sizeXMm: saved.sizeXMm ?? f.sizeXMm,
+                  sizeYMm: saved.sizeYMm ?? f.sizeYMm,
+                  sizeZMm: saved.sizeZMm ?? f.sizeZMm,
                   skuBase: saved.skuBase,
                   multicolorOnly: Boolean(saved.multicolorOnly),
                   multicolorSlotCount: slotCount,
@@ -430,6 +464,11 @@ export function AdminDesigns() {
             onChange={(e) => setForm({ ...form, description: e.target.value })}
           />
         </label>
+        {formatSizeMm(form.sizeXMm, form.sizeYMm, form.sizeZMm) ? (
+          <p className="mt-3 text-sm font-medium text-navy">
+            Size {formatSizeMm(form.sizeXMm, form.sizeYMm, form.sizeZMm)}
+          </p>
+        ) : null}
 
         <h3 className="mt-6 text-sm font-semibold text-navy">Print type</h3>
         <label className="mt-2 flex items-start gap-2 text-sm text-navy">
@@ -533,7 +572,8 @@ export function AdminDesigns() {
               <StlViewer
                 url={previewStlUrl}
                 className="mt-3 max-w-xl"
-                credentials={localPreviewUrl ? 'omit' : 'include'}
+                credentials={localPreviewUrl ? 'omit' : 'same-origin'}
+                colorHex={colorOptions.find((c) => c.id === form.mainColorId)?.hex}
               />
             ) : null}
           </div>
@@ -627,7 +667,7 @@ export function AdminDesigns() {
                         url={partPreview}
                         className="mt-2 max-w-sm"
                         height={160}
-                        credentials={part.localPreviewUrl ? 'omit' : 'include'}
+                        credentials={part.localPreviewUrl ? 'omit' : 'same-origin'}
                       />
                     ) : null}
                   </div>
@@ -638,7 +678,7 @@ export function AdminDesigns() {
                 <MultiStlViewer
                   className="max-w-xl"
                   height={240}
-                  credentials="include"
+                  credentials="same-origin"
                   parts={form.parts.map((p, i) => ({
                     url:
                       p.localPreviewUrl ||
@@ -653,32 +693,51 @@ export function AdminDesigns() {
           </>
         ) : null}
         <p className="mt-3 text-xs text-muted">
+          {stockIds.length
+            ? 'These are the basic colors admins have. Change that in Settings.'
+            : 'No admin has marked colors yet, so every basic color is listed. Mark what you have in Settings.'}{' '}
           {form.multicolorOnly
-            ? 'Choose which solid filaments customers can use for this print.'
-            : 'Choose which single colors this design can be ordered in.'}
+            ? 'Choose which of them customers can use for this print.'
+            : 'Choose which of them this design can be ordered in.'}{' '}
+          The main color is the one the shop model starts in.
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
           {colorOptions.map((c) => {
             const on = form.availableColorIds.includes(c.id)
+            const main = on && form.mainColorId === c.id
             return (
-              <button
-                key={c.id}
-                type="button"
-                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
-                  on ? 'border-electric bg-electric/10 text-electric' : 'border-slate-200'
-                }`}
-                onClick={() =>
-                  setForm((f) => ({
-                    ...f,
-                    availableColorIds: on
-                      ? f.availableColorIds.filter((x) => x !== c.id)
-                      : [...f.availableColorIds, c.id],
-                  }))
-                }
-              >
-                <span className="h-3 w-3 rounded-full border" style={{ background: c.hex }} />
-                {c.name}
-              </button>
+              <span key={c.id} className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    on ? 'border-electric bg-electric/10 text-electric' : 'border-slate-200'
+                  }`}
+                  onClick={() =>
+                    setForm((f) => {
+                      const nextIds = on
+                        ? f.availableColorIds.filter((x) => x !== c.id)
+                        : [...f.availableColorIds, c.id]
+                      let mainColorId = f.mainColorId
+                      if (!nextIds.includes(mainColorId)) mainColorId = nextIds[0] || ''
+                      if (!on && !f.mainColorId) mainColorId = c.id
+                      return { ...f, availableColorIds: nextIds, mainColorId }
+                    })
+                  }
+                >
+                  <span className="h-3 w-3 rounded-full border" style={{ background: c.hex }} />
+                  {c.name}
+                  {main ? ' · Main' : ''}
+                </button>
+                {on && !main ? (
+                  <button
+                    type="button"
+                    className="rounded-full border border-slate-200 px-2 py-1 text-[11px] font-medium text-navy"
+                    onClick={() => setForm((f) => ({ ...f, mainColorId: c.id }))}
+                  >
+                    Set main
+                  </button>
+                ) : null}
+              </span>
             )
           })}
         </div>
@@ -776,6 +835,11 @@ export function AdminDesigns() {
                     {d.hasStl ? ` · ${d.fromGcode ? 'G-code' : modelLabel(d.modelExt || '')}` : ' · no model'}
                     {d.sliceStatus !== 'idle' ? ` · slice ${d.sliceStatus}` : ''}
                     {d.catalogPriceUsd != null ? ` · $${d.catalogPriceUsd.toFixed(2)}` : ''}
+                    {formatSizeMm(d.sizeXMm, d.sizeYMm, d.sizeZMm)
+                      ? ` · ${formatSizeMm(d.sizeXMm, d.sizeYMm, d.sizeZMm)}`
+                      : ''}
+                    {` · ${d.buyerCount || 0} ${(d.buyerCount || 0) === 1 ? 'person bought' : 'people bought'}`}
+                    {d.popular ? ' · Popular' : ''}
                   </p>
                   {d.fromGcode ? (
                     <p className="text-xs text-muted">
@@ -801,6 +865,25 @@ export function AdminDesigns() {
               <div className="action-row">
                 <button type="button" className="btn btn-secondary btn-compact" onClick={() => startEdit(d)}>
                   Edit
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-compact"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true)
+                    setError('')
+                    void api.catalog.designs
+                      .setPopular(d.id, !d.popular)
+                      .then(() => {
+                        setMessage(d.popular ? 'Removed from popular.' : 'Marked popular. It stays at the top of the shop.')
+                        return load()
+                      })
+                      .catch((err) => setError(err instanceof Error ? err.message : 'Could not update popular'))
+                      .finally(() => setBusy(false))
+                  }}
+                >
+                  {d.popular ? 'Remove popular' : 'Make popular'}
                 </button>
                 {d.hasStl || (d.multicolorOnly && (d.parts ?? []).some((p) => p.hasStl)) ? (
                   <button

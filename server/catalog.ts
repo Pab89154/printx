@@ -8,7 +8,10 @@ import {
   defaultMulticolorPartLabel,
   emptyCustomColorSlots,
   MULTICOLOR_SLOT_MAX,
+  isMulticolorColorId,
   normalizeCustomSlots,
+  parseOwnedColorIds,
+  solidBuiltinColors,
   type CustomColorSlot,
 } from '../shared/colors.ts'
 import type { DbApi } from './dbClient.ts'
@@ -56,6 +59,12 @@ export type Design = {
   gramsJoshKobra: number | null
   hoursJoshKobra: number | null
   availableColorIds: string[]
+  /** Color id the shop model is shown in first. Empty uses the first available color. */
+  mainColorId: string
+  /** Admin marked this design popular, so it stays above designs sorted only by sales. */
+  popular: boolean
+  /** Distinct customers who bought it. Filled on list responses. */
+  buyerCount?: number
   multicolorOnly: boolean
   /** How many solid filaments the customer must pick (multicolor designs). */
   multicolorSlotCount: number
@@ -64,6 +73,10 @@ export type Design = {
   worstCostUsd: number | null
   catalogPriceUsd: number | null
   pricedAt: string | null
+  /** Printed size from the STL bounding box (millimeters). Null until measured. */
+  sizeXMm: number | null
+  sizeYMm: number | null
+  sizeZMm: number | null
   pricingInputsJson: string
   /** Raw gcode_paths_json for admin DTO (printerId → stored file name). */
   gcodePathsJson: string
@@ -214,12 +227,17 @@ export function rowToDesign(row: Record<string, unknown>): Design {
     gramsJoshKobra: numOrNull(row.grams_josh_kobra),
     hoursJoshKobra: numOrNull(row.hours_josh_kobra),
     availableColorIds: Array.isArray(colors) ? colors : [],
+    mainColorId: String(row.main_color_id || ''),
+    popular: Boolean(Number(row.popular ?? 0)),
     multicolorOnly,
     multicolorSlotCount,
     parts,
     worstCostUsd: numOrNull(row.worst_cost_usd),
     catalogPriceUsd: numOrNull(row.catalog_price_usd),
     pricedAt: (row.priced_at as string | null) ?? null,
+    sizeXMm: numOrNull(row.size_x_mm),
+    sizeYMm: numOrNull(row.size_y_mm),
+    sizeZMm: numOrNull(row.size_z_mm),
     pricingInputsJson: (row.pricing_inputs_json as string) || '{}',
     gcodePathsJson: String(row.gcode_paths_json || '{}'),
     createdAt: row.created_at as string,
@@ -338,6 +356,99 @@ export async function seedCatalogDefaults(database: DbApi) {
       p.active ? 1 : 0,
     )
   }
+}
+
+/**
+ * Put this admin's saved basic colors on the design.
+ * Leaves the design alone when they have not marked any colors.
+ * Keeps any custom (non-basic) colors already on the design.
+ */
+export async function applyAdminOwnedColors(
+  database: DbApi,
+  designId: string,
+  adminId: string,
+): Promise<boolean> {
+  const row = await database.get<{ owned_color_ids: string | null }>(
+    `SELECT owned_color_ids FROM users WHERE id = ?`,
+    adminId,
+  )
+  const mine = parseOwnedColorIds(row?.owned_color_ids)
+  if (!mine.length) return false
+  const design = await database.get<{ available_color_ids: string | null }>(
+    `SELECT available_color_ids FROM designs WHERE id = ?`,
+    designId,
+  )
+  let existing: string[] = []
+  try {
+    const parsed = JSON.parse(design?.available_color_ids || '[]') as unknown
+    if (Array.isArray(parsed)) existing = parsed.map((id) => String(id))
+  } catch {
+    existing = []
+  }
+  const basic = new Set(solidBuiltinColors().map((c) => c.id))
+  const customs = existing.filter((id) => !basic.has(id) && !isMulticolorColorId(id))
+  const next = [...mine]
+  for (const id of customs) {
+    if (!next.includes(id)) next.push(id)
+  }
+  const current = await database.get<{ main_color_id: string | null }>(
+    `SELECT main_color_id FROM designs WHERE id = ?`,
+    designId,
+  )
+  const main = String(current?.main_color_id || '')
+  const keepMain = main && next.includes(main) ? main : ''
+  await database.run(
+    `UPDATE designs SET available_color_ids = ?, main_color_id = ?, updated_at = ? WHERE id = ?`,
+    JSON.stringify(next),
+    keepMain,
+    new Date().toISOString(),
+    designId,
+  )
+  return true
+}
+
+/** One count per customer email (or per order when there is no email). */
+export async function designBuyerCounts(database: DbApi): Promise<Map<string, number>> {
+  const rows = await database.all<{ design_id: string; buyers: number | string }>(
+    `SELECT oi.design_id as design_id,
+            COUNT(DISTINCT CASE
+              WHEN TRIM(COALESCE(o.customer_email, '')) != '' THEN LOWER(TRIM(o.customer_email))
+              ELSE o.id
+            END) as buyers
+     FROM order_items oi
+     JOIN orders o ON o.id = oi.order_id
+     WHERE o.status NOT IN ('pending_payment', 'cancelled', 'refunded')
+     GROUP BY oi.design_id`,
+  )
+  const out = new Map<string, number>()
+  for (const row of rows) {
+    const n = Number(row.buyers)
+    if (row.design_id && Number.isFinite(n)) out.set(row.design_id, n)
+  }
+  return out
+}
+
+export function compareByPopularity(
+  a: { popular?: boolean; buyerCount?: number; name: string },
+  b: { popular?: boolean; buyerCount?: number; name: string },
+): number {
+  const pin = Number(Boolean(b.popular)) - Number(Boolean(a.popular))
+  if (pin) return pin
+  const sales = (b.buyerCount || 0) - (a.buyerCount || 0)
+  if (sales) return sales
+  return a.name.localeCompare(b.name)
+}
+
+/** Basic colors at least one admin marked as on hand. Empty until someone saves Settings. */
+export async function filamentStock(database: DbApi): Promise<string[]> {
+  const rows = await database.all<{ owned_color_ids: string | null }>(
+    `SELECT owned_color_ids FROM users WHERE role = 'admin'`,
+  )
+  const picked = new Set<string>()
+  for (const row of rows) {
+    for (const id of parseOwnedColorIds(row.owned_color_ids)) picked.add(id)
+  }
+  return [...picked]
 }
 
 export async function getPricingSettings(database: DbApi): Promise<PricingSettings & { customColors: CustomColorSlot[] }> {

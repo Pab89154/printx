@@ -8,6 +8,7 @@ import { handleApi } from './router.ts'
 import { ensureDbReady } from './db.ts'
 import { usingPostgres } from './dbClient.ts'
 import { isPortalHostname, portalizeSocialHtml } from './socialMeta.ts'
+import { GITHUB_MODEL_FILES } from '../shared/githubModels.ts'
 
 export type WorkerEnv = {
   DATABASE_URL?: string
@@ -236,10 +237,99 @@ function buildServerResponse(): {
   return { res, done }
 }
 
-export async function handleWorkerFetch(request: Request, env: WorkerEnv): Promise<Response> {
+/**
+ * Same-origin model CDN. Browsers used to be redirected to raw GitHub or a
+ * signed Supabase URL; school networks, Safari, and CDN size limits kept
+ * breaking those. The Worker streams the file instead and edge-caches it.
+ */
+async function serveModelCdn(
+  request: Request,
+  url: URL,
+  waitUntil?: (p: Promise<unknown>) => void,
+): Promise<Response> {
+  const file = decodeURIComponent(url.pathname.slice('/cdn/models/'.length))
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.stl$/.test(file) || file.includes('..')) {
+    return Response.json({ error: 'Model not found' }, { status: 404 })
+  }
+
+  type CacheStorageWithDefault = CacheStorage & { default?: Cache }
+  const cache = (globalThis as { caches?: CacheStorageWithDefault }).caches?.default
+  const cacheKey = new Request(`${url.origin}/cdn/models/${encodeURIComponent(file)}`)
+  const range = request.headers.get('range')
+  if (cache && !range) {
+    const hit = await cache.match(cacheKey)
+    if (hit) return hit
+  }
+
+  let upstream: Response | null = null
+  if (GITHUB_MODEL_FILES.has(file)) {
+    const repo = (process.env.PRINTX_GITHUB_REPO || 'Pab89154/printx').trim()
+    const ref = (process.env.PRINTX_GITHUB_REF || 'main').trim() || 'main'
+    const sources = [
+      `https://rawcdn.githack.com/${repo}/${ref}/models/${encodeURIComponent(file)}`,
+      `https://raw.githubusercontent.com/${repo}/${ref}/models/${encodeURIComponent(file)}`,
+    ]
+    for (const source of sources) {
+      try {
+        const res = await fetch(source, range ? { headers: { Range: range } } : undefined)
+        if (res.ok || res.status === 206) {
+          upstream = res
+          break
+        }
+      } catch {
+        /* try the next source */
+      }
+    }
+  } else {
+    const { signedStoredFileUrl } = await import('./objectStorage.ts')
+    const signed = await signedStoredFileUrl(file)
+    if (signed) {
+      const res = await fetch(signed, range ? { headers: { Range: range } } : undefined)
+      if (res.ok || res.status === 206) upstream = res
+    }
+  }
+  if (!upstream) {
+    return Response.json({ error: 'Model not found' }, { status: 404 })
+  }
+
+  const headers = new Headers()
+  headers.set('Content-Type', 'model/stl')
+  headers.set('Access-Control-Allow-Origin', '*')
+  headers.set('Cross-Origin-Resource-Policy', 'cross-origin')
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+  const length = upstream.headers.get('content-length')
+  if (length) headers.set('Content-Length', length)
+  const contentRange = upstream.headers.get('content-range')
+  if (contentRange) headers.set('Content-Range', contentRange)
+  const etag = upstream.headers.get('etag')
+  if (etag) headers.set('ETag', etag)
+
+  const response = new Response(upstream.body, { status: upstream.status, headers })
+  if (cache && !range && upstream.status === 200) {
+    const put = cache.put(cacheKey, response.clone()).catch(() => undefined)
+    if (waitUntil) waitUntil(put)
+    else void put
+  }
+  return response
+}
+
+export async function handleWorkerFetch(
+  request: Request,
+  env: WorkerEnv,
+  ctx?: { waitUntil: (p: Promise<unknown>) => void },
+): Promise<Response> {
   applyWorkerEnv(env)
   const url = new URL(request.url)
   const pathname = url.pathname
+
+  if (pathname.startsWith('/cdn/models/') && request.method === 'GET') {
+    try {
+      return await serveModelCdn(request, url, ctx?.waitUntil?.bind(ctx))
+    } catch (err) {
+      console.error('[cdn-models]', err)
+      return Response.json({ error: 'Model failed to load' }, { status: 502 })
+    }
+  }
 
   if (pathname === '/api/health' && request.method === 'GET') {
     return Response.json({ ok: true, runtime: 'cloudflare-worker' })

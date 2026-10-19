@@ -13,6 +13,7 @@ import {
   type PermissionKey,
 } from '../../shared/permissions'
 import { SandboxIcon } from '../lib/sandboxIcon'
+import { solidBuiltinColors } from '../../shared/colors'
 import {
   disableAdminPush,
   enableAdminPush,
@@ -93,6 +94,10 @@ export function AdminSettings() {
   const [pushMessage, setPushMessage] = useState('')
   const [csMessage, setCsMessage] = useState('')
   const [csError, setCsError] = useState('')
+  const [ownedColors, setOwnedColors] = useState<string[]>([])
+  const [colorMessage, setColorMessage] = useState('')
+  const [colorError, setColorError] = useState('')
+  const [colorSaving, setColorSaving] = useState(false)
 
   async function loadAdmins() {
     if (!can('manage_admins')) {
@@ -128,6 +133,26 @@ export function AdminSettings() {
     setCsToken('')
   }
 
+  async function loadFilamentColors() {
+    const data = await api.admin.settings.filamentColors()
+    setOwnedColors(data.mine)
+  }
+
+  async function saveFilamentColors(next: string[]) {
+    setColorSaving(true)
+    setColorError('')
+    setColorMessage('')
+    try {
+      const saved = await api.admin.settings.updateFilamentColors(next)
+      setOwnedColors(saved.mine)
+      setColorMessage('Colors saved. Designs can use these.')
+    } catch (e) {
+      setColorError(e instanceof Error ? e.message : 'Could not save colors')
+    } finally {
+      setColorSaving(false)
+    }
+  }
+
   useEffect(() => {
     setNameDraft(displayName ?? '')
   }, [displayName])
@@ -145,6 +170,7 @@ export function AdminSettings() {
     loadSiteStatus().catch(console.error)
     loadSignature().catch(console.error)
     loadCloudSlicer().catch(console.error)
+    loadFilamentColors().catch(console.error)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when role/access identity changes
   }, [isMainAdmin, email])
 
@@ -590,6 +616,38 @@ export function AdminSettings() {
           )}
         </div>
       </div>
+
+      <section className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
+        <h2 className="mb-1 font-semibold">Colors I have</h2>
+        <p className="text-sm text-muted">
+          Tap the basic colors you can print. Designs use the colors admins have marked here.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {solidBuiltinColors().map((c) => {
+            const on = ownedColors.includes(c.id)
+            return (
+              <button
+                key={c.id}
+                type="button"
+                disabled={colorSaving}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
+                  on ? 'border-electric bg-electric/10 text-electric' : 'border-slate-200'
+                }`}
+                onClick={() => {
+                  const next = on ? ownedColors.filter((id) => id !== c.id) : [...ownedColors, c.id]
+                  setOwnedColors(next)
+                  void saveFilamentColors(next)
+                }}
+              >
+                <span className="h-3 w-3 rounded-full border" style={{ background: c.hex }} />
+                {c.name}
+              </button>
+            )
+          })}
+        </div>
+        {colorError && <p className="mt-3 text-sm text-red-600">{colorError}</p>}
+        {colorMessage && <p className="mt-3 text-sm text-green-600">{colorMessage}</p>}
+      </section>
 
       <form onSubmit={saveCloudSlicer} className="mt-8 w-full min-w-0 max-w-md overflow-hidden rounded-2xl border bg-white p-4 sm:p-6" autoComplete="off">
         <h2 className="mb-1 font-semibold">Cloud Slicer API</h2>

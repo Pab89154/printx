@@ -6,7 +6,7 @@ import { ensureDbReady, closeDb } from '../server/db.ts'
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     try {
-      return await handleWorkerFetch(request, env)
+      return await handleWorkerFetch(request, env, ctx)
     } finally {
       // Keep push / mail side-effects alive after the response (Workers otherwise abort them).
       for (const task of drainBackgroundTasks()) {

@@ -13,7 +13,6 @@ import {
   ShoppingBag,
   Sparkles,
   Tag,
-  Wallet,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -39,7 +38,6 @@ const links: {
   { section: 'designs', label: 'Designs', icon: Printer3d as LucideIcon, perm: 'products' },
   { section: 'approvals', label: 'Approvals & Pricing', icon: ClipboardCheck, perm: 'main_only' },
   { section: 'orders', label: 'Orders', icon: ShoppingBag, perm: 'orders' },
-  { section: 'cash-sale', label: 'Cash sale', icon: Wallet, perm: 'orders' },
   { section: 'discounts', label: 'Discounts', icon: Tag, perm: 'orders' },
   { section: 'requests', label: 'Custom Requests', icon: Sparkles, perm: 'requests' },
   { section: 'settings', label: 'Settings', icon: Settings, perm: 'settings' },

@@ -328,6 +328,50 @@ async function migrateDesignMulticolorOnly(database: DbApi) {
   }
 }
 
+/** Admin can pin a design as popular so it stays at the top of the shop. */
+async function migrateDesignPopular(database: DbApi) {
+  try {
+    await database.exec(`ALTER TABLE designs ADD COLUMN popular INTEGER NOT NULL DEFAULT 0`)
+  } catch {
+    /* column already exists */
+  }
+}
+
+/** Color the shop STL preview starts in. */
+async function migrateDesignMainColor(database: DbApi) {
+  try {
+    await database.exec(`ALTER TABLE designs ADD COLUMN main_color_id TEXT NOT NULL DEFAULT ''`)
+  } catch {
+    /* column already exists */
+  }
+}
+
+/** Bounding box of the stored STL (or the union of multicolor parts), in millimeters. */
+async function migrateDesignSize(database: DbApi) {
+  for (const name of ['size_x_mm', 'size_y_mm', 'size_z_mm']) {
+    try {
+      await database.exec(`ALTER TABLE designs ADD COLUMN ${name} REAL`)
+    } catch {
+      /* column already exists */
+    }
+  }
+  try {
+    await database.exec(`
+      CREATE TABLE IF NOT EXISTS model_bounds (
+        file_name TEXT PRIMARY KEY,
+        min_x REAL NOT NULL,
+        min_y REAL NOT NULL,
+        min_z REAL NOT NULL,
+        max_x REAL NOT NULL,
+        max_y REAL NOT NULL,
+        max_z REAL NOT NULL
+      )
+    `)
+  } catch {
+    /* already exists */
+  }
+}
+
 /** Per-color-region STLs for multicolor preview (parts_json). */
 async function migrateDesignPartsJson(database: DbApi) {
   try {
@@ -422,6 +466,14 @@ async function migrateCashAndConsent(database: DbApi) {
       /* exists */
     }
   }
+  await database.run(
+    `UPDATE orders
+     SET status = 'awaiting_cash', paid_at = NULL, updated_at = ?
+     WHERE payment_method = 'cash'
+       AND cash_recorded_by IS NULL
+       AND status = 'paid'`,
+    new Date().toISOString(),
+  )
 }
 
 /** Public customer accounts, order ownership, tracking, refund requests, discounts. */
@@ -674,7 +726,32 @@ async function migrateUserAuth(database: DbApi) {
   } catch {
     /* column already exists */
   }
+  try {
+    await database.exec(`ALTER TABLE users ADD COLUMN owned_color_ids TEXT NOT NULL DEFAULT '[]'`)
+  } catch {
+    /* column already exists */
+  }
   await database.run('UPDATE users SET email_verified = 1 WHERE role = ?', 'admin')
+  const designs = await database.all<{ id: string; available_color_ids: string }>(
+    `SELECT id, available_color_ids FROM designs`,
+  )
+  const previousSolids = ['white', 'red', 'black', 'gray', 'blue', 'green', 'orange', 'yellow', 'purple']
+  for (const row of designs) {
+    let ids: string[] = []
+    try {
+      const parsed = JSON.parse(row.available_color_ids || '[]') as unknown
+      if (Array.isArray(parsed)) ids = parsed.map((id) => String(id))
+    } catch {
+      ids = []
+    }
+    if (ids.includes('pink')) continue
+    if (!previousSolids.every((id) => ids.includes(id))) continue
+    await database.run(
+      `UPDATE designs SET available_color_ids = ? WHERE id = ?`,
+      JSON.stringify([...ids, 'pink']),
+      row.id,
+    )
+  }
 }
 
 /** Persist Cloud Slicer keys on each printer so they survive ownership / approve flows. */
@@ -1151,6 +1228,9 @@ async function runMigrationsAndSeed(database: DbApi): Promise<void> {
   await migrateDiscountCustomerVisibility(database)
   await migrateDesignMulticolorOnly(database)
   await migrateDesignPartsJson(database)
+  await migrateDesignSize(database)
+  await migrateDesignMainColor(database)
+  await migrateDesignPopular(database)
   await migrateOrderItemFilamentColors(database)
   await migrateCustomerAccounts(database)
   await migrateCashAndConsent(database)

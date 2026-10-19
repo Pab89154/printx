@@ -54,7 +54,7 @@ async function downloadAuthFile(url: string, fallbackFilename: string, errorLabe
   // File should already be prepared; keep this short so the UI cannot hang forever.
   const timeoutId = window.setTimeout(() => controller.abort(), 90_000)
   try {
-    const res = await fetch(url, { credentials: 'include', signal: controller.signal })
+    const res = await fetch(url, { credentials: 'same-origin', signal: controller.signal })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       throw new Error((data as { error?: string }).error ?? errorLabel)
@@ -177,6 +177,26 @@ export const api = {
         designs: import('../types/catalog.ts').PublicCatalogDesign[]
         colors: import('../types/catalog.ts').CatalogColor[]
       }>('/api/public/catalog'),
+    schoolPickupCode: (code: string) =>
+      request<{ schoolPickup: boolean; code?: string; error?: string }>(
+        `/api/public/school-pickup-code?code=${encodeURIComponent(code)}`,
+      ),
+    cashCheckout: (body: {
+      code: string
+      customerName: string
+      agreeToPay: boolean
+      agreeToTerms: boolean
+      items: {
+        designId: string
+        colorId: string
+        qty: number
+        filamentColorIds?: string[]
+      }[]
+    }) =>
+      request<{ orderId: string; totalUsd: number; code: string }>('/api/public/cash-checkout', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     checkout: (body: {
       customerName?: string
       customerEmail?: string
@@ -246,6 +266,11 @@ export const api = {
           method: 'PATCH',
           body: JSON.stringify(body),
         }),
+      setPopular: (id: string, popular: boolean) =>
+        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/popular`, {
+          method: 'POST',
+          body: JSON.stringify({ popular }),
+        }),
       uploadStl: (file: File) => {
         const formData = new FormData()
         formData.append('file', file)
@@ -263,6 +288,9 @@ export const api = {
             grams?: number | null
             hours?: number | null
             fromGcode?: boolean
+            sizeXMm?: number | null
+            sizeYMm?: number | null
+            sizeZMm?: number | null
           }
           if (!res.ok) throw new Error(data.error ?? 'Model upload failed')
           if (!data.stlPath || !data.hasStl || !data.modelExt) {
@@ -276,6 +304,9 @@ export const api = {
             grams?: number | null
             hours?: number | null
             fromGcode?: boolean
+            sizeXMm?: number | null
+            sizeYMm?: number | null
+            sizeZMm?: number | null
           }
         })
       },
@@ -296,6 +327,9 @@ export const api = {
             grams?: number | null
             hours?: number | null
             fromGcode?: boolean
+            sizeXMm?: number | null
+            sizeYMm?: number | null
+            sizeZMm?: number | null
           }
           if (!res.ok) throw new Error(data.error ?? 'Model upload failed')
           if (!data.stlPath || !data.hasStl || !data.modelExt) {
@@ -309,6 +343,9 @@ export const api = {
             grams?: number | null
             hours?: number | null
             fromGcode?: boolean
+            sizeXMm?: number | null
+            sizeYMm?: number | null
+            sizeZMm?: number | null
           }
         })
       },
@@ -429,25 +466,10 @@ export const api = {
           orders: import('../types/catalog.ts').OrderDto[]
           printers: import('../types/catalog.ts').PrinterDto[]
         }>('/api/admin/orders'),
-      cashCode: (code: string) =>
-        request<{ valid: true; code: string }>(
-          `/api/admin/cash-sales/code?code=${encodeURIComponent(code)}`,
-        ),
-      cashSale: (body: {
-        code: string
-        customerName: string
-        agreeToPay: boolean
-        agreeToTerms: boolean
-        items: {
-          designId: string
-          colorId: string
-          qty: number
-          filamentColorIds?: string[]
-        }[]
-      }) =>
-        request<{ orderId: string; totalUsd: number; code: string }>('/api/admin/cash-sales', {
+      cashIn: (orderId: string) =>
+        request<{ ok: true }>(`/api/admin/orders/${orderId}/cash-in`, {
           method: 'POST',
-          body: JSON.stringify(body),
+          body: '{}',
         }),
       claim: (itemId: string, printerId: string) =>
         request<import('../types/catalog.ts').OrderItemDto>(
@@ -938,6 +960,17 @@ export const api = {
         request<{ ok: boolean; email: string }>('/api/admin/settings/email', {
           method: 'PATCH',
           body: JSON.stringify({ email, currentPassword }),
+        }),
+      filamentColors: () =>
+        request<{
+          mine: string[]
+          inStock: string[]
+          colors: { id: string; name: string; hex: string }[]
+        }>('/api/admin/settings/filament-colors'),
+      updateFilamentColors: (colorIds: string[]) =>
+        request<{ mine: string[]; inStock: string[] }>('/api/admin/settings/filament-colors', {
+          method: 'PATCH',
+          body: JSON.stringify({ colorIds }),
         }),
       updateProfile: (displayName: string) =>
         request<{ ok: boolean; displayName: string | null }>('/api/admin/settings/profile', {

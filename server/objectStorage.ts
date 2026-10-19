@@ -115,11 +115,13 @@ function objectKey(fileName: string): string {
   return `uploads/${fileName}`
 }
 
-/** Public CDN in front of the GitHub repo. Shop previews use this instead of Supabase. */
+/**
+ * Same-origin model CDN (server/cfAdapter.ts streams + edge-caches it).
+ * Sending browsers straight to jsDelivr/raw GitHub kept failing: jsDelivr
+ * 403s files over 20 MB, and outside hosts get blocked or stall.
+ */
 function githubModelUrl(fileName: string): string {
-  const repo = (process.env.PRINTX_GITHUB_REPO || 'Pab89154/printx').trim()
-  const ref = (process.env.PRINTX_GITHUB_REF || 'main').trim() || 'main'
-  return `https://cdn.jsdelivr.net/gh/${repo}@${ref}/models/${encodeURIComponent(fileName)}`
+  return `/cdn/models/${encodeURIComponent(fileName)}`
 }
 
 function assertKeyLooksValid(): void {
@@ -351,7 +353,8 @@ export async function sendStoredFile(
     }
   }
 
-  if (GITHUB_MODEL_FILES.has(fileName)) {
+  const onWorker = process.env.PRINTX_REQUIRE_OBJECT_STORAGE === '1'
+  if (onWorker && GITHUB_MODEL_FILES.has(fileName)) {
     res.statusCode = 302
     res.setHeader('Location', githubModelUrl(fileName))
     res.setHeader('Cache-Control', 'public, max-age=300')
@@ -382,7 +385,16 @@ export async function sendStoredFile(
     }
   }
 
-  // Proxying a multi‑MB STL through the Worker hits the 20s request cap (504).
+  // STL previews go through the same-origin CDN, which streams outside the
+  // 20s API cap and edge-caches. Other files keep the signed Supabase redirect.
+  if (onWorker && fileName.toLowerCase().endsWith('.stl')) {
+    res.statusCode = 302
+    res.setHeader('Location', githubModelUrl(fileName))
+    res.setHeader('Cache-Control', 'public, max-age=300')
+    res.end()
+    return true
+  }
+
   const signed = await signedStoredFileUrl(fileName)
   if (signed) {
     res.statusCode = 302

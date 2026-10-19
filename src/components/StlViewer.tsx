@@ -120,7 +120,7 @@ export function StlViewer({
   url,
   className = '',
   height = 280,
-  credentials = 'include',
+  credentials = 'same-origin',
   interactive = true,
   colorHex,
   eager = true,
@@ -424,7 +424,7 @@ export function MultiStlViewer({
   parts,
   className = '',
   height = 280,
-  credentials = 'include',
+  credentials = 'same-origin',
   interactive = true,
   eager = true,
 }: MultiProps) {

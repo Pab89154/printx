@@ -43,12 +43,22 @@ export type Design = {
   gramsJoshKobra: number | null
   hoursJoshKobra: number | null
   availableColorIds: string[]
+  /** Shop STL starts in this color. */
+  mainColorId?: string
+  /** Admin pinned this design to the top of the shop. */
+  popular?: boolean
+  /** Distinct customers who bought it. */
+  buyerCount?: number
   multicolorOnly: boolean
   multicolorSlotCount?: number
   parts?: DesignPartDto[]
   worstCostUsd: number | null
   catalogPriceUsd: number | null
   pricedAt: string | null
+  /** Printed size in millimeters (width × depth × height of the model). */
+  sizeXMm?: number | null
+  sizeYMm?: number | null
+  sizeZMm?: number | null
   pricingInputsJson: string
   createdAt: string
   updatedAt: string
@@ -75,6 +85,11 @@ export type PublicCatalogDesign = {
   /** Public URL for STL preview (approved designs only). */
   modelUrl?: string
   catalogPriceUsd: number | null
+  sizeXMm?: number | null
+  sizeYMm?: number | null
+  sizeZMm?: number | null
+  popular?: boolean
+  buyerCount?: number
   multicolorOnly?: boolean
   multicolorSlotCount?: number
   /** Per-slot part STLs for multicolor tinted preview. */

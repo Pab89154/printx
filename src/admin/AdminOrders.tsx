@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { stripeAgreementText } from '../../shared/checkoutConsent'
 import { publicOrderStatusLabel, publicPrintStatusLabel } from '../../shared/orderTracking'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { api } from '../lib/api'
@@ -11,6 +12,64 @@ function isPrinted(status: string): boolean {
 
 function money(n: number | null | undefined): string {
   return (Number(n) || 0).toFixed(2)
+}
+
+function downloadSignedAgreement(order: OrderDto) {
+  const cash = order.paymentMethod === 'cash'
+  const items = (order.items ?? [])
+    .map(
+      (item) =>
+        `${item.qty}× ${item.designName || item.sku} (${item.colorName}) $${money(item.lineTotalUsd)}`,
+    )
+    .join('\n')
+  const signedAt = order.agreementAt
+    ? new Date(order.agreementAt).toLocaleString()
+    : order.paidAt
+      ? new Date(order.paidAt).toLocaleString()
+      : '—'
+  const shipTo = [
+    order.shippingName,
+    order.shippingLine1,
+    order.shippingLine2,
+    [order.shippingCity, order.shippingState].filter(Boolean).join(', '),
+    order.shippingPostal,
+    order.shippingCountry,
+  ]
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+  const lines = [
+    'PrintX signed record',
+    `Order ${order.id}`,
+    `Name: ${order.agreementName || order.customerName || '—'}`,
+  ]
+  if (order.customerEmail) lines.push(`Email: ${order.customerEmail}`)
+  lines.push(
+    `Signed at: ${signedAt}`,
+    `Total: $${money(order.totalUsd)}`,
+  )
+  if (cash) lines.push('School pickup. No shipping.')
+  else if (shipTo) lines.push(`Ship to:\n${shipTo}`)
+  lines.push(
+    '',
+    'Items',
+    items || '—',
+    '',
+    cash
+      ? 'Both boxes were checked:\nI will pay cash.\nI agree to the terms and conditions.'
+      : 'Checked on Stripe Checkout: I agree to the terms and conditions.',
+    '',
+    order.agreementText?.trim() ||
+      (cash ? 'The signed wording was not stored on this order.' : stripeAgreementText()),
+  )
+  const body = lines.join('\n')
+  const blob = new Blob([body], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `printx-order-${order.id.slice(0, 8)}-signed-agreement.txt`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 /** Printer pay is capped by what the customer paid for items after discounts. */
@@ -48,8 +107,10 @@ export function AdminOrders() {
   const [shipTracking, setShipTracking] = useState<Record<string, string>>({})
   const [shipBusyId, setShipBusyId] = useState<string | null>(null)
   const [arriveBusyId, setArriveBusyId] = useState<string | null>(null)
+  const [cashBusyId, setCashBusyId] = useState<string | null>(null)
   const [pendingRefund, setPendingRefund] = useState<OrderDto | null>(null)
   const [pendingDeleteOrder, setPendingDeleteOrder] = useState<OrderDto | null>(null)
+  const [showPast, setShowPast] = useState(false)
   const [pendingDeclineRefund, setPendingDeclineRefund] = useState<{ id: string } | null>(null)
   const [declineBusy, setDeclineBusy] = useState(false)
   const [refundRequests, setRefundRequests] = useState<
@@ -204,6 +265,16 @@ export function AdminOrders() {
     }
   }
 
+  const pastOrders = orders.filter(
+    (order) => order.status === 'arrived' || order.status === 'fulfilled',
+  )
+  const openOrders = orders.filter((order) => !pastOrders.some((past) => past.id === order.id))
+  const rows: Array<{ kind: 'order'; order: OrderDto } | { kind: 'past-button' }> = [
+    ...openOrders.map((order) => ({ kind: 'order' as const, order })),
+    { kind: 'past-button' },
+    ...(showPast ? pastOrders.map((order) => ({ kind: 'order' as const, order })) : []),
+  ]
+
   return (
     <div className="min-w-0 max-w-full space-y-6 overflow-x-clip">
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
@@ -263,7 +334,29 @@ export function AdminOrders() {
         <p className="rounded-2xl border bg-white p-6 text-sm text-muted">No paid orders yet.</p>
       )}
 
-      {orders.map((order) => (
+      {orders.length > 0 && openOrders.length === 0 && (
+        <p className="rounded-2xl border bg-white p-6 text-sm text-muted">
+          No open orders. Arrived orders are under Past orders.
+        </p>
+      )}
+
+      {rows.map((row) => {
+        if (row.kind === 'past-button') {
+          if (pastOrders.length === 0) return null
+          return (
+            <div key="past-orders" className="flex justify-center pt-2">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowPast((open) => !open)}
+              >
+                {showPast ? 'Hide past orders' : 'Past orders'}
+              </button>
+            </div>
+          )
+        }
+        const order = row.order
+        return (
         <section key={order.id} className="min-w-0 overflow-hidden rounded-2xl border bg-white p-4 sm:p-6">
           <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
             <div className="min-w-0">
@@ -271,7 +364,7 @@ export function AdminOrders() {
                 {order.customerName || 'Customer'} · {order.customerEmail}
               </p>
               {order.paymentMethod === 'cash' ? (
-                <p className="mt-1 text-xs font-semibold text-navy">Cash · school pickup</p>
+                <p className="mt-1 text-xs font-semibold text-navy">Order · school pickup</p>
               ) : null}
               <p className="text-xs text-muted">
                 {publicOrderStatusLabel(order.status)} · ${money(order.totalUsd)}
@@ -289,6 +382,11 @@ export function AdminOrders() {
               {order.paymentMethod === 'cash' ? (
                 <div className="mt-2 text-xs text-muted">
                   <p>School pickup · no shipping</p>
+                  {!order.cashRecordedBy ? (
+                    <p>Not yours in Money until cash is in.</p>
+                  ) : (
+                    <p>Cash is in.</p>
+                  )}
                   {order.cashRecordedByName ? <p>Cash recorded by {order.cashRecordedByName}</p> : null}
                   {order.agreementName ? (
                     <p>
@@ -298,6 +396,33 @@ export function AdminOrders() {
                   ) : null}
                 </div>
               ) : null}
+              {order.paymentMethod === 'cash' && !order.cashRecordedBy ? (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-compact mt-2"
+                  disabled={cashBusyId === order.id}
+                  onClick={() => {
+                    setCashBusyId(order.id)
+                    setError('')
+                    void api.catalog.orders
+                      .cashIn(order.id)
+                      .then(() => load())
+                      .catch((e) => setError(e instanceof Error ? e.message : 'Could not mark cash in'))
+                      .finally(() => setCashBusyId(null))
+                  }}
+                >
+                  {cashBusyId === order.id ? 'Saving…' : 'Cash is in'}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-secondary btn-compact mt-2"
+                onClick={() => downloadSignedAgreement(order)}
+              >
+                {order.paymentMethod === 'cash'
+                  ? 'Download signed terms and cash agreement'
+                  : 'Download signed terms and conditions'}
+              </button>
               {order.paymentMethod !== 'cash' &&
               (order.shippingName ||
                 order.shippingLine1 ||
@@ -445,7 +570,9 @@ export function AdminOrders() {
                     )}
                   </div>
 
-                  {order.status !== 'refunded' && item.printStatus === 'unclaimed' && (
+                  {order.status !== 'refunded' &&
+                    order.status !== 'awaiting_cash' &&
+                    item.printStatus === 'unclaimed' && (
                     <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                       <select
                         className="w-full min-w-0 rounded-lg border px-2 py-1.5 text-sm sm:w-auto"
@@ -549,7 +676,8 @@ export function AdminOrders() {
             })}
           </div>
         </section>
-      ))}
+        )
+      })}
 
       <ConfirmDialog
         open={Boolean(pendingRefund)}

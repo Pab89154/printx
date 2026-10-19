@@ -64,6 +64,8 @@ export function publicOrderStatusLabel(status: string): string {
   switch (status) {
     case 'pending_payment':
       return 'Awaiting payment'
+    case 'awaiting_cash':
+      return 'Cash not in yet'
     case 'paid':
       return 'Paid — waiting to print'
     case 'in_production':

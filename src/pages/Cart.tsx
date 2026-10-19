@@ -1,7 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { colorSwatchStyle } from '../../shared/colors'
+import {
+  CASH_PAYMENT_LABEL,
+  CASH_TERMS_BODY,
+  CASH_TERMS_LABEL,
+  cashPaymentDetail,
+  cashSaleItemNotice,
+} from '../../shared/checkoutConsent'
 import { CUSTOMER_ACCOUNTS_ENABLED } from '../../shared/customerAccounts'
 import { useCart } from '../context/CartContext'
 import { useCustomerAuth } from '../context/CustomerAuthContext'
@@ -9,11 +16,69 @@ import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 
 export function Cart() {
-  const { lines, setQty, remove, subtotal } = useCart()
-  const { loading } = useCustomerAuth()
+  const { lines, setQty, remove, subtotal, clear } = useCart()
+  const { loading, customer } = useCustomerAuth()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [promoCode, setPromoCode] = useState('')
+  const [schoolCode, setSchoolCode] = useState('')
+  const [schoolError, setSchoolError] = useState('')
+  const [customerName, setCustomerName] = useState('')
+  const [agreePay, setAgreePay] = useState(false)
+  const [agreeTerms, setAgreeTerms] = useState(false)
+  const [done, setDone] = useState('')
+
+  useEffect(() => {
+    if (customer?.displayName && !customerName) setCustomerName(customer.displayName)
+  }, [customer?.displayName, customerName])
+
+  useEffect(() => {
+    const trimmed = promoCode.trim()
+    setSchoolCode('')
+    setSchoolError('')
+    setAgreePay(false)
+    setAgreeTerms(false)
+    if (trimmed.length < 3) return
+    const handle = window.setTimeout(() => {
+      void api.catalog
+        .schoolPickupCode(trimmed)
+        .then((res) => {
+          if (res.schoolPickup && res.code) {
+            setSchoolCode(res.code)
+            setSchoolError('')
+          } else {
+            setSchoolCode('')
+            setSchoolError(res.error || '')
+          }
+        })
+        .catch((e) => {
+          setSchoolCode('')
+          setSchoolError(e instanceof Error ? e.message : 'Could not check that code')
+        })
+    }, 300)
+    return () => window.clearTimeout(handle)
+  }, [promoCode])
+
+  const notice = cashSaleItemNotice(
+    lines.map((l) => ({
+      name: l.name,
+      color: l.colorName,
+      qty: l.qty,
+      lineUsd: Math.round(l.unitPrice * l.qty * 100) / 100,
+    })),
+    subtotal,
+  )
+  const nameOk = customerName.trim().length >= 3 && customerName.trim().includes(' ')
+  const cashReady = Boolean(schoolCode && nameOk && agreePay && agreeTerms && subtotal > 0)
+
+  function cartItems() {
+    return lines.map((l) => ({
+      designId: l.designId,
+      colorId: l.colorId,
+      qty: l.qty,
+      ...(l.filamentColorIds?.length ? { filamentColorIds: l.filamentColorIds } : {}),
+    }))
+  }
 
   async function checkout() {
     setBusy(true)
@@ -21,16 +86,37 @@ export function Cart() {
     try {
       const { url } = await api.catalog.checkout({
         promoCode: promoCode.trim() || undefined,
-        items: lines.map((l) => ({
-          designId: l.designId,
-          colorId: l.colorId,
-          qty: l.qty,
-          ...(l.filamentColorIds?.length ? { filamentColorIds: l.filamentColorIds } : {}),
-        })),
+        items: cartItems(),
       })
       window.location.href = url
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Checkout failed')
+      setBusy(false)
+    }
+  }
+
+  async function cashCheckout() {
+    if (!cashReady) return
+    setBusy(true)
+    setError('')
+    setDone('')
+    try {
+      const res = await api.catalog.cashCheckout({
+        code: schoolCode,
+        customerName: customerName.trim(),
+        agreeToPay: true,
+        agreeToTerms: true,
+        items: cartItems(),
+      })
+      clear()
+      setDone(`Order placed for $${res.totalUsd.toFixed(2)}. School pickup, no shipping.`)
+      setPromoCode('')
+      setSchoolCode('')
+      setAgreePay(false)
+      setAgreeTerms(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save the cash sale')
+    } finally {
       setBusy(false)
     }
   }
@@ -43,6 +129,8 @@ export function Cart() {
           ← Continue shopping
         </Link>
         <h1 className="mt-4 text-3xl font-extrabold text-navy">Cart</h1>
+
+        {done ? <p className="mt-6 text-sm text-emerald-700">{done}</p> : null}
 
         {lines.length === 0 ? (
           <p className="mt-8 text-muted">Your cart is empty.</p>
@@ -95,8 +183,11 @@ export function Cart() {
             </ul>
 
             <p className="mt-6 text-right text-lg font-bold text-navy">
-              Subtotal ${subtotal.toFixed(2)}
+              {schoolCode ? `School pickup · $${subtotal.toFixed(2)}` : `Subtotal $${subtotal.toFixed(2)}`}
             </p>
+            {schoolCode ? (
+              <p className="mt-1 text-right text-sm text-muted">No shipping. Handed over at school.</p>
+            ) : null}
 
             <label className="mt-6 block text-sm text-navy">
               Promo code
@@ -108,28 +199,89 @@ export function Cart() {
                 autoComplete="off"
               />
             </label>
+            {schoolCode ? (
+              <p className="mt-2 text-sm text-emerald-700">Classmate code {schoolCode} — school pickup, pay cash.</p>
+            ) : null}
+            {schoolError ? <p className="mt-2 text-sm text-red-600">{schoolError}</p> : null}
 
-            <p className="mt-4 text-sm text-muted">
-              Promo codes are entered here only — not in Checkout.
-            </p>
-
-            <p className="mt-4 text-sm text-navy">
-              <Link to="/terms-and-conditions" className="text-electric underline">
-                Click here to read the terms and conditions.
-              </Link>{' '}
-              Checkout asks you to agree before you pay.
-            </p>
+            {schoolCode ? (
+              <div className="mt-4 space-y-3">
+                <label className="block text-sm text-navy">
+                  Full name
+                  <input
+                    className="mt-1 w-full rounded-lg border px-3 py-2"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    autoComplete="name"
+                    placeholder="First and last name"
+                  />
+                </label>
+                <label className="flex items-start gap-3 rounded-xl border bg-white px-4 py-3 text-sm text-navy">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={agreePay}
+                    onChange={(e) => setAgreePay(e.target.checked)}
+                  />
+                  <span>
+                    <span className="font-semibold">{CASH_PAYMENT_LABEL}</span>
+                    <span className="mt-1 block text-muted">{cashPaymentDetail(notice)}</span>
+                  </span>
+                </label>
+                <div className="rounded-xl border bg-white px-4 py-3 text-sm text-navy">
+                  <p className="font-semibold">Terms and conditions</p>
+                  <p className="mt-2">
+                    <Link to="/terms-and-conditions#cash" className="text-electric underline">
+                      Click here to read the terms and conditions.
+                    </Link>
+                  </p>
+                  <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted">{CASH_TERMS_BODY}</p>
+                  <label className="mt-3 flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={agreeTerms}
+                      onChange={(e) => setAgreeTerms(e.target.checked)}
+                    />
+                    <span className="font-semibold">{CASH_TERMS_LABEL}</span>
+                  </label>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="mt-4 text-sm text-muted">
+                  Promo codes are entered here only — not in Checkout.
+                </p>
+                <p className="mt-4 text-sm text-navy">
+                  <Link to="/terms-and-conditions" className="text-electric underline">
+                    Click here to read the terms and conditions.
+                  </Link>{' '}
+                  Checkout asks you to agree before you pay.
+                </p>
+              </>
+            )}
 
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
-            <button
-              type="button"
-              className="btn btn-primary mt-6 w-full"
-              disabled={busy || (CUSTOMER_ACCOUNTS_ENABLED && loading)}
-              onClick={() => void checkout()}
-            >
-              {busy ? 'Redirecting…' : 'Checkout'}
-            </button>
+            {schoolCode ? (
+              <button
+                type="button"
+                className="btn btn-primary mt-6 w-full"
+                disabled={busy || !cashReady}
+                onClick={() => void cashCheckout()}
+              >
+                {busy ? 'Placing order…' : 'Order'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary mt-6 w-full"
+                disabled={busy || (CUSTOMER_ACCOUNTS_ENABLED && loading)}
+                onClick={() => void checkout()}
+              >
+                {busy ? 'Redirecting…' : 'Checkout'}
+              </button>
+            )}
           </>
         )}
       </main>

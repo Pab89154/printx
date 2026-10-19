@@ -12,6 +12,7 @@ import {
 } from '../../shared/colors'
 import { useCart } from '../context/CartContext'
 import type { PublicCatalogDesign } from '../types/catalog'
+import { formatSizeMm } from '../../shared/sizeLabel'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 import { CartLink } from '../components/CartLink'
@@ -143,8 +144,20 @@ export function ShopProduct() {
               <p className="mt-2 text-xs text-muted">Drag to rotate · scroll to zoom</p>
             </div>
             <div>
-              <h1 className="text-3xl font-extrabold text-navy">{design.name}</h1>
+              <h1 className="text-3xl font-extrabold text-navy">
+                {design.name}
+                {design.popular || (design.buyerCount ?? 0) > 0 ? (
+                  <span className="ml-3 align-middle text-sm font-semibold uppercase tracking-wide text-electric">
+                    Popular
+                  </span>
+                ) : null}
+              </h1>
               <p className="mt-2 text-muted">{design.description}</p>
+              {formatSizeMm(design.sizeXMm, design.sizeYMm, design.sizeZMm) ? (
+                <p className="mt-3 text-sm text-navy">
+                  Size {formatSizeMm(design.sizeXMm, design.sizeYMm, design.sizeZMm)}
+                </p>
+              ) : null}
               <p className="mt-4 text-2xl font-bold text-electric">
                 ${design.catalogPriceUsd?.toFixed(2) ?? '—'}
               </p>

@@ -40,7 +40,11 @@ import {
   buildSku,
   colorById,
   computeDesignPrice,
+  applyAdminOwnedColors,
+  compareByPopularity,
+  designBuyerCounts,
   designHasPricableInputs,
+  filamentStock,
   getPricingSettings,
   listPrinters,
   rowToDesign,
@@ -60,6 +64,7 @@ import {
   emptyCustomColorSlots,
   formatMulticolorSelection,
   isMulticolorColorId,
+  isOfferedFilament,
   MULTICOLOR_COLOR,
   MULTICOLOR_COLOR_ID,
   normalizeCustomSlots,
@@ -71,6 +76,7 @@ import {
   modelContentType,
   SLICEABLE_EXTS,
 } from '../shared/modelFormats.ts'
+import { boundsSizeMm, measureStlBuffer, unionBounds, type StlBounds } from './stlFit.ts'
 import { parseGcodeMetrics, writeGcodePreviewStl } from './gcodeToStl.ts'
 import { roundMoney } from './pricing.ts'
 import {
@@ -395,6 +401,100 @@ async function parseModelUpload(req: IncomingMessage): Promise<ModelUploadResult
       })()
     })
   })
+}
+
+type BoundsRow = {
+  min_x: number
+  min_y: number
+  min_z: number
+  max_x: number
+  max_y: number
+  max_z: number
+}
+
+function rowToBounds(row: BoundsRow): StlBounds {
+  return {
+    minX: Number(row.min_x),
+    minY: Number(row.min_y),
+    minZ: Number(row.min_z),
+    maxX: Number(row.max_x),
+    maxY: Number(row.max_y),
+    maxZ: Number(row.max_z),
+  }
+}
+
+async function rememberStlFile(
+  db: Awaited<ReturnType<typeof getDb>>,
+  fileName: string,
+): Promise<StlBounds | null> {
+  const safe = path.basename(fileName)
+  if (!safe.toLowerCase().endsWith('.stl')) return null
+  const candidates = [
+    path.join(await getUploadsDir(), safe),
+    path.join(process.cwd(), 'models', safe),
+  ]
+  const found = candidates.find((p) => fs.existsSync(p))
+  if (!found) return null
+  let bounds: StlBounds | null = null
+  try {
+    bounds = measureStlBuffer(fs.readFileSync(found))
+  } catch {
+    return null
+  }
+  if (!bounds || !boundsSizeMm(bounds)) return null
+  await db.run(
+    `INSERT INTO model_bounds (file_name, min_x, min_y, min_z, max_x, max_y, max_z)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(file_name) DO UPDATE SET
+       min_x = excluded.min_x, min_y = excluded.min_y, min_z = excluded.min_z,
+       max_x = excluded.max_x, max_y = excluded.max_y, max_z = excluded.max_z`,
+    safe,
+    bounds.minX,
+    bounds.minY,
+    bounds.minZ,
+    bounds.maxX,
+    bounds.maxY,
+    bounds.maxZ,
+  )
+  return bounds
+}
+
+/** Measure the design STL (or the union of multicolor parts) and store millimeters. */
+async function refreshDesignSize(
+  db: Awaited<ReturnType<typeof getDb>>,
+  designId: string,
+  stlPath: string,
+  parts: { stlPath: string }[],
+  multicolorOnly: boolean,
+): Promise<void> {
+  const names = (multicolorOnly ? parts.map((p) => p.stlPath) : [stlPath])
+    .map((name) => path.basename(String(name || '').trim()))
+    .filter((name) => name.toLowerCase().endsWith('.stl'))
+  const boxes: StlBounds[] = []
+  for (const name of names) {
+    let row = await db.get<BoundsRow>(
+      `SELECT min_x, min_y, min_z, max_x, max_y, max_z FROM model_bounds WHERE file_name = ?`,
+      name,
+    )
+    if (!row) {
+      await rememberStlFile(db, name)
+      row = await db.get<BoundsRow>(
+        `SELECT min_x, min_y, min_z, max_x, max_y, max_z FROM model_bounds WHERE file_name = ?`,
+        name,
+      )
+    }
+    if (row) boxes.push(rowToBounds(row))
+  }
+  const box = unionBounds(boxes)
+  const size = box ? boundsSizeMm(box) : null
+  if (!size) return
+  await db.run(
+    `UPDATE designs SET size_x_mm = ?, size_y_mm = ?, size_z_mm = ? WHERE id = ?`,
+    size.xMm,
+    size.yMm,
+    size.zMm,
+    designId,
+  )
 }
 
 type OwnerCredsRow = {
@@ -1409,6 +1509,14 @@ async function confirmShopOrderFromCheckoutSession(
         paid_at = ?,
         updated_at = ?,
         user_id = COALESCE(user_id, NULLIF(?, '')),
+        agreement_name = CASE
+          WHEN TRIM(COALESCE(agreement_name, '')) = '' AND ? != '' THEN ?
+          ELSE agreement_name
+        END,
+        agreement_text = CASE
+          WHEN TRIM(COALESCE(agreement_text, '')) = '' THEN ?
+          ELSE agreement_text
+        END,
         agreement_terms_checked = 1,
         agreement_at = COALESCE(agreement_at, ?)
        WHERE id = ? AND status = 'pending_payment'`,
@@ -1434,6 +1542,9 @@ async function confirmShopOrderFromCheckoutSession(
       now,
       now,
       customerUserId,
+      stripeName,
+      stripeName,
+      stripeAgreementText(),
       now,
       orderId,
     )
@@ -1513,6 +1624,8 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
   }
   // Multicolor mode: availableColorIds = solid filaments customers may pick (not the MLT badge).
   availableColorIds = availableColorIds.filter((id) => !isMulticolorColorId(id))
+  let mainColorId = String(body.mainColorId ?? existing?.mainColorId ?? '').trim()
+  if (!availableColorIds.includes(mainColorId)) mainColorId = availableColorIds[0] || ''
   const multicolorSlotCount = clampMulticolorSlotCount(
     body.multicolorSlotCount !== undefined
       ? body.multicolorSlotCount
@@ -1539,6 +1652,7 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
     category,
     imageUrl,
     availableColorIds,
+    mainColorId,
     multicolorOnly,
     multicolorSlotCount,
     parts,
@@ -1745,6 +1859,7 @@ function allowTrackLookup(ip: string): boolean {
 }
 
 const SHOP_ORDER_LIST_STATUSES = [
+  'awaiting_cash',
   'paid',
   'in_production',
   'printed',
@@ -1930,10 +2045,16 @@ export async function handleCatalogApi(
   // ----- Public catalog -----
   if (urlPath === '/api/public/catalog' && method === 'GET') {
     const settings = await getPricingSettings(db)
+    const stockIds = await filamentStock(db)
     const rows = await db.all<Record<string, unknown>>(
-      `SELECT * FROM designs WHERE status = 'approved' ORDER BY name ASC`,
+      `SELECT * FROM designs WHERE status = 'approved'`,
     )
-    const designs = rows.map(rowToDesign).map((d) => {
+    const buyers = await designBuyerCounts(db)
+    const designs = rows
+      .map(rowToDesign)
+      .map((d) => ({ ...d, buyerCount: buyers.get(d.id) || 0 }))
+      .sort(compareByPopularity)
+      .map((d) => {
       const modelExt = path.extname(d.stlPath || '').toLowerCase()
       const parts = d.multicolorOnly
         ? d.parts.map((p, index) => {
@@ -1959,6 +2080,11 @@ export async function handleCatalogApi(
         /** Public STL preview for approved catalog items. */
         modelUrl: d.hasStl && modelExt === '.stl' ? `/api/public/catalog/${d.id}/stl` : '',
         catalogPriceUsd: d.catalogPriceUsd,
+        sizeXMm: d.sizeXMm,
+        sizeYMm: d.sizeYMm,
+        sizeZMm: d.sizeZMm,
+        popular: d.popular,
+        buyerCount: d.buyerCount || 0,
         multicolorOnly: d.multicolorOnly,
         multicolorSlotCount: d.multicolorSlotCount,
         parts,
@@ -1974,7 +2100,15 @@ export async function handleCatalogApi(
               : solidIds.length
                 ? solidIds
                 : d.availableColorIds
-          return ids.map((id) => colorById(id, settings.customColors)).filter(Boolean)
+          const offered = ids.filter((id) => isOfferedFilament(id, stockIds))
+          const main = d.mainColorId
+          const ordered =
+            main && offered.includes(main)
+              ? [main, ...offered.filter((id) => id !== main)]
+              : offered
+          return ordered
+            .map((id) => colorById(id, settings.customColors))
+            .filter(Boolean)
         })(),
       }
     })
@@ -2088,6 +2222,7 @@ export async function handleCatalogApi(
       return true
     }
     const settings = await getPricingSettings(db)
+    const stockIds = await filamentStock(db)
     const lineItems: {
       design: Design
       colorId: string
@@ -2144,7 +2279,7 @@ export async function handleCatalogApi(
               ]
         const names: string[] = []
         for (const fid of filamentColorIds) {
-          if (!pool.includes(fid)) {
+          if (!pool.includes(fid) || !isOfferedFilament(fid, stockIds)) {
             send(res, 400, { error: `Invalid filament color for ${design.name}.` })
             return true
           }
@@ -2162,7 +2297,7 @@ export async function handleCatalogApi(
         )
         colorCode = MULTICOLOR_COLOR.code
       } else {
-        if (!design.availableColorIds.includes(colorId)) {
+        if (!design.availableColorIds.includes(colorId) || !isOfferedFilament(colorId, stockIds)) {
           send(res, 400, { error: `Color unavailable for ${design.name}.` })
           return true
         }
@@ -2575,7 +2710,16 @@ export async function handleCatalogApi(
     const rows = await db.all<Record<string, unknown>>(
       `SELECT * FROM designs WHERE status != 'archived' ORDER BY updated_at DESC`,
     )
-    send(res, 200, rows.map((row) => designDto(rowToDesign(row))))
+    const buyers = await designBuyerCounts(db)
+    send(
+      res,
+      200,
+      rows.map((row) => {
+        const design = rowToDesign(row)
+        design.buyerCount = buyers.get(design.id) || 0
+        return designDto(design)
+      }),
+    )
     return true
   }
 
@@ -2644,6 +2788,8 @@ export async function handleCatalogApi(
     }
     try {
       const uploaded = await parseModelUpload(req)
+      const bounds = await rememberStlFile(db, uploaded.fileName)
+      const size = bounds ? boundsSizeMm(bounds) : null
       send(res, 201, {
         stlPath: uploaded.fileName,
         hasStl: true,
@@ -2652,6 +2798,9 @@ export async function handleCatalogApi(
         grams: uploaded.grams ?? null,
         hours: uploaded.hours ?? null,
         fromGcode: Boolean(uploaded.fromGcode),
+        sizeXMm: size?.xMm ?? null,
+        sizeYMm: size?.yMm ?? null,
+        sizeZMm: size?.zMm ?? null,
       })
       return true
     } catch (err) {
@@ -2717,11 +2866,11 @@ export async function handleCatalogApi(
           status, created_by,
           submitted_at, reviewed_by, reviewed_at, review_note,
           grams_pablo_p1s, hours_pablo_p1s, grams_court_ender, hours_court_ender,
-          grams_josh_kobra, hours_josh_kobra, available_color_ids, multicolor_only, multicolor_slot_count,
+          grams_josh_kobra, hours_josh_kobra, available_color_ids, main_color_id, multicolor_only, multicolor_slot_count,
           parts_json,
           worst_cost_usd, catalog_price_usd, priced_at, pricing_inputs_json,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', '', 'draft', ?, NULL, NULL, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}', ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', '', 'draft', ?, NULL, NULL, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}', ?, ?)`,
         id,
         parsed.skuBase,
         parsed.name,
@@ -2737,6 +2886,7 @@ export async function handleCatalogApi(
         parsed.gramsJoshKobra,
         parsed.hoursJoshKobra,
         JSON.stringify(parsed.availableColorIds),
+        parsed.mainColorId,
         parsed.multicolorOnly ? 1 : 0,
         parsed.multicolorSlotCount,
         JSON.stringify(parsed.parts),
@@ -2744,6 +2894,7 @@ export async function handleCatalogApi(
         now,
       )
       if (sourceGcode) await persistUploadedGcodeQuote(db, id, sourceGcode)
+      await refreshDesignSize(db, id, stlPath, parsed.parts, parsed.multicolorOnly)
     } catch (err) {
       send(res, 400, {
         error: err instanceof Error ? err.message : 'Could not create design (SKU may already exist).',
@@ -2833,7 +2984,7 @@ export async function handleCatalogApi(
   }
 
   const designMatch =
-    /^\/api\/admin\/designs\/([^/]+)(?:\/(submit|requote|approve|reject|reprice|quote-tick))?$/.exec(urlPath)
+    /^\/api\/admin\/designs\/([^/]+)(?:\/(submit|requote|approve|reject|reprice|quote-tick|popular))?$/.exec(urlPath)
   if (designMatch) {
     const designId = designMatch[1]!
     const action = designMatch[2]
@@ -2851,6 +3002,23 @@ export async function handleCatalogApi(
       return true
     }
     let design = rowToDesign(existingRow)
+
+    if (method === 'POST' && action === 'popular') {
+      const body = await readJson(req)
+      const next = body.popular === undefined ? !design.popular : Boolean(body.popular)
+      await db.run(
+        `UPDATE designs SET popular = ?, updated_at = ? WHERE id = ?`,
+        next ? 1 : 0,
+        new Date().toISOString(),
+        designId,
+      )
+      const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+      const buyers = await designBuyerCounts(db)
+      const updated = rowToDesign(row!)
+      updated.buyerCount = buyers.get(designId) || 0
+      send(res, 200, designDto(updated))
+      return true
+    }
 
     if (method === 'GET' && !action) {
       const priced = designHasPricableInputs(design)
@@ -2907,7 +3075,7 @@ export async function handleCatalogApi(
             slice_status = ?,
             slice_error = ?,
             grams_pablo_p1s = ?, hours_pablo_p1s = ?, grams_court_ender = ?, hours_court_ender = ?,
-            grams_josh_kobra = ?, hours_josh_kobra = ?, available_color_ids = ?, multicolor_only = ?,
+            grams_josh_kobra = ?, hours_josh_kobra = ?, available_color_ids = ?, main_color_id = ?, multicolor_only = ?,
             multicolor_slot_count = ?,
             parts_json = ?,
             quote_ids_json = CASE WHEN ? THEN '{}' ELSE quote_ids_json END,
@@ -2930,6 +3098,7 @@ export async function handleCatalogApi(
           stlChanged ? null : parsed.gramsJoshKobra,
           stlChanged ? null : parsed.hoursJoshKobra,
           JSON.stringify(parsed.availableColorIds),
+          parsed.mainColorId,
           parsed.multicolorOnly ? 1 : 0,
           parsed.multicolorSlotCount,
           JSON.stringify(parsed.parts),
@@ -2939,7 +3108,8 @@ export async function handleCatalogApi(
           now,
           designId,
         )
-        if (sourceGcode) await persistUploadedGcodeQuote(db, designId, sourceGcode)
+      if (sourceGcode) await persistUploadedGcodeQuote(db, designId, sourceGcode)
+      await refreshDesignSize(db, designId, stlPath, parsed.parts, parsed.multicolorOnly)
       } catch (err) {
         send(res, 400, {
           error: err instanceof Error ? err.message : 'Update failed (SKU conflict?).',
@@ -3013,6 +3183,10 @@ export async function handleCatalogApi(
         send(res, 400, { error: 'Upload a 3D model before submitting.' })
         return true
       }
+      await applyAdminOwnedColors(db, designId, admin.id)
+      design = rowToDesign(
+        (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
+      )
       if (design.availableColorIds.length === 0) {
         send(res, 400, { error: 'Pick at least one color before submitting.' })
         return true
@@ -3021,15 +3195,18 @@ export async function handleCatalogApi(
       const modelExt = path.extname(design.stlPath).toLowerCase()
       const now = new Date().toISOString()
       const fromGcode = Boolean(designUploadedGcode(design)) && design.gramsPabloP1s != null
+      // Already on the shop with a price: submitting again must not pull it off the catalog.
+      const stayLive = design.status === 'approved' && design.catalogPriceUsd != null
 
       // Main admin only: skip Approvals queue — accept + start quoting immediately.
       if (admin.isMainAdmin) {
         if (fromGcode) {
           await db.run(
             `UPDATE designs SET
-              status = 'pending_review', submitted_at = ?, reviewed_by = ?, reviewed_at = ?,
+              status = ?, submitted_at = ?, reviewed_by = ?, reviewed_at = ?,
               review_note = ?, slice_status = 'ready', slice_error = '', updated_at = ?
              WHERE id = ?`,
+            stayLive ? 'approved' : 'pending_review',
             now,
             admin.id,
             now,
@@ -3053,19 +3230,22 @@ export async function handleCatalogApi(
           })
           return true
         }
-        await db.run(
-          `UPDATE designs SET
-            status = 'pending_review', submitted_at = ?, reviewed_by = ?, reviewed_at = ?,
-            review_note = ?, slice_status = 'slicing', slice_error = '', updated_at = ?
-           WHERE id = ?`,
-          now,
-          admin.id,
-          now,
-          'Accepted by main admin — quoting',
-          now,
-          designId,
-        )
-        scheduleDesignSlice(designId, design.stlPath)
+        if (!stayLive || design.sliceStatus !== 'ready') {
+          await db.run(
+            `UPDATE designs SET
+              status = ?, submitted_at = ?, reviewed_by = ?, reviewed_at = ?,
+              review_note = ?, slice_status = 'slicing', slice_error = '', updated_at = ?
+             WHERE id = ?`,
+            stayLive ? 'approved' : 'pending_review',
+            now,
+            admin.id,
+            now,
+            'Accepted by main admin — quoting',
+            now,
+            designId,
+          )
+          scheduleDesignSlice(designId, design.stlPath)
+        }
         design = rowToDesign(
           (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
         )
@@ -3086,26 +3266,29 @@ export async function handleCatalogApi(
       }
       await db.run(
         `UPDATE designs SET
-          status = 'pending_review', submitted_at = ?, updated_at = ?, review_note = '',
+          status = ?, submitted_at = ?, updated_at = ?, review_note = '',
           slice_status = ?, slice_error = ''
          WHERE id = ?`,
+        stayLive ? 'approved' : 'pending_review',
         now,
         now,
-        fromGcode ? 'ready' : 'idle',
+        stayLive ? design.sliceStatus : fromGcode ? 'ready' : 'idle',
         designId,
       )
 
       design = rowToDesign(
         (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
       )
-      const who = admin.displayName || admin.email || 'An admin'
-      runInBackground('push-design-submit', () =>
-        notifyMainAdmins(db, {
-          title: 'Design needs approval',
-          body: `${who} submitted “${design.name}”`,
-          url: '/approvals',
-        }),
-      )
+      if (!stayLive) {
+        const who = admin.displayName || admin.email || 'An admin'
+        runInBackground('push-design-submit', () =>
+          notifyMainAdmins(db, {
+            title: 'Design needs approval',
+            body: `${who} submitted “${design.name}”`,
+            url: '/approvals',
+          }),
+        )
+      }
       send(res, 200, { ...designDto(design), sliceWarning })
       return true
     }
@@ -3215,6 +3398,12 @@ export async function handleCatalogApi(
         return true
       }
 
+      if (action === 'approve') {
+        await applyAdminOwnedColors(db, designId, admin.id)
+        design = rowToDesign(
+          (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
+        )
+      }
       if (!designHasPricableInputs(design)) {
         send(res, 400, {
           error:
@@ -3467,7 +3656,7 @@ export async function handleCatalogApi(
 
   async function schoolPickupCode(rawCode: string) {
     const code = sanitizeText(rawCode, 40).toUpperCase().replace(/\s+/g, '')
-    if (!code) return { error: 'Enter the classmate code.' }
+    if (!code) return { schoolPickup: false as const }
     const row = await db.get<{
       id: string
       code: string
@@ -3479,8 +3668,9 @@ export async function handleCatalogApi(
        WHERE UPPER(REPLACE(code, ' ', '')) = ? LIMIT 1`,
       code,
     )
-    if (!row || !Number(row.active) || String(row.kind) !== 'school_pickup') {
-      return { error: 'That code is not an active school pickup code.' }
+    if (!row || String(row.kind) !== 'school_pickup') return { schoolPickup: false as const }
+    if (!Number(row.active)) {
+      return { schoolPickup: false as const, error: 'That school pickup code is inactive.' }
     }
     const max = row.max_redemptions != null ? Number(row.max_redemptions) : null
     if (max != null && Number.isFinite(max)) {
@@ -3492,34 +3682,21 @@ export async function handleCatalogApi(
         code,
       )
       if (Number(used?.n) >= max) {
-        return { error: 'That school pickup code has already been fully used.' }
+        return { schoolPickup: false as const, error: 'That school pickup code has already been fully used.' }
       }
     }
-    return { code: String(row.code) }
+    return { schoolPickup: true as const, code: String(row.code) }
   }
 
-  if (urlPath === '/api/admin/cash-sales/code' && method === 'GET') {
-    const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
-      send(res, 403, { error: 'Forbidden' })
-      return true
-    }
+  if (urlPath === '/api/public/school-pickup-code' && method === 'GET') {
     const u = new URL(req.url || '', 'http://localhost')
     const found = await schoolPickupCode(String(u.searchParams.get('code') || ''))
-    if ('error' in found) {
-      send(res, 400, { error: found.error })
-      return true
-    }
-    send(res, 200, { valid: true, code: found.code })
+    send(res, 200, found)
     return true
   }
 
-  if (urlPath === '/api/admin/cash-sales' && method === 'POST') {
-    const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
-      send(res, 403, { error: 'Forbidden' })
-      return true
-    }
+  if (urlPath === '/api/public/cash-checkout' && method === 'POST') {
+    const account = await requireCustomer(req)
     const body = await readJson(req)
     if (body.agreeToPay !== true || body.agreeToTerms !== true) {
       send(res, 400, { error: 'Both boxes have to be checked.' })
@@ -3531,8 +3708,8 @@ export async function handleCatalogApi(
       return true
     }
     const found = await schoolPickupCode(String(body.code ?? ''))
-    if ('error' in found) {
-      send(res, 400, { error: found.error })
+    if (!found.schoolPickup) {
+      send(res, 400, { error: found.error || 'That code is not an active school pickup code.' })
       return true
     }
     const itemsIn = Array.isArray(body.items) ? body.items : []
@@ -3541,6 +3718,7 @@ export async function handleCatalogApi(
       return true
     }
     const settings = await getPricingSettings(db)
+    const stockIds = await filamentStock(db)
     const lineItems: {
       design: Design
       colorId: string
@@ -3592,7 +3770,7 @@ export async function handleCatalogApi(
               ]
         const names: string[] = []
         for (const fid of filamentColorIds) {
-          if (!pool.includes(fid)) {
+          if (!pool.includes(fid) || !isOfferedFilament(fid, stockIds)) {
             send(res, 400, { error: `Invalid filament color for ${design.name}.` })
             return true
           }
@@ -3610,7 +3788,7 @@ export async function handleCatalogApi(
         )
         colorCode = MULTICOLOR_COLOR.code
       } else {
-        if (!design.availableColorIds.includes(colorId)) {
+        if (!design.availableColorIds.includes(colorId) || !isOfferedFilament(colorId, stockIds)) {
           send(res, 400, { error: `Color unavailable for ${design.name}.` })
           return true
         }
@@ -3658,21 +3836,21 @@ export async function handleCatalogApi(
         agreement_name, agreement_text,
         agreement_payment_checked, agreement_terms_checked, agreement_at
       ) VALUES (
-        ?, ?, '', 'paid', NULL, NULL,
-        ?, ?, 'usd', ?, ?, ?, NULL,
-        'cash', ?, ?,
+        ?, ?, ?, 'awaiting_cash', NULL, NULL,
+        ?, ?, 'usd', ?, ?, NULL, ?,
+        'cash', NULL, ?,
         '', 0,
         ?, ?,
         1, 1, ?
       )`,
       orderId,
       customerName,
+      account?.email || '',
       subtotal,
       subtotal,
       now,
       now,
-      now,
-      admin.id,
+      account?.id ?? null,
       found.code,
       customerName,
       cashAgreementText(notice),
@@ -3698,6 +3876,57 @@ export async function handleCatalogApi(
       )
     }
     send(res, 200, { orderId, totalUsd: subtotal, code: found.code })
+    return true
+  }
+
+  const cashInMatch = /^\/api\/admin\/orders\/([^/]+)\/cash-in$/.exec(urlPath)
+  if (cashInMatch && method === 'POST') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'orders')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const orderId = cashInMatch[1]!
+    const order = await db.get<{
+      status: string
+      payment_method: string | null
+      cash_recorded_by: string | null
+    }>('SELECT status, payment_method, cash_recorded_by FROM orders WHERE id = ?', orderId)
+    if (!order) {
+      send(res, 404, { error: 'Order not found' })
+      return true
+    }
+    if (String(order.payment_method || '') !== 'cash') {
+      send(res, 400, { error: 'Only school pickup orders take cash.' })
+      return true
+    }
+    if (order.cash_recorded_by) {
+      send(res, 400, { error: 'Cash is already in for this order.' })
+      return true
+    }
+    const now = new Date().toISOString()
+    if (String(order.status) === 'awaiting_cash') {
+      await db.run(
+        `UPDATE orders
+         SET status = 'paid', paid_at = ?, updated_at = ?, cash_recorded_by = ?
+         WHERE id = ? AND cash_recorded_by IS NULL`,
+        now,
+        now,
+        admin.id,
+        orderId,
+      )
+    } else {
+      await db.run(
+        `UPDATE orders
+         SET paid_at = COALESCE(paid_at, ?), updated_at = ?, cash_recorded_by = ?
+         WHERE id = ? AND cash_recorded_by IS NULL`,
+        now,
+        now,
+        admin.id,
+        orderId,
+      )
+    }
+    send(res, 200, { ok: true })
     return true
   }
 
@@ -5221,7 +5450,8 @@ export async function handleCatalogApi(
             ${shopItemEarningsSql} as item_earnings_usd
          FROM orders
         WHERE paid_at IS NOT NULL
-          AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`
+          AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(payment_method, 'stripe') <> 'cash' OR cash_recorded_by IS NOT NULL)`
       if (start) {
         shopSql += ` AND paid_at >= ?`
         shopParams.push(start)
@@ -5294,6 +5524,7 @@ export async function handleCatalogApi(
        WHERE paid_at IS NOT NULL
          AND paid_at >= ? AND paid_at < ?
          AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(payment_method, 'stripe') <> 'cash' OR cash_recorded_by IS NOT NULL)
        ORDER BY paid_at DESC`,
       rangeStart,
       rangeEnd,
@@ -5437,7 +5668,8 @@ export async function handleCatalogApi(
        LEFT JOIN users u ON u.id = oi.assigned_admin_user_id
        WHERE o.paid_at IS NOT NULL
          AND o.paid_at >= ? AND o.paid_at < ?
-         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`,
+         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(o.payment_method, 'stripe') <> 'cash' OR o.cash_recorded_by IS NOT NULL)`,
       rangeStart,
       rangeEnd,
     )
@@ -5556,7 +5788,8 @@ export async function handleCatalogApi(
        FROM orders o
        WHERE o.paid_at IS NOT NULL
          AND o.paid_at >= ? AND o.paid_at < ?
-         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`,
+         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(o.payment_method, 'stripe') <> 'cash' OR o.cash_recorded_by IS NOT NULL)`,
       rangeStart,
       rangeEnd,
     )
@@ -5693,7 +5926,8 @@ export async function handleCatalogApi(
        FROM orders
        WHERE paid_at IS NOT NULL
          AND length(paid_at) >= 7
-         AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`,
+         AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(payment_method, 'stripe') <> 'cash' OR cash_recorded_by IS NOT NULL)`,
     )
     const customByMonthRows = await db.all<{
       ym: string
@@ -5998,7 +6232,8 @@ export async function handleCatalogApi(
     const shopEarnRow = await db.get<{ total: number | string | null }>(
       `SELECT COALESCE(SUM(${settleShopItemSql}), 0) as total FROM orders
        WHERE paid_at IS NOT NULL AND paid_at >= ? AND paid_at < ?
-         AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`,
+         AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(payment_method, 'stripe') <> 'cash' OR cash_recorded_by IS NOT NULL)`,
       rangeStart,
       rangeEnd,
     )
@@ -6022,7 +6257,8 @@ export async function handleCatalogApi(
               ), 0) as printer_cost_usd
        FROM orders o
        WHERE o.paid_at IS NOT NULL AND o.paid_at >= ? AND o.paid_at < ?
-         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`,
+         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(o.payment_method, 'stripe') <> 'cash' OR o.cash_recorded_by IS NOT NULL)`,
       rangeStart,
       rangeEnd,
     )
@@ -6055,6 +6291,7 @@ export async function handleCatalogApi(
       `SELECT COALESCE(SUM(shipping_usd), 0) as total FROM orders
        WHERE paid_at IS NOT NULL AND paid_at >= ? AND paid_at < ?
          AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(payment_method, 'stripe') <> 'cash' OR cash_recorded_by IS NOT NULL)
          AND shipping_to_profit_at IS NOT NULL`,
       rangeStart,
       rangeEnd,
@@ -6073,7 +6310,8 @@ export async function handleCatalogApi(
     const shopTotals = await db.all<{ total_usd: number | string | null; payment_method: string | null }>(
       `SELECT total_usd, payment_method FROM orders
        WHERE paid_at IS NOT NULL AND paid_at >= ? AND paid_at < ?
-         AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`,
+         AND status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(payment_method, 'stripe') <> 'cash' OR cash_recorded_by IS NOT NULL)`,
       rangeStart,
       rangeEnd,
     )
@@ -6146,7 +6384,8 @@ export async function handleCatalogApi(
        FROM order_items oi
        JOIN orders o ON o.id = oi.order_id
        WHERE o.paid_at IS NOT NULL AND o.paid_at >= ? AND o.paid_at < ?
-         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})`,
+         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(o.payment_method, 'stripe') <> 'cash' OR o.cash_recorded_by IS NOT NULL)`,
       rangeStart,
       rangeEnd,
     )

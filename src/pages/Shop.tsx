@@ -4,6 +4,7 @@ import { Search } from 'lucide-react'
 import { api } from '../lib/api'
 import { colorSwatchStyle, isMulticolorColorId, MULTICOLOR_COLOR } from '../../shared/colors'
 import type { CatalogColor, PublicCatalogDesign } from '../types/catalog'
+import { formatSizeMm } from '../../shared/sizeLabel'
 import { Header } from '../components/Header'
 import { Footer } from '../components/Footer'
 import { CartLink } from '../components/CartLink'
@@ -83,8 +84,20 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
           )}
         </div>
         <div className="px-4 pt-4">
-          <p className="font-semibold text-navy">{design.name}</p>
+          <p className="font-semibold text-navy">
+            {design.name}
+            {design.popular || (design.buyerCount ?? 0) > 0 ? (
+              <span className="ml-2 align-middle text-[11px] font-semibold uppercase tracking-wide text-electric">
+                Popular
+              </span>
+            ) : null}
+          </p>
           <p className="mt-1 text-sm text-muted line-clamp-2">{design.description}</p>
+          {formatSizeMm(design.sizeXMm, design.sizeYMm, design.sizeZMm) ? (
+            <p className="mt-1 text-xs text-muted">
+              {formatSizeMm(design.sizeXMm, design.sizeYMm, design.sizeZMm)}
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -194,6 +207,21 @@ export function Shop() {
           {filtered.map((d) => (
             <ShopCard key={d.id} design={d} />
           ))}
+          <section className="col-span-full grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="col-start-1 row-start-1 aspect-square" aria-hidden />
+            <div className="col-span-full row-start-1 flex flex-col items-start justify-center rounded-2xl border border-slate-100 bg-white px-6 shadow-sm sm:px-10">
+              <h2 className="text-2xl font-extrabold tracking-tight text-navy sm:text-3xl">
+                Do you have an idea?
+              </h2>
+              <p className="mt-2 max-w-xl text-sm text-muted sm:text-base">
+                If it is not in the shop, we can still print it. Describe what you want, or send a file,
+                and we will quote a custom print.
+              </p>
+              <a href="/#custom" className="btn btn-primary mt-5">
+                Request a custom print
+              </a>
+            </div>
+          </section>
         </div>
 
         {designs.length === 0 && !error && (

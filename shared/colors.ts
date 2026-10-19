@@ -80,12 +80,44 @@ export const BUILTIN_COLORS: ColorDef[] = [
   { id: 'orange', code: 'ORG', name: 'Orange', hex: '#EA580C', builtin: true },
   { id: 'yellow', code: 'YLW', name: 'Yellow', hex: '#EAB308', builtin: true },
   { id: 'purple', code: 'PRP', name: 'Purple', hex: '#7C3AED', builtin: true },
+  { id: 'pink', code: 'PNK', name: 'Pink', hex: '#F472B6', builtin: true },
   MULTICOLOR_COLOR,
 ]
 
 /** Solid filament chips in admin (excludes Multicolor — that is a design mode). */
 export function solidBuiltinColors(): ColorDef[] {
   return BUILTIN_COLORS.filter((c) => !isMulticolorColorId(c.id))
+}
+
+/** Keep only known basic filament ids, in palette order. */
+export function parseOwnedColorIds(input: unknown): string[] {
+  let list: unknown[] = []
+  if (typeof input === 'string') {
+    try {
+      const parsed = JSON.parse(input) as unknown
+      if (Array.isArray(parsed)) list = parsed
+    } catch {
+      list = []
+    }
+  } else if (Array.isArray(input)) {
+    list = input
+  }
+  const picked = new Set(list.map((id) => String(id)))
+  return solidBuiltinColors()
+    .map((c) => c.id)
+    .filter((id) => picked.has(id))
+}
+
+/**
+ * A basic color is offered only when some admin has it.
+ * An empty stock list means nobody has saved colors yet, so every basic color stays available.
+ * Custom slots are not part of that list.
+ */
+export function isOfferedFilament(colorId: string, stockIds: string[]): boolean {
+  if (!stockIds.length) return true
+  const basic = solidBuiltinColors().some((c) => c.id === colorId)
+  if (!basic) return true
+  return stockIds.includes(colorId)
 }
 
 export const CUSTOM_COLOR_SLOT_COUNT = 5

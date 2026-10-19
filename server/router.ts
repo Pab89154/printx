@@ -2305,6 +2305,31 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
     return true
   }
 
+  if (urlPath === '/api/admin/settings/filament-colors' && method === 'GET') {
+    const { filamentStock } = await import('./catalog.ts')
+    const { parseOwnedColorIds, solidBuiltinColors } = await import('../shared/colors.ts')
+    const row = await db.get<{ owned_color_ids: string | null }>(
+      `SELECT owned_color_ids FROM users WHERE id = ?`,
+      admin.id,
+    )
+    send(res, 200, {
+      mine: parseOwnedColorIds(row?.owned_color_ids),
+      inStock: await filamentStock(db),
+      colors: solidBuiltinColors().map((c) => ({ id: c.id, name: c.name, hex: c.hex })),
+    })
+    return true
+  }
+
+  if (urlPath === '/api/admin/settings/filament-colors' && method === 'PATCH') {
+    const { filamentStock } = await import('./catalog.ts')
+    const { parseOwnedColorIds } = await import('../shared/colors.ts')
+    const body = await readJson(req)
+    const mine = parseOwnedColorIds(body.colorIds)
+    await db.run(`UPDATE users SET owned_color_ids = ? WHERE id = ?`, JSON.stringify(mine), admin.id)
+    send(res, 200, { mine, inStock: await filamentStock(db) })
+    return true
+  }
+
   if (urlPath === '/api/admin/settings/cloud-slicer' && method === 'GET') {
     const { maskCloudSlicerToken } = await import('./cloudSlicer.ts')
     const { seedCatalogDefaults, listPrinters } = await import('./catalog.ts')

@@ -25,7 +25,6 @@ import { AdminStands } from './admin/AdminStands'
 import { AdminDesigns } from './admin/AdminDesigns'
 import { AdminApprovals } from './admin/AdminApprovals'
 import { AdminOrders } from './admin/AdminOrders'
-import { AdminCashSale } from './admin/AdminCashSale'
 import { AdminMoney } from './admin/AdminMoney'
 import { AdminRequests } from './admin/AdminRequests'
 import { AdminMessages } from './admin/AdminMessages'
@@ -72,7 +71,6 @@ function PortalRoutes() {
           <Route path="designs" element={<AdminDesigns />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
-          <Route path="cash-sale" element={<AdminCashSale />} />
           <Route path="discounts" element={<AdminDiscounts />} />
           <Route path="money" element={<AdminMoney />} />
           <Route path="requests" element={<AdminRequests />} />
@@ -117,7 +115,6 @@ function PublicRoutes() {
           <Route path="designs" element={<AdminDesigns />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="orders" element={<AdminOrders />} />
-          <Route path="cash-sale" element={<AdminCashSale />} />
           <Route path="discounts" element={<AdminDiscounts />} />
           <Route path="money" element={<AdminMoney />} />
           <Route path="requests" element={<AdminRequests />} />
