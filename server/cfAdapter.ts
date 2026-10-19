@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handleApi } from './router.ts'
 import { ensureDbReady } from './db.ts'
 import { usingPostgres } from './dbClient.ts'
+import { isPortalHostname, portalizeSocialHtml } from './socialMeta.ts'
 
 export type WorkerEnv = {
   DATABASE_URL?: string
@@ -305,11 +306,11 @@ export async function handleWorkerFetch(request: Request, env: WorkerEnv): Promi
     // Missing hashed bundles must stay 404 (not index.html) — iOS home-screen apps
     // often keep a stale index that points at deleted /assets/index-*.js.
     if (assetRes.status !== 404) {
-      return withPwaCacheHeaders(pathname, assetRes)
+      return withSocialMeta(url, pathname, assetRes)
     }
     if (request.method === 'GET' && shouldSpaFallback(pathname)) {
       const indexRes = await env.ASSETS.fetch(new URL('/index.html', url.origin))
-      return withPwaCacheHeaders('/index.html', indexRes)
+      return withSocialMeta(url, '/index.html', indexRes)
     }
     return assetRes
   }
@@ -331,6 +332,28 @@ function shouldSpaFallback(pathname: string): boolean {
   // Real files (icons, spell dicts, etc.) — never rewrite to HTML.
   if (/\.[a-zA-Z0-9]{1,12}$/.test(pathname)) return false
   return true
+}
+
+/**
+ * The portal serves the same SPA as the shop but needs its own link
+ * preview (see socialMeta.ts). Crawlers don't run JS, so rewrite the
+ * served HTML for portal hosts; the public host is left untouched.
+ */
+async function withSocialMeta(url: URL, pathname: string, res: Response): Promise<Response> {
+  const fresh = withPwaCacheHeaders(pathname, res)
+  if (!isPortalHostname(url.hostname)) return fresh
+  if (!(fresh.headers.get('Content-Type') ?? '').includes('text/html')) return fresh
+  const html = await fresh.text()
+  const rewritten = portalizeSocialHtml(html, url.origin)
+  if (rewritten === html) return new Response(html, fresh)
+  const headers = new Headers(fresh.headers)
+  headers.delete('Content-Length')
+  headers.delete('ETag')
+  return new Response(rewritten, {
+    status: fresh.status,
+    statusText: fresh.statusText,
+    headers,
+  })
 }
 
 /** Keep HTML + SW fresh so installed iOS PWAs pick up new hashed bundles. */

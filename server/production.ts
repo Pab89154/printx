@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { usingPostgres } from './dbClient.ts'
 import { ensureDbReady } from './db.ts'
+import { isPortalHostname, portalizeSocialHtml } from './socialMeta.ts'
 import { handleApi, startArrivedOrderFlusher, startMailScheduleFlusher } from './router.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -66,7 +67,7 @@ function streamFile(filePath: string, res: ServerResponse, contentType: string) 
   stream.pipe(res)
 }
 
-async function serveStatic(urlPath: string, res: ServerResponse) {
+async function serveStatic(urlPath: string, res: ServerResponse, hostHeader?: string) {
   const safePath = urlPath.split('?')[0] ?? '/'
   let filePath = path.join(DIST, safePath === '/' ? 'index.html' : safePath)
 
@@ -76,11 +77,34 @@ async function serveStatic(urlPath: string, res: ServerResponse) {
     return
   }
 
+  // The portal host gets its own link-preview tags (see socialMeta.ts);
+  // index.html is small, so buffering it for the rewrite is fine.
+  const serveIndex = async (indexPath: string) => {
+    if (!isPortalHostname(hostHeader)) {
+      const stat = await fsPromises.stat(indexPath)
+      res.setHeader('Content-Length', String(stat.size))
+      streamFile(indexPath, res, 'text/html; charset=utf-8')
+      return
+    }
+    const host = (hostHeader ?? '').split(',')[0]?.trim() ?? ''
+    const proto = /localhost|127\.0\.0\.1/.test(host) ? 'http' : 'https'
+    const html = await fsPromises.readFile(indexPath, 'utf8')
+    const body = portalizeSocialHtml(html, `${proto}://${host}`)
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('Content-Length', String(Buffer.byteLength(body)))
+    res.end(body)
+  }
+
   try {
     let stat = await fsPromises.stat(filePath)
     if (stat.isDirectory()) {
       filePath = path.join(filePath, 'index.html')
       stat = await fsPromises.stat(filePath)
+    }
+    if (path.basename(filePath) === 'index.html') {
+      await serveIndex(filePath)
+      return
     }
     const ext = path.extname(filePath)
     res.setHeader('Content-Length', String(stat.size))
@@ -88,10 +112,7 @@ async function serveStatic(urlPath: string, res: ServerResponse) {
     streamFile(filePath, res, MIME[ext] ?? 'application/octet-stream')
   } catch {
     try {
-      const indexPath = path.join(DIST, 'index.html')
-      const stat = await fsPromises.stat(indexPath)
-      res.setHeader('Content-Length', String(stat.size))
-      streamFile(indexPath, res, 'text/html; charset=utf-8')
+      await serveIndex(path.join(DIST, 'index.html'))
     } catch {
       res.statusCode = 404
       res.end('Not found')
@@ -140,7 +161,7 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
-  await serveStatic(url, res)
+  await serveStatic(url, res, req.headers.host)
 })
 
 if (!fs.existsSync(DIST)) {
