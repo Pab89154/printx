@@ -31,6 +31,7 @@ import { AdminMessages } from './admin/AdminMessages'
 import { AdminMail } from './admin/AdminMail'
 import { AdminSettings } from './admin/AdminSettings'
 import { AdminSandbox } from './admin/AdminSandbox'
+import { ScrollToTop } from './components/ScrollToTop'
 import { BTN_POP_NAV_EVENT } from './lib/buttonPop'
 import { isPortalHost } from './lib/portal'
 
@@ -132,6 +133,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <ButtonPopNavBridge />
       <PublicDataProvider>
         <CartProvider>

@@ -6,11 +6,26 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   if (method !== 'GET' && method !== 'HEAD' && headers['Content-Type'] === undefined) {
     headers['Content-Type'] = 'application/json'
   }
-  const res = await fetch(url, {
-    credentials: 'include',
-    ...rest,
-    headers,
-  })
+  const doFetch = () =>
+    fetch(url, {
+      credentials: 'include',
+      ...rest,
+      headers,
+    })
+  let res: Response
+  try {
+    res = await doFetch()
+  } catch (err) {
+    // One quiet retry for reads — a stalled database connection on one
+    // server instance usually succeeds instantly on a fresh one.
+    if (method !== 'GET' && method !== 'HEAD') throw err
+    await new Promise((r) => setTimeout(r, 700))
+    res = await doFetch()
+  }
+  if (!res.ok && (method === 'GET' || method === 'HEAD') && res.status >= 500) {
+    await new Promise((r) => setTimeout(r, 700))
+    res = await doFetch()
+  }
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Request failed')
   return data as T
@@ -183,6 +198,7 @@ export const api = {
       ),
     cashCheckout: (body: {
       code: string
+      promoCode?: string
       customerName: string
       agreeToPay: boolean
       agreeToTerms: boolean
@@ -193,7 +209,14 @@ export const api = {
         filamentColorIds?: string[]
       }[]
     }) =>
-      request<{ orderId: string; totalUsd: number; code: string }>('/api/public/cash-checkout', {
+      request<{
+        orderId: string
+        totalUsd: number
+        subtotalUsd?: number
+        discountUsd?: number
+        promoCode?: string
+        code: string
+      }>('/api/public/cash-checkout', {
         method: 'POST',
         body: JSON.stringify(body),
       }),
@@ -271,6 +294,30 @@ export const api = {
           method: 'POST',
           body: JSON.stringify({ popular }),
         }),
+      setManualPhotos: (id: string, manualPhotos: boolean) =>
+        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/manual-photos`, {
+          method: 'POST',
+          body: JSON.stringify({ manualPhotos }),
+        }),
+      regenerateRealisticImage: (id: string, colorId?: string) =>
+        request<import('../types/catalog.ts').Design>(`/api/admin/designs/${id}/realistic-image`, {
+          method: 'POST',
+          body: JSON.stringify(colorId ? { colorId } : {}),
+        }),
+      uploadRealisticImage: (id: string, colorId: string, file: File) => {
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('colorId', colorId)
+        return fetch(`/api/admin/designs/${id}/realistic-image/upload`, {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        }).then(async (res) => {
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error ?? 'Upload failed')
+          return data as { ok: true; imageUrl: string }
+        })
+      },
       uploadStl: (file: File) => {
         const formData = new FormData()
         formData.append('file', file)
@@ -348,6 +395,85 @@ export const api = {
             sizeZMm?: number | null
           }
         })
+      },
+      /**
+       * Big STLs (40–100 MB): mint a file name, then send the file in 8 MB
+       * pieces. One giant streamed request kept dying mid-upload in the
+       * browser (a crashed/reset page); small pieces are quick, and a failed
+       * piece is retried on its own. The server stores the pieces and the
+       * model CDN serves them glued back together. Same result shape as
+       * uploadModel; dimensions/weight fill in when the design is quoted.
+       */
+      directUploadModel: async (
+        file: File,
+        onProgress?: (fraction: number) => void,
+      ) => {
+        const start = await request<{ fileName: string }>(
+          '/api/admin/designs/upload-model/direct-start',
+          { method: 'POST', body: JSON.stringify({ ext: '.stl' }) },
+        )
+        const fileName = start.fileName
+        const CHUNK_BYTES = 8 * 1024 * 1024
+        const chunkCount = Math.max(1, Math.ceil(file.size / CHUNK_BYTES))
+        for (let i = 0; i < chunkCount; i++) {
+          const piece = file.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES)
+          let sent = false
+          for (let attempt = 0; attempt < 3 && !sent; attempt++) {
+            try {
+              const res = await fetch(
+                `/upload/chunk/${encodeURIComponent(fileName)}/${i}`,
+                {
+                  method: 'PUT',
+                  body: piece,
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/octet-stream' },
+                },
+              )
+              const data = (await res.json().catch(() => ({}))) as { error?: string }
+              if (!res.ok) throw new Error(data.error ?? 'Upload piece failed')
+              sent = true
+            } catch {
+              if (attempt < 2) await new Promise((r) => setTimeout(r, 1200))
+            }
+          }
+          if (!sent) {
+            throw new Error(
+              `Upload stopped on piece ${i + 1} of ${chunkCount}. Check your connection and try again — nothing was saved yet.`,
+            )
+          }
+          onProgress?.((i + 1) / chunkCount)
+        }
+        const res = await fetch(
+          `/upload/direct/${encodeURIComponent(fileName)}/complete`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chunks: chunkCount }),
+          },
+        )
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string
+          stlPath?: string
+          hasStl?: boolean
+          modelExt?: string
+        }
+        if (!res.ok) throw new Error(data.error ?? 'Big-file upload failed')
+        if (!data.stlPath || !data.hasStl) {
+          throw new Error('Upload finished but the server did not confirm the file. Try again.')
+        }
+        return {
+          stlPath: data.stlPath,
+          hasStl: true,
+          modelExt: data.modelExt || '.stl',
+          sourceGcodePath: '',
+          grams: null,
+          hours: null,
+          fromGcode: false,
+          sizeXMm: null,
+          sizeYMm: null,
+          sizeZMm: null,
+        }
       },
       stlUrl: (id: string) => `/api/admin/designs/${id}/stl`,
       downloadModel: async (design: {

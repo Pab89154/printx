@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search } from 'lucide-react'
+import { Rotate3d, Search } from 'lucide-react'
 import { api } from '../lib/api'
 import { colorSwatchStyle, isMulticolorColorId, MULTICOLOR_COLOR } from '../../shared/colors'
 import type { CatalogColor, PublicCatalogDesign } from '../types/catalog'
@@ -25,12 +25,18 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
   const [previewColor, setPreviewColor] = useState<CatalogColor | undefined>(
     () => solidColors[0] ?? design.availableColors[0],
   )
+  // Show the generated photo for the color being previewed when it exists.
+  const cardPhoto =
+    (previewColor ? design.colorImages?.[previewColor.id] : '') || design.imageUrl || ''
 
   const multiParts = (design.parts ?? [])
     .map((p, i) => ({
       url: p.modelUrl || '',
-      // Cycle solids so the shop tile shows a distinct multi-part preview.
-      colorHex: solidColors[i % Math.max(solidColors.length, 1)]?.hex ?? '#94A3B8',
+      // Use the admin's first color for this part when set; otherwise cycle solids.
+      colorHex:
+        solidColors.find((c) => c.id === p.colorIds?.[0])?.hex ??
+        solidColors[i % Math.max(solidColors.length, 1)]?.hex ??
+        '#94A3B8',
     }))
     .filter((p) => p.url.trim())
   const useMultiPreview =
@@ -57,8 +63,20 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
       }}
     >
       <div className="group block">
-        <div className="relative aspect-square overflow-hidden bg-slate-100">
-          {useMultiPreview ? (
+        <div className="relative aspect-square overflow-hidden bg-white">
+          {cardPhoto ? (
+            <>
+              <img
+                src={cardPhoto}
+                alt={`${design.name} realistic preview`}
+                className="absolute inset-0 h-full w-full object-cover"
+                loading="lazy"
+              />
+              <span className="absolute left-3 top-3 rounded-full bg-navy/85 px-2.5 py-1 text-[11px] font-semibold text-white">
+                Real-life preview
+              </span>
+            </>
+          ) : useMultiPreview ? (
             <MultiStlViewer
               parts={multiParts}
               credentials="same-origin"
@@ -82,6 +100,12 @@ function ShopCard({ design }: { design: PublicCatalogDesign }) {
               {design.hasModel ? 'Preview needs .stl' : 'No 3D model'}
             </div>
           )}
+          {design.hasModel ? (
+            <span className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full bg-navy/85 px-2.5 py-1 text-[11px] font-semibold text-white">
+              <Rotate3d size={12} />
+              Click for 3D view
+            </span>
+          ) : null}
         </div>
         <div className="px-4 pt-4">
           <p className="font-semibold text-navy">

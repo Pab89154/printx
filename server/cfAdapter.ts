@@ -6,7 +6,7 @@ import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handleApi } from './router.ts'
 import { ensureDbReady } from './db.ts'
-import { usingPostgres } from './dbClient.ts'
+import { usingPostgres, runWithDbScope } from './dbClient.ts'
 import { isPortalHostname, portalizeSocialHtml } from './socialMeta.ts'
 import { GITHUB_MODEL_FILES } from '../shared/githubModels.ts'
 
@@ -24,6 +24,11 @@ export type WorkerEnv = {
   PRINTX_GITHUB_REF?: string
   STRIPE_SECRET_KEY?: string
   STRIPE_WEBHOOK_SECRET?: string
+  MAGIC_HOUR_API_KEY?: string
+  MAGIC_HOUR_IMAGE_MODEL?: string
+  MAGIC_HOUR_IMAGE_RESOLUTION?: string
+  MANUS_API_KEY?: string
+  MANUS_AGENT_PROFILE?: string
   RESEND_API_KEY?: string
   PRINTX_NOTIFY_EMAIL?: string
   PRINTX_MAIL_FROM?: string
@@ -55,6 +60,11 @@ export function applyWorkerEnv(env: WorkerEnv) {
     ['PRINTX_GITHUB_REF', 'PRINTX_GITHUB_REF'],
     ['STRIPE_SECRET_KEY', 'STRIPE_SECRET_KEY'],
     ['STRIPE_WEBHOOK_SECRET', 'STRIPE_WEBHOOK_SECRET'],
+    ['MAGIC_HOUR_API_KEY', 'MAGIC_HOUR_API_KEY'],
+    ['MAGIC_HOUR_IMAGE_MODEL', 'MAGIC_HOUR_IMAGE_MODEL'],
+    ['MAGIC_HOUR_IMAGE_RESOLUTION', 'MAGIC_HOUR_IMAGE_RESOLUTION'],
+    ['MANUS_API_KEY', 'MANUS_API_KEY'],
+    ['MANUS_AGENT_PROFILE', 'MANUS_AGENT_PROFILE'],
     ['RESEND_API_KEY', 'RESEND_API_KEY'],
     ['PRINTX_NOTIFY_EMAIL', 'PRINTX_NOTIFY_EMAIL'],
     ['PRINTX_MAIL_FROM', 'PRINTX_MAIL_FROM'],
@@ -102,7 +112,7 @@ async function ensureBootstrapped() {
       if (!usingPostgres()) {
         throw new Error('DATABASE_URL (or Hyperdrive) is required on Cloudflare Workers.')
       }
-      await withTimeout(ensureDbReady(), 12_000, 'Database bootstrap')
+      await withTimeout(ensureDbReady(), 25_000, 'Database bootstrap')
       bootstrapped = true
       if (!storageWarmPromise) {
         storageWarmPromise = (async () => {
@@ -261,14 +271,32 @@ async function serveModelCdn(
     if (hit) return hit
   }
 
+  // Stream (never buffer) from GitHub — a 90 MB model must not be held in
+  // Worker memory. STLs live in BOTH repo folders after the migration
+  // (legacy shop models in `models/`, everything uploaded since in
+  // `uploads/`, oversized ones on the big-files release), and the
+  // hard-coded GITHUB_MODEL_FILES set can drift out of sync with the DB,
+  // so try every folder for every file instead of gating on the set —
+  // the set only picks which folder is tried first. Within a folder,
+  // raw.githubusercontent.com goes first: it is GitHub's own CDN, sends
+  // Content-Length, and honours Range. rawcdn.githack.com (the old first
+  // choice for `models/`) ignores Range, answers chunked with no
+  // Content-Length, and stalls/throttles often enough that the shop's
+  // 3D preview sat on “Loading 3D…” forever on a cold edge cache while
+  // photos (which already used raw.githubusercontent.com first) loaded.
   let upstream: Response | null = null
-  if (GITHUB_MODEL_FILES.has(file)) {
-    const repo = (process.env.PRINTX_GITHUB_REPO || 'Pab89154/printx').trim()
-    const ref = (process.env.PRINTX_GITHUB_REF || 'main').trim() || 'main'
-    const sources = [
-      `https://rawcdn.githack.com/${repo}/${ref}/models/${encodeURIComponent(file)}`,
-      `https://raw.githubusercontent.com/${repo}/${ref}/models/${encodeURIComponent(file)}`,
-    ]
+  {
+    const repoName = (process.env.PRINTX_GITHUB_REPO || 'Pab89154/printx').trim()
+    const refName = (process.env.PRINTX_GITHUB_REF || 'main').trim() || 'main'
+    const { bigFilesReleaseDownloadUrl } = await import('./githubStorage.ts')
+    const encoded = encodeURIComponent(file)
+    const folders = GITHUB_MODEL_FILES.has(file) ? ['models', 'uploads'] : ['uploads', 'models']
+    const sources: string[] = []
+    for (const folder of folders) {
+      sources.push(`https://raw.githubusercontent.com/${repoName}/${refName}/${folder}/${encoded}`)
+      sources.push(`https://rawcdn.githack.com/${repoName}/${refName}/${folder}/${encoded}`)
+    }
+    sources.push(bigFilesReleaseDownloadUrl(file))
     for (const source of sources) {
       try {
         const res = await fetch(source, range ? { headers: { Range: range } } : undefined)
@@ -280,7 +308,163 @@ async function serveModelCdn(
         /* try the next source */
       }
     }
-  } else {
+    if (!upstream) {
+      const { signedStoredFileUrl } = await import('./objectStorage.ts')
+      const signed = await signedStoredFileUrl(file)
+      if (signed) {
+        const res = await fetch(signed, range ? { headers: { Range: range } } : undefined)
+        if (res.ok || res.status === 206) upstream = res
+      }
+    }
+  }
+  if (!upstream) {
+    // Chunked big files (uploaded as `<file>.chunk-000`, `-001`, … assets):
+    // stream the pieces back-to-back so the browser gets one whole model.
+    try {
+      const { listBigFilesAssets, bigFilesChunksFor, bigFilesReleaseDownloadUrl } =
+        await import('./githubStorage.ts')
+      const chunks = bigFilesChunksFor(file, await listBigFilesAssets())
+      if (chunks.length) {
+        const total = chunks.reduce((sum, c) => sum + c.size, 0)
+        let index = 0
+        // Fetch each piece whole (8 MB) and hand it over in one go. A
+        // long-lived reader over GitHub's redirect kept ending pieces
+        // early inside the Worker; whole-piece fetches can also be
+        // size-checked and retried, so a short read never corrupts
+        // the glued model.
+        const stream = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (index >= chunks.length) {
+              controller.close()
+              return
+            }
+            const chunk = chunks[index]!
+            index++
+            let bytes: Uint8Array | null = null
+            for (let attempt = 0; attempt < 3 && !bytes; attempt++) {
+              try {
+                const res = await fetch(bigFilesReleaseDownloadUrl(chunk.name))
+                if (!res.ok) throw new Error('piece failed')
+                const buf = new Uint8Array(await res.arrayBuffer())
+                if (chunk.size && buf.length !== chunk.size) throw new Error('short piece')
+                bytes = buf
+              } catch {
+                if (attempt === 2) throw new Error('Model piece failed to load.')
+              }
+            }
+            controller.enqueue(bytes!)
+          },
+        })
+        const chunkHeaders = new Headers()
+        chunkHeaders.set('Content-Type', 'model/stl')
+        chunkHeaders.set('Access-Control-Allow-Origin', '*')
+        chunkHeaders.set('Cross-Origin-Resource-Policy', 'cross-origin')
+        chunkHeaders.set('Cache-Control', 'public, max-age=31536000, immutable')
+        if (total) chunkHeaders.set('Content-Length', String(total))
+        return new Response(stream, { status: 200, headers: chunkHeaders })
+      }
+    } catch {
+      /* fall through to the 404 */
+    }
+    return Response.json({ error: 'Model not found' }, { status: 404 })
+  }
+
+  const headers = new Headers()
+  headers.set('Content-Type', 'model/stl')
+  headers.set('Access-Control-Allow-Origin', '*')
+  headers.set('Cross-Origin-Resource-Policy', 'cross-origin')
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+  const length = upstream.headers.get('content-length')
+  if (length) headers.set('Content-Length', length)
+  const contentRange = upstream.headers.get('content-range')
+  if (contentRange) headers.set('Content-Range', contentRange)
+  const acceptRanges = upstream.headers.get('accept-ranges')
+  if (acceptRanges) headers.set('Accept-Ranges', acceptRanges)
+  const etag = upstream.headers.get('etag')
+  if (etag) headers.set('ETag', etag)
+
+  const response = new Response(upstream.body, { status: upstream.status, headers })
+  if (cache && !range && upstream.status === 200) {
+    const put = cache.put(cacheKey, response.clone()).catch(() => undefined)
+    if (waitUntil) waitUntil(put)
+    else void put
+  }
+  return response
+}
+
+const FILE_CONTENT_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  stl: 'model/stl',
+  gcode: 'text/plain; charset=utf-8',
+  '3mf': 'model/3mf',
+}
+
+/**
+ * Same-origin CDN for uploaded files (photos, images). Origin is the
+ * GitHub repo `uploads/` folder; Supabase Storage is only a fallback for
+ * stragglers that never moved. Edge-cached for a year so repeat views
+ * cost nothing — this replaces per-view signed Supabase URLs whose
+ * egress billing blew past quota.
+ */
+async function serveFileCdn(
+  request: Request,
+  url: URL,
+  waitUntil?: (p: Promise<unknown>) => void,
+): Promise<Response> {
+  const file = decodeURIComponent(url.pathname.slice('/cdn/files/'.length))
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(file) || file.includes('..')) {
+    return Response.json({ error: 'File not found' }, { status: 404 })
+  }
+  const ext = file.split('.').pop()?.toLowerCase() || ''
+  if (!FILE_CONTENT_TYPES[ext]) {
+    return Response.json({ error: 'File not found' }, { status: 404 })
+  }
+
+  type CacheStorageWithDefault = CacheStorage & { default?: Cache }
+  const cache = (globalThis as { caches?: CacheStorageWithDefault }).caches?.default
+  const cacheKey = new Request(`${url.origin}/cdn/files/${encodeURIComponent(file)}`)
+  const range = request.headers.get('range')
+  if (cache && !range) {
+    const hit = await cache.match(cacheKey)
+    if (hit) return hit
+  }
+
+  const repo = (process.env.PRINTX_GITHUB_REPO || 'Pab89154/printx').trim()
+  const ref = (process.env.PRINTX_GITHUB_REF || 'main').trim() || 'main'
+  const encoded = encodeURIComponent(file)
+  let upstream: Response | null = null
+  for (const source of [
+    `https://raw.githubusercontent.com/${repo}/${ref}/uploads/${encoded}`,
+    `https://rawcdn.githack.com/${repo}/${ref}/uploads/${encoded}`,
+  ]) {
+    try {
+      const res = await fetch(source, range ? { headers: { Range: range } } : undefined)
+      if (res.ok || res.status === 206) {
+        upstream = res
+        break
+      }
+    } catch {
+      /* try the next source */
+    }
+  }
+  if (!upstream) {
+    // Oversized models live on the "printx-files" release, not in the repo.
+    const { bigFilesReleaseDownloadUrl } = await import('./githubStorage.ts')
+    try {
+      const res = await fetch(
+        bigFilesReleaseDownloadUrl(file),
+        range ? { headers: { Range: range } } : undefined,
+      )
+      if (res.ok || res.status === 206) upstream = res
+    } catch {
+      /* not a big-file asset */
+    }
+  }
+  if (!upstream) {
     const { signedStoredFileUrl } = await import('./objectStorage.ts')
     const signed = await signedStoredFileUrl(file)
     if (signed) {
@@ -289,11 +473,11 @@ async function serveModelCdn(
     }
   }
   if (!upstream) {
-    return Response.json({ error: 'Model not found' }, { status: 404 })
+    return Response.json({ error: 'File not found' }, { status: 404 })
   }
 
   const headers = new Headers()
-  headers.set('Content-Type', 'model/stl')
+  headers.set('Content-Type', FILE_CONTENT_TYPES[ext])
   headers.set('Access-Control-Allow-Origin', '*')
   headers.set('Cross-Origin-Resource-Policy', 'cross-origin')
   headers.set('Cache-Control', 'public, max-age=31536000, immutable')
@@ -313,6 +497,169 @@ async function serveModelCdn(
   return response
 }
 
+/**
+ * Streaming upload for oversized models (40–100 MB). The browser PUTs the
+ * raw file here and the Worker pipes it straight into a GitHub release
+ * asset — the bytes are never buffered, so Worker memory stays flat no
+ * matter the size (buffering a 90 MB body is what used to kill uploads).
+ * Auth mirrors the admin API (session cookie + Designs permission).
+ */
+/** Shared auth for the big-model upload endpoints (admin + Designs permission). */
+async function authorizeBigUpload(request: Request): Promise<Response | null> {
+  await ensureBootstrapped()
+  const { getSessionUser, parseCookies, adminCan } = await import('./auth.ts')
+  const cookies = parseCookies(request.headers.get('cookie') || undefined)
+  const admin = await getSessionUser(cookies['printx_session'] ?? null)
+  if (!admin || admin.role !== 'admin') {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!adminCan(admin, 'products')) {
+    return Response.json({ error: 'Forbidden' }, { status: 403 })
+  }
+  return null
+}
+
+const BIG_UPLOAD_NAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.stl$/i
+const CHUNK_MAX_BYTES = 12 * 1024 * 1024
+
+/**
+ * One slice of a chunked big-model upload. A single streamed 90 MB request
+ * kept dying in browsers (connection resets mid-upload read as a crashed
+ * page), so the client sends 8 MB pieces instead — each is a small, quick,
+ * retryable request that this handler stores as a release asset named
+ * `<file>.chunk-NNN`. `/cdn/models` glues the pieces back together.
+ */
+async function handleChunkUpload(request: Request, pathname: string): Promise<Response> {
+  const rest = decodeURIComponent(pathname.slice('/upload/chunk/'.length))
+  const slash = rest.lastIndexOf('/')
+  const fileName = slash > 0 ? rest.slice(0, slash) : ''
+  const index = Number(slash > 0 ? rest.slice(slash + 1) : '')
+  if (!BIG_UPLOAD_NAME_RE.test(fileName) || !Number.isInteger(index) || index < 0 || index > 999) {
+    return Response.json({ error: 'Invalid upload piece.' }, { status: 400 })
+  }
+  const denied = await authorizeBigUpload(request)
+  if (denied) return denied
+  const body = Buffer.from(await request.arrayBuffer())
+  if (!body.length) return Response.json({ error: 'That upload piece was empty.' }, { status: 400 })
+  if (body.length > CHUNK_MAX_BYTES) {
+    return Response.json({ error: 'That upload piece is too big.' }, { status: 413 })
+  }
+  const { uploadBigFilesAsset } = await import('./githubStorage.ts')
+  const chunkName = `${fileName}.chunk-${String(index).padStart(3, '0')}`
+  await uploadBigFilesAsset(chunkName, body)
+  return Response.json({ ok: true, chunk: chunkName })
+}
+
+/** Verify every chunk arrived, then hand back the usual upload result. */
+async function handleChunkComplete(request: Request, pathname: string): Promise<Response> {
+  const fileName = decodeURIComponent(
+    pathname.slice('/upload/direct/'.length).replace(/\/complete$/, ''),
+  )
+  if (!BIG_UPLOAD_NAME_RE.test(fileName)) {
+    return Response.json({ error: 'Invalid file name.' }, { status: 400 })
+  }
+  const denied = await authorizeBigUpload(request)
+  if (denied) return denied
+  const body = (await request.json().catch(() => ({}))) as { chunks?: number }
+  const expected = Number(body.chunks) || 0
+  if (expected < 1 || expected > 1000) {
+    return Response.json({ error: 'Missing upload piece count.' }, { status: 400 })
+  }
+  const { listBigFilesAssets, bigFilesChunksFor } = await import('./githubStorage.ts')
+  const present = bigFilesChunksFor(fileName, await listBigFilesAssets())
+  if (present.length < expected) {
+    return Response.json(
+      { error: `Only ${present.length} of ${expected} pieces arrived — please try the upload again.` },
+      { status: 400 },
+    )
+  }
+  return Response.json({ ok: true, stlPath: fileName, hasStl: true, modelExt: '.stl' })
+}
+
+async function handleDirectUpload(request: Request, pathname: string): Promise<Response> {
+  const fileName = decodeURIComponent(pathname.slice('/upload/direct/'.length))
+  if (!BIG_UPLOAD_NAME_RE.test(fileName)) {
+    return Response.json({ error: 'Invalid file name.' }, { status: 400 })
+  }
+  if (!request.body) {
+    return Response.json({ error: 'File is required.' }, { status: 400 })
+  }
+  const denied = await authorizeBigUpload(request)
+  if (denied) return denied
+
+  const repo = (process.env.PRINTX_GITHUB_REPO || 'Pab89154/printx').trim() || 'Pab89154/printx'
+  const token = (process.env.PRINTX_GITHUB_TOKEN || '').trim()
+  if (!token) {
+    return Response.json({ error: 'Big-file storage is not configured.' }, { status: 500 })
+  }
+  const ghHeaders: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'printx-worker',
+    'Content-Type': 'application/json',
+  }
+  const { BIG_FILES_RELEASE_TAG } = await import('./githubStorage.ts')
+
+  // Find (or create) the big-files release.
+  let releaseId: number | null = null
+  const relRes = await fetch(
+    `https://api.github.com/repos/${repo}/releases/tags/${BIG_FILES_RELEASE_TAG}`,
+    { headers: ghHeaders },
+  )
+  if (relRes.ok) {
+    releaseId = Number(((await relRes.json()) as { id?: number }).id) || null
+  } else if (relRes.status === 404) {
+    const createRes = await fetch(`https://api.github.com/repos/${repo}/releases`, {
+      method: 'POST',
+      headers: ghHeaders,
+      body: JSON.stringify({
+        tag_name: BIG_FILES_RELEASE_TAG,
+        name: 'PrintX big files',
+        body: 'Oversized model files uploaded from the PrintX admin portal.',
+      }),
+    })
+    if (createRes.ok) {
+      releaseId = Number(((await createRes.json()) as { id?: number }).id) || null
+    }
+  }
+  if (!releaseId) {
+    return Response.json({ error: 'Could not prepare big-file storage.' }, { status: 502 })
+  }
+
+  // Stream the browser's bytes straight to GitHub — never buffered here.
+  const uploadRes = await fetch(
+    `https://uploads.github.com/repos/${repo}/releases/${releaseId}/assets?name=${encodeURIComponent(fileName)}`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'printx-worker',
+        'Content-Type': 'application/octet-stream',
+        ...(request.headers.get('content-length')
+          ? { 'Content-Length': request.headers.get('content-length')! }
+          : {}),
+      },
+      body: request.body,
+      // Workers require this to send a streamed request body.
+      ...({ duplex: 'half' } as Record<string, string>),
+    },
+  )
+  if (!uploadRes.ok) {
+    let detail = `${uploadRes.status}`
+    try {
+      const data = (await uploadRes.json()) as { message?: string }
+      if (data.message) detail = data.message
+    } catch {
+      /* keep status */
+    }
+    return Response.json({ error: `Big-file upload failed: ${detail}` }, { status: 502 })
+  }
+  return Response.json({ ok: true, stlPath: fileName, hasStl: true, modelExt: '.stl' })
+}
+
 export async function handleWorkerFetch(
   request: Request,
   env: WorkerEnv,
@@ -321,6 +668,55 @@ export async function handleWorkerFetch(
   applyWorkerEnv(env)
   const url = new URL(request.url)
   const pathname = url.pathname
+
+  if (pathname.startsWith('/upload/chunk/') && request.method === 'PUT') {
+    try {
+      return await handleChunkUpload(request, pathname)
+    } catch (err) {
+      console.error('[chunk-upload]', err)
+      return Response.json(
+        { error: err instanceof Error ? err.message : 'Upload piece failed' },
+        { status: 500 },
+      )
+    }
+  }
+
+  if (
+    pathname.startsWith('/upload/direct/') &&
+    pathname.endsWith('/complete') &&
+    request.method === 'POST'
+  ) {
+    try {
+      return await handleChunkComplete(request, pathname)
+    } catch (err) {
+      console.error('[chunk-complete]', err)
+      return Response.json(
+        { error: err instanceof Error ? err.message : 'Could not finish the upload' },
+        { status: 500 },
+      )
+    }
+  }
+
+  if (pathname.startsWith('/upload/direct/') && request.method === 'PUT') {
+    try {
+      return await handleDirectUpload(request, pathname)
+    } catch (err) {
+      console.error('[direct-upload]', err)
+      return Response.json(
+        { error: err instanceof Error ? err.message : 'Big-file upload failed' },
+        { status: 500 },
+      )
+    }
+  }
+
+  if (pathname.startsWith('/cdn/files/') && request.method === 'GET') {
+    try {
+      return await serveFileCdn(request, url, ctx?.waitUntil?.bind(ctx))
+    } catch (err) {
+      console.error('[cdn-files]', err)
+      return Response.json({ error: 'File failed to load' }, { status: 502 })
+    }
+  }
 
   if (pathname.startsWith('/cdn/models/') && request.method === 'GET') {
     try {
@@ -332,7 +728,18 @@ export async function handleWorkerFetch(
   }
 
   if (pathname === '/api/health' && request.method === 'GET') {
-    return Response.json({ ok: true, runtime: 'cloudflare-worker' })
+    return Response.json({
+      ok: true,
+      runtime: 'cloudflare-worker',
+      magicHourConfigured: Boolean(env.MAGIC_HOUR_API_KEY?.trim()),
+      manusConfigured: Boolean(env.MANUS_API_KEY?.trim()),
+      imageProvider: env.MANUS_API_KEY?.trim()
+        ? 'manus'
+        : env.MAGIC_HOUR_API_KEY?.trim()
+          ? 'magic-hour'
+          : 'none',
+      githubStorageConfigured: Boolean(env.PRINTX_GITHUB_TOKEN?.trim()),
+    })
   }
 
   // Unauthenticated session probe — skip DB bootstrap so the portal never sits on
@@ -344,7 +751,50 @@ export async function handleWorkerFetch(
     }
   }
 
+  // Public photos never need the database — bounce straight to the file
+  // CDN before the bootstrap gate. A page with 40 thumbnails used to mean
+  // 40 DB bootstraps; that storm starved auth/orders/uploads.
+  if (pathname.startsWith('/api/public/uploads/') && request.method === 'GET') {
+    const file = decodeURIComponent(pathname.slice('/api/public/uploads/'.length))
+    if (/^[\w-]+\.(jpe?g|png|webp|gif)$/i.test(file)) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `/cdn/files/${encodeURIComponent(file)}`,
+          'Cache-Control': 'public, max-age=300',
+        },
+      })
+    }
+    return Response.json({ error: 'Invalid file name' }, { status: 400 })
+  }
+
   if (pathname.startsWith('/api/')) {
+    // Oversized uploads used to flood Worker memory (the whole body is
+    // buffered before parsing) and kill the connection mid-upload — the
+    // browser saw a dead/crashed page instead of an error. Refuse them
+    // up front from the Content-Length header, before reading a byte.
+    const contentLength = Number(request.headers.get('content-length') || 0)
+    if (request.method === 'POST' && contentLength > 56 * 1024 * 1024) {
+      return Response.json(
+        {
+          error: `That file is too big (about ${Math.round(contentLength / 1048576)} MB). The biggest model we can take is 50 MB — in your design app, look for “decimate” or “reduce mesh” to shrink it, then try again.`,
+        },
+        { status: 413 },
+      )
+    }
+    // Edge-cache the two hot public GETs for 30s: a shop-page burst then
+    // costs ONE database visit instead of one per visitor per instance.
+    type CacheStorageWithDefault = CacheStorage & { default?: Cache }
+    const edgeCache = (globalThis as { caches?: CacheStorageWithDefault }).caches?.default
+    const edgeCacheable =
+      request.method === 'GET' &&
+      (pathname === '/api/public/catalog' || pathname === '/api/public/bootstrap')
+    const edgeKey = new Request(`${url.origin}${pathname}`)
+    if (edgeCacheable && edgeCache) {
+      const hit = await edgeCache.match(edgeKey).catch(() => undefined)
+      if (hit) return hit
+    }
+
     try {
       await ensureBootstrapped()
       const ab = await request.arrayBuffer()
@@ -352,7 +802,11 @@ export async function handleWorkerFetch(
       const req = buildIncomingMessage(request, body)
       const { res, done } = buildServerResponse()
 
-      const handlerPromise = handleApi(req, res, pathname, request.method).then((handled) => {
+      // One DB connection for this whole request (see runWithDbScope) —
+      // ended when the handler settles, never shared across requests.
+      const handlerPromise = runWithDbScope(() =>
+        handleApi(req, res, pathname, request.method),
+      ).then((handled) => {
         if (!handled && !res.writableEnded) {
           res.statusCode = 404
           res.setHeader('Content-Type', 'application/json')
@@ -370,9 +824,9 @@ export async function handleWorkerFetch(
         (pathname.includes('/upload') ||
           pathname.endsWith('/quote-tick') ||
           (request.headers.get('content-type') || '').includes('multipart/form-data'))
-      const timeoutMs = isUpload ? 28_000 : 20_000
+      const timeoutMs = isUpload ? 35_000 : 30_000
       // Always settle — never leave the portal fetch hanging on a stuck stream.
-      return await Promise.race([
+      const response = await Promise.race([
         done,
         handlerPromise.then(() => done),
         new Promise<Response>((resolve) =>
@@ -382,6 +836,18 @@ export async function handleWorkerFetch(
           ),
         ),
       ])
+      if (edgeCacheable && edgeCache && response.status === 200) {
+        const headers = new Headers(response.headers)
+        headers.set('Cache-Control', 'public, max-age=30')
+        const stored = new Response(response.clone().body, {
+          status: response.status,
+          headers,
+        })
+        const put = edgeCache.put(edgeKey, stored).catch(() => undefined)
+        if (ctx?.waitUntil) ctx.waitUntil(put)
+        else void put
+      }
+      return response
     } catch (err) {
       console.error('[cf-worker]', err)
       return Response.json(

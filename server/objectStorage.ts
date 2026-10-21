@@ -9,6 +9,13 @@ import path from 'node:path'
 import type { ServerResponse } from 'node:http'
 import { getUploadsDir } from './db.ts'
 import { GITHUB_MODEL_FILES } from '../shared/githubModels.ts'
+import {
+  GITHUB_UPLOAD_MAX_BYTES,
+  downloadGithubUpload,
+  githubStorageConfigured,
+  uploadUploadToGithub,
+} from './githubStorage.ts'
+import { runInBackground } from './background.ts'
 
 const DEFAULT_BUCKET = 'printx-models'
 const FILE_SIZE_LIMIT = 50 * 1024 * 1024
@@ -205,11 +212,28 @@ export async function ensureModelBucket(): Promise<void> {
   await bucketReady
 }
 
-export async function uploadStoredFile(
-  localPath: string,
+/**
+ * Mirror a saved file to GitHub in the background. Uploads themselves use
+ * the fast, proven Supabase write — making the browser wait on a GitHub
+ * commit (the first attempt at this) made uploads crawl and die on
+ * school/home connections. Reads prefer GitHub, so once the mirror lands
+ * the file serves from GitHub + edge cache and Supabase egress stays ~0.
+ */
+function copyToGithubLater(fileName: string, body: Buffer): void {
+  if (!githubStorageConfigured() || body.length > GITHUB_UPLOAD_MAX_BYTES) return
+  runInBackground(`github-copy-${fileName}`, async () => {
+    await uploadUploadToGithub(fileName, body)
+    console.log(`[object-storage] mirrored to github uploads/${fileName} (${body.length} bytes)`)
+  })
+}
+
+/** Upload an in-memory file (generated images) to the same durable store as models. */
+export async function uploadStoredBuffer(
+  body: Buffer,
   fileName: string,
   _contentType?: string,
 ): Promise<void> {
+  if (!isSafeStoredFileName(fileName)) throw new Error('Invalid file name for storage.')
   if (!objectStorageConfigured()) {
     if (objectStorageRequired()) {
       throw new Error(
@@ -217,13 +241,14 @@ export async function uploadStoredFile(
           '(Project Settings → API → service_role / sb_secret_…) on the server and redeploy.',
       )
     }
+    const uploadsDir = await getUploadsDir()
+    await fsPromises.writeFile(path.join(uploadsDir, fileName), body)
+    copyToGithubLater(fileName, body)
     return
   }
-  if (!isSafeStoredFileName(fileName)) throw new Error('Invalid file name for storage.')
   assertKeyLooksValid()
   await ensureModelBucket()
 
-  const body = await fsPromises.readFile(localPath)
   const key = objectKey(fileName)
   const bucket = bucketName()
   // octet-stream avoids bucket MIME allow-list rejects for model/* types.
@@ -239,6 +264,81 @@ export async function uploadStoredFile(
     throw new Error(`Supabase Storage upload failed: ${await readStorageError(res)}`)
   }
   console.log(`[object-storage] uploaded ${bucket}/${key} (${body.length} bytes)`)
+  copyToGithubLater(fileName, body)
+}
+
+export async function uploadStoredFile(
+  localPath: string,
+  fileName: string,
+  contentType?: string,
+): Promise<void> {
+  if (!objectStorageConfigured()) {
+    if (objectStorageRequired()) {
+      throw new Error(
+        'Supabase Storage is not configured. Set SUPABASE_SERVICE_ROLE_KEY ' +
+          '(Project Settings → API → service_role / sb_secret_…) on the server and redeploy.',
+      )
+    }
+    return
+  }
+  const body = await fsPromises.readFile(localPath)
+  await uploadStoredBuffer(body, fileName, contentType)
+}
+
+/** Read a stored file fully into memory (models for rendering, generated files). */
+export async function readStoredFileBuffer(fileName: string): Promise<Buffer | null> {
+  if (!isSafeStoredFileName(fileName)) return null
+  const repoCopy = path.join(process.cwd(), 'models', fileName)
+  try {
+    if (fs.existsSync(repoCopy)) {
+      const buf = await fsPromises.readFile(repoCopy)
+      if (buf.length) return buf
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const uploadsDir = await getUploadsDir()
+    const localPath = path.join(uploadsDir, fileName)
+    if (fs.existsSync(localPath)) {
+      const buf = await fsPromises.readFile(localPath)
+      if (buf.length) return buf
+    }
+  } catch {
+    /* fall through */
+  }
+  const stored = await downloadStoredFile(fileName).catch(() => null)
+  if (stored?.length) return stored
+  if (GITHUB_MODEL_FILES.has(fileName)) {
+    const repo = (process.env.PRINTX_GITHUB_REPO || 'Pab89154/printx').trim()
+    const ref = (process.env.PRINTX_GITHUB_REF || 'main').trim() || 'main'
+    for (const source of [
+      // GitHub's own CDN first (Content-Length + Range); githack is a
+      // throttled third-party mirror and only a last resort.
+      `https://raw.githubusercontent.com/${repo}/${ref}/models/${encodeURIComponent(fileName)}`,
+      `https://rawcdn.githack.com/${repo}/${ref}/models/${encodeURIComponent(fileName)}`,
+    ]) {
+      try {
+        const res = await fetch(source)
+        if (res.ok) {
+          const buf = Buffer.from(await res.arrayBuffer())
+          if (buf.length) return buf
+        }
+      } catch {
+        /* try the next source */
+      }
+    }
+  }
+  const resolved = await resolveStoredFile(fileName).catch(() => null)
+  if (!resolved) return null
+  try {
+    const buf = await fsPromises.readFile(resolved.path)
+    return buf.length ? buf : null
+  } catch {
+    return null
+  } finally {
+    resolved.cleanup?.()
+  }
 }
 
 /** Short-lived URL so the browser fetches the file from Storage, not through the Worker. */
@@ -275,7 +375,12 @@ export async function signedStoredFileUrl(
 }
 
 async function downloadStoredFile(fileName: string): Promise<Buffer | null> {
-  if (!objectStorageConfigured() || !isSafeStoredFileName(fileName)) return null
+  if (!isSafeStoredFileName(fileName)) return null
+  // GitHub first — everything was migrated there; Supabase is the fallback
+  // for the few oversized stragglers that never moved.
+  const fromGithub = await downloadGithubUpload(fileName).catch(() => null)
+  if (fromGithub?.length) return fromGithub
+  if (!objectStorageConfigured()) return null
   const bucket = bucketName()
   const res = await storageFetch(`/object/${encodeURIComponent(bucket)}/${objectKey(fileName)}`, {
     method: 'GET',
@@ -362,6 +467,30 @@ export async function sendStoredFile(
     return true
   }
 
+  // On Workers, redirect to the streaming CDNs BEFORE touching local disk:
+  // the disk check resolves the uploads dir through the database, so every
+  // thumbnail on an admin page used to force a fresh DB connection. Forty
+  // photos at once exhausted the pool and uploads died in the crossfire.
+  if (onWorker && fileName.toLowerCase().endsWith('.stl')) {
+    res.statusCode = 302
+    res.setHeader('Location', githubModelUrl(fileName))
+    res.setHeader('Cache-Control', 'public, max-age=300')
+    res.end()
+    return true
+  }
+
+  // Everything else streams through /cdn/files (GitHub origin, edge-cached
+  // for a year) instead of a signed Supabase URL — Supabase egress billing
+  // is what blew past quota. /cdn/files itself falls back to Supabase for
+  // any straggler that never moved, so this is safe to always prefer.
+  if (onWorker) {
+    res.statusCode = 302
+    res.setHeader('Location', `/cdn/files/${encodeURIComponent(fileName)}`)
+    res.setHeader('Cache-Control', 'public, max-age=300')
+    res.end()
+    return true
+  }
+
   if (isSafeStoredFileName(fileName)) {
     try {
       const uploadsDir = await getUploadsDir()
@@ -383,16 +512,6 @@ export async function sendStoredFile(
     } catch {
       /* fall through to Storage */
     }
-  }
-
-  // STL previews go through the same-origin CDN, which streams outside the
-  // 20s API cap and edge-caches. Other files keep the signed Supabase redirect.
-  if (onWorker && fileName.toLowerCase().endsWith('.stl')) {
-    res.statusCode = 302
-    res.setHeader('Location', githubModelUrl(fileName))
-    res.setHeader('Cache-Control', 'public, max-age=300')
-    res.end()
-    return true
   }
 
   const signed = await signedStoredFileUrl(fileName)

@@ -9,6 +9,7 @@ export const PERMISSION_KEYS = [
   'stands',
   'products',
   'orders',
+  'discounts',
   'requests',
   'content',
   'sandbox',
@@ -29,6 +30,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   stands: 'Stands',
   products: 'Designs',
   orders: 'Orders (print queue)',
+  discounts: 'Discounts (promo codes)',
   requests: 'Custom Requests',
   content: 'Website Content (removed)',
   sandbox: 'Site sandbox',
@@ -47,6 +49,7 @@ export function defaultPermissions(): AdminPermissions {
     stands: true,
     products: true,
     orders: true,
+    discounts: true,
     requests: true,
     content: false,
     sandbox: true,
@@ -102,6 +105,10 @@ export function normalizePermissions(input: unknown): AdminPermissions {
   }
   // Predates `money` key — grant view access without a manual re-save.
   if (typeof raw.money !== 'boolean') base.money = true
+  // Predates `discounts` key — it used to be covered by Orders access,
+  // so keep existing admins able to use Discounts until the main admin
+  // explicitly turns it off for them.
+  if (typeof raw.discounts !== 'boolean') base.discounts = true
   // Regular admins never get manage_admins through stored JSON alone —
   // only the primary admin account grants it.
   base.manage_admins = false

@@ -28,10 +28,23 @@ export type DesignStatus = 'draft' | 'pending_review' | 'approved' | 'rejected' 
 
 export type SliceStatus = 'idle' | 'slicing' | 'ready' | 'error'
 
+export type RealisticImageStatus =
+  | 'idle'
+  | 'pending'
+  | 'rendering'
+  | 'processing'
+  | 'ready'
+  | 'error'
+
 /** One STL per color region for multicolor preview + per-part G-code slicing. */
 export type DesignPart = {
   label: string
   stlPath: string
+  /**
+   * Optional admin-set colors allowed for this part only.
+   * Empty means the customer may use any of the design's colors for this part.
+   */
+  colorIds: string[]
 }
 
 export type Design = {
@@ -41,6 +54,14 @@ export type Design = {
   description: string
   category: string
   imageUrl: string
+  /** AI realistic product photo generated from the STL (public uploads URL). */
+  realisticImageUrl: string
+  realisticImageStatus: RealisticImageStatus
+  realisticImageError: string
+  realisticImageProjectId: string
+  /** Signature of the model/colors used for the current realistic image job. */
+  realisticImageSource: string
+  realisticImageUpdatedAt: string | null
   stlPath: string
   hasStl: boolean
   modelExt?: string
@@ -63,6 +84,8 @@ export type Design = {
   mainColorId: string
   /** Admin marked this design popular, so it stays above designs sorted only by sales. */
   popular: boolean
+  /** Never spend paid image-API credits on this design — photos are uploaded manually. */
+  manualPhotos: boolean
   /** Distinct customers who bought it. Filled on list responses. */
   buyerCount?: number
   multicolorOnly: boolean
@@ -95,10 +118,18 @@ export function parsePartsJson(raw: unknown, slotCount: number): DesignPart[] {
   const slots = clampMulticolorSlotCount(slotCount)
   const out: DesignPart[] = []
   for (let i = 0; i < Math.min(slots, MULTICOLOR_SLOT_MAX); i++) {
-    const row = parsed[i] as { label?: unknown; stlPath?: unknown } | undefined
+    const row = parsed[i] as
+      | { label?: unknown; stlPath?: unknown; colorIds?: unknown; allowedColorIds?: unknown }
+      | undefined
     const label = String(row?.label ?? '').trim() || defaultMulticolorPartLabel(i)
     const stlPath = String(row?.stlPath ?? '').trim()
-    out.push({ label: label.slice(0, 40), stlPath })
+    const rawColorIds = Array.isArray(row?.colorIds)
+      ? row.colorIds
+      : Array.isArray(row?.allowedColorIds)
+        ? row.allowedColorIds
+        : []
+    const colorIds = [...new Set(rawColorIds.map((x) => String(x).trim()).filter(Boolean))].slice(0, 20)
+    out.push({ label: label.slice(0, 40), stlPath, colorIds })
   }
   return out
 }
@@ -173,6 +204,7 @@ export type Order = {
   cashRecordedBy: string | null
   cashRecordedByName: string
   classmateCode: string
+  promoCode: string
   agreementName: string
   agreementText: string
   agreementAt: string | null
@@ -210,6 +242,17 @@ export function rowToDesign(row: Record<string, unknown>): Design {
     description: (row.description as string) || '',
     category: (row.category as string) || 'General',
     imageUrl: resolveImageUrl((row.image_url as string) || ''),
+    realisticImageUrl: resolveImageUrl((row.realistic_image_url as string) || ''),
+    realisticImageStatus: ((): RealisticImageStatus => {
+      const s = String(row.realistic_image_status || 'idle')
+      return s === 'pending' || s === 'rendering' || s === 'processing' || s === 'ready' || s === 'error'
+        ? s
+        : 'idle'
+    })(),
+    realisticImageError: String(row.realistic_image_error || ''),
+    realisticImageProjectId: String(row.realistic_image_project_id || ''),
+    realisticImageSource: String(row.realistic_image_source || ''),
+    realisticImageUpdatedAt: (row.realistic_image_updated_at as string | null) ?? null,
     stlPath,
     hasStl: Boolean(stlPath.trim()),
     sliceStatus,
@@ -229,6 +272,7 @@ export function rowToDesign(row: Record<string, unknown>): Design {
     availableColorIds: Array.isArray(colors) ? colors : [],
     mainColorId: String(row.main_color_id || ''),
     popular: Boolean(Number(row.popular ?? 0)),
+    manualPhotos: Boolean(Number(row.manual_photos ?? 0)),
     multicolorOnly,
     multicolorSlotCount,
     parts,
@@ -280,6 +324,7 @@ export function rowToOrder(row: Record<string, unknown>): Order {
     cashRecordedByName:
       String(row.cash_recorded_by_name || row.cash_recorded_by_email || '').trim(),
     classmateCode: String(row.classmate_code || ''),
+    promoCode: String(row.promo_code || ''),
     agreementName: String(row.agreement_name || ''),
     agreementText: String(row.agreement_text || ''),
     agreementAt: (row.agreement_at as string | null) ?? null,
@@ -374,8 +419,14 @@ export async function applyAdminOwnedColors(
   )
   const mine = parseOwnedColorIds(row?.owned_color_ids)
   if (!mine.length) return false
-  const design = await database.get<{ available_color_ids: string | null }>(
-    `SELECT available_color_ids FROM designs WHERE id = ?`,
+  const design = await database.get<{
+    available_color_ids: string | null
+    main_color_id: string | null
+    parts_json: string | null
+    multicolor_slot_count: number | string | null
+  }>(
+    `SELECT available_color_ids, main_color_id, parts_json, multicolor_slot_count
+     FROM designs WHERE id = ?`,
     designId,
   )
   let existing: string[] = []
@@ -391,11 +442,14 @@ export async function applyAdminOwnedColors(
   for (const id of customs) {
     if (!next.includes(id)) next.push(id)
   }
-  const current = await database.get<{ main_color_id: string | null }>(
-    `SELECT main_color_id FROM designs WHERE id = ?`,
-    designId,
-  )
-  const main = String(current?.main_color_id || '')
+  // Keep colors an admin limited a specific part to, even on submit/publish.
+  const slotCount = clampMulticolorSlotCount(design?.multicolor_slot_count ?? undefined)
+  for (const part of parsePartsJson(design?.parts_json, slotCount)) {
+    for (const id of part.colorIds) {
+      if (!next.includes(id)) next.push(id)
+    }
+  }
+  const main = String(design?.main_color_id || '')
   const keepMain = main && next.includes(main) ? main : ''
   await database.run(
     `UPDATE designs SET available_color_ids = ?, main_color_id = ?, updated_at = ? WHERE id = ?`,

@@ -205,6 +205,12 @@ create table if not exists designs (
   description text not null default '',
   category text not null default 'General',
   image_url text not null default '',
+  realistic_image_url text not null default '',
+  realistic_image_status text not null default 'idle',
+  realistic_image_error text not null default '',
+  realistic_image_project_id text not null default '',
+  realistic_image_source text not null default '',
+  realistic_image_updated_at text,
   stl_path text not null default '',
   slice_status text not null default 'idle',
   slice_error text not null default '',
@@ -228,6 +234,19 @@ create table if not exists designs (
   pricing_inputs_json text not null default '{}',
   created_at text not null,
   updated_at text not null
+);
+
+-- One generated realistic photo per offered color (color_key = color id, or 'multicolor').
+create table if not exists design_realistic_images (
+  design_id text not null references designs(id) on delete cascade,
+  color_key text not null,
+  image_url text not null default '',
+  status text not null default 'pending',
+  error text not null default '',
+  project_id text not null default '',
+  source text not null default '',
+  updated_at text,
+  primary key (design_id, color_key)
 );
 
 create table if not exists orders (
@@ -261,6 +280,7 @@ create table if not exists orders (
   payment_method text not null default 'stripe',
   cash_recorded_by text,
   classmate_code text not null default '',
+  promo_code text not null default '',
   agreement_name text not null default '',
   agreement_text text not null default '',
   agreement_payment_checked integer not null default 0,
@@ -384,6 +404,8 @@ DECLARE
     'pricing_settings',
     'printers',
     'designs',
+    'design_realistic_images',
+    'model_bounds',
     'orders',
     'order_items',
     'profit_ledger',

@@ -328,10 +328,58 @@ async function migrateDesignMulticolorOnly(database: DbApi) {
   }
 }
 
+/** Magic Hour realistic product image generated from the design's STL render. */
+async function migrateDesignRealisticImage(database: DbApi) {
+  for (const [name, def] of [
+    ['realistic_image_url', `TEXT NOT NULL DEFAULT ''`],
+    ['realistic_image_status', `TEXT NOT NULL DEFAULT 'idle'`],
+    ['realistic_image_error', `TEXT NOT NULL DEFAULT ''`],
+    ['realistic_image_project_id', `TEXT NOT NULL DEFAULT ''`],
+    ['realistic_image_source', `TEXT NOT NULL DEFAULT ''`],
+    ['realistic_image_updated_at', `TEXT`],
+  ] as const) {
+    try {
+      await database.exec(`ALTER TABLE designs ADD COLUMN ${name} ${def}`)
+    } catch {
+      /* column already exists */
+    }
+  }
+}
+
+/** One generated realistic photo per offered color (color_key = color id, or 'multicolor'). */
+async function migrateDesignRealisticColorImages(database: DbApi) {
+  try {
+    await database.exec(
+      `CREATE TABLE IF NOT EXISTS design_realistic_images (
+        design_id TEXT NOT NULL,
+        color_key TEXT NOT NULL,
+        image_url TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        error TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        updated_at TEXT,
+        PRIMARY KEY (design_id, color_key)
+      )`,
+    )
+  } catch {
+    /* table already exists */
+  }
+}
+
 /** Admin can pin a design as popular so it stays at the top of the shop. */
 async function migrateDesignPopular(database: DbApi) {
   try {
     await database.exec(`ALTER TABLE designs ADD COLUMN popular INTEGER NOT NULL DEFAULT 0`)
+  } catch {
+    /* column already exists */
+  }
+}
+
+/** Designs whose photos must never be generated with the paid image API. */
+async function migrateDesignManualPhotos(database: DbApi) {
+  try {
+    await database.exec(`ALTER TABLE designs ADD COLUMN manual_photos INTEGER NOT NULL DEFAULT 0`)
   } catch {
     /* column already exists */
   }
@@ -439,6 +487,7 @@ async function migrateCashAndConsent(database: DbApi) {
     ['payment_method', `TEXT NOT NULL DEFAULT 'stripe'`],
     ['cash_recorded_by', `TEXT`],
     ['classmate_code', `TEXT NOT NULL DEFAULT ''`],
+    ['promo_code', `TEXT NOT NULL DEFAULT ''`],
     ['agreement_name', `TEXT NOT NULL DEFAULT ''`],
     ['agreement_text', `TEXT NOT NULL DEFAULT ''`],
     ['agreement_payment_checked', `INTEGER NOT NULL DEFAULT 0`],
@@ -1230,11 +1279,14 @@ async function runMigrationsAndSeed(database: DbApi): Promise<void> {
   await migrateDesignPartsJson(database)
   await migrateDesignSize(database)
   await migrateDesignMainColor(database)
+  await migrateDesignRealisticImage(database)
+  await migrateDesignRealisticColorImages(database)
   await migrateDesignPopular(database)
   await migrateOrderItemFilamentColors(database)
   await migrateCustomerAccounts(database)
   await migrateCashAndConsent(database)
   await migrateShippingToProfit(database)
+  await migrateDesignManualPhotos(database)
   await migrateRlsLockdown(database)
   await seed(database)
   await ensurePrimaryAdmin(database)
@@ -1250,16 +1302,34 @@ async function initDb(): Promise<DbApi> {
     process.env.PRINTX_REQUIRE_OBJECT_STORAGE === '1' ||
     typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined'
   if (onWorker) {
-    try {
-      await database.get('SELECT id FROM users LIMIT 1')
-      ready = true
-      void runMigrationsAndSeed(database).catch((err) => {
-        console.warn('[printx] background migrate failed', err)
-      })
-      return database
-    } catch {
-      /* fall through to synchronous migrate for empty/new DBs */
+    // Probe with retries. Only a genuinely empty/new database (users table
+    // missing) may fall through to the slow synchronous migration — a
+    // transient connect hiccup used to trigger that full migration inline
+    // and blow the bootstrap timeout, failing every request on the isolate.
+    let probeErr: unknown = null
+    let tableMissing = false
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await database.get('SELECT id FROM users LIMIT 1')
+        ready = true
+        // NO background migrate here: every cold isolate used to fire ~30
+        // migration routines (hundreds of queries) behind user traffic.
+        // Under a burst, dozens of isolates did this at once, exhausted
+        // the pool, and real requests (auth, orders, uploads) starved.
+        // Migrations now run only from the 5-minute cron (workers/printx.ts).
+        return database
+      } catch (err) {
+        probeErr = err
+        const msg = err instanceof Error ? err.message : String(err)
+        if (/does not exist|42P01/i.test(msg)) {
+          tableMissing = true
+          break
+        }
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)))
+      }
     }
+    if (!tableMissing && probeErr) throw probeErr
+    /* fall through to synchronous migrate for empty/new DBs */
   }
   await runMigrationsAndSeed(database)
   ready = true
@@ -1316,6 +1386,13 @@ export async function closeDb(): Promise<void> {
 
 export async function getDb(): Promise<DbApi> {
   return ensureDbReady()
+}
+
+/** Full migrate + seed. Cron-only on Workers — never run behind user requests. */
+export async function runDbMigrations(): Promise<void> {
+  const database = await getDbApi()
+  await runMigrationsAndSeed(database)
+  ready = true
 }
 
 export async function getUploadsDir(): Promise<string> {

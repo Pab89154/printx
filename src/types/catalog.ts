@@ -10,11 +10,21 @@ export type CatalogColor = {
 
 export type SliceStatus = 'idle' | 'slicing' | 'ready' | 'error'
 
+export type RealisticImageStatus =
+  | 'idle'
+  | 'pending'
+  | 'rendering'
+  | 'processing'
+  | 'ready'
+  | 'error'
+
 export type DesignPartDto = {
   label: string
   stlPath: string
   hasStl: boolean
   modelExt?: string
+  /** Admin-set colors allowed for this part only. Empty/absent = any design color. */
+  colorIds?: string[]
 }
 
 export type Design = {
@@ -24,6 +34,15 @@ export type Design = {
   description: string
   category: string
   imageUrl: string
+  /** AI realistic product photo generated from the STL. */
+  realisticImageUrl?: string
+  realisticImageStatus?: RealisticImageStatus
+  realisticImageError?: string
+  realisticImageProjectId?: string
+  realisticImageSource?: string
+  realisticImageUpdatedAt?: string | null
+  /** Generated photo state per offered color id ('multicolor' for multicolor prints). */
+  realisticColorImages?: { colorId: string; imageUrl: string; status: string }[]
   stlPath: string
   hasStl: boolean
   /** File extension of the stored model, e.g. `.stl` (from API; path itself is never sent). */
@@ -47,6 +66,8 @@ export type Design = {
   mainColorId?: string
   /** Admin pinned this design to the top of the shop. */
   popular?: boolean
+  /** Never spend paid image-API credits on this design — photos are manual only. */
+  manualPhotos?: boolean
   /** Distinct customers who bought it. */
   buyerCount?: number
   multicolorOnly: boolean
@@ -70,6 +91,8 @@ export type Design = {
 
 export type PublicCatalogPart = {
   label: string
+  /** Admin-set colors allowed for this part only. Empty/absent = any offered color. */
+  colorIds?: string[]
   modelUrl: string
 }
 
@@ -80,6 +103,7 @@ export type PublicCatalogDesign = {
   description: string
   category: string
   imageUrl: string
+  realisticImageStatus?: RealisticImageStatus
   hasModel?: boolean
   modelExt?: string
   /** Public URL for STL preview (approved designs only). */
@@ -95,6 +119,10 @@ export type PublicCatalogDesign = {
   /** Per-slot part STLs for multicolor tinted preview. */
   parts?: PublicCatalogPart[]
   availableColors: CatalogColor[]
+  /** Generated real-life photo per offered color id ('multicolor' for multicolor prints). */
+  colorImages?: Record<string, string>
+  /** Generation status per color id, e.g. pending/processing/ready/error. */
+  colorImageStatuses?: Record<string, string>
 }
 
 export type PricingSettingsDto = {
@@ -179,6 +207,7 @@ export type OrderDto = {
   cashRecordedBy?: string | null
   cashRecordedByName?: string
   classmateCode?: string
+  promoCode?: string
   agreementName?: string
   agreementText?: string
   agreementAt?: string | null

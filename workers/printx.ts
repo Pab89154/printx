@@ -1,7 +1,8 @@
 import { applyWorkerEnv, handleWorkerFetch, type WorkerEnv } from '../server/cfAdapter.ts'
 import { drainBackgroundTasks } from '../server/background.ts'
+import { runWithDbScope } from '../server/dbClient.ts'
 import { notifyPreviousMonthMoneySummary } from '../server/moneyNotify.ts'
-import { ensureDbReady, closeDb } from '../server/db.ts'
+import { ensureDbReady, runDbMigrations, closeDb } from '../server/db.ts'
 
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
@@ -18,10 +19,13 @@ export default {
   /** Cron: flush scheduled mail every 5 min; monthly money summary on the 1st. */
   async scheduled(event: ScheduledEvent, env: WorkerEnv, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
-      (async () => {
+      runWithDbScope(async () => {
         try {
           applyWorkerEnv(env)
           await ensureDbReady()
+          // Migrations live here (every 5 min, off the user path) — request
+          // isolates only probe, so bursts can't trigger migration storms.
+          await runDbMigrations()
           const { flushDueScheduledMail } = await import('../server/router.ts')
           const { getDb } = await import('../server/db.ts')
           const db = await getDb()
@@ -30,6 +34,12 @@ export default {
 
           const { resumeInterruptedDesignQuotes } = await import('../server/catalogApi.ts')
           await resumeInterruptedDesignQuotes()
+
+          const { processRealisticImageJobs } = await import('../server/realisticImages.ts')
+          const realistic = await processRealisticImageJobs(db, { maxStarts: 6 })
+          if (realistic.started || realistic.polled) {
+            console.log('[cron:realistic-image]', realistic)
+          }
 
           if (event.cron === '0 14 1 * *') {
             const result = await notifyPreviousMonthMoneySummary()
@@ -47,7 +57,7 @@ export default {
             /* ignore */
           }
         }
-      })(),
+      }),
     )
   },
 }

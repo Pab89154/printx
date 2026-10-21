@@ -38,7 +38,7 @@ const links: {
   { section: 'designs', label: 'Designs', icon: Printer3d as LucideIcon, perm: 'products' },
   { section: 'approvals', label: 'Approvals & Pricing', icon: ClipboardCheck, perm: 'main_only' },
   { section: 'orders', label: 'Orders', icon: ShoppingBag, perm: 'orders' },
-  { section: 'discounts', label: 'Discounts', icon: Tag, perm: 'orders' },
+  { section: 'discounts', label: 'Discounts', icon: Tag, perm: 'discounts' },
   { section: 'requests', label: 'Custom Requests', icon: Sparkles, perm: 'requests' },
   { section: 'settings', label: 'Settings', icon: Settings, perm: 'settings' },
 ]

@@ -7,7 +7,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { usingPostgres } from './dbClient.ts'
 import { ensureDbReady } from './db.ts'
 import { isPortalHostname, portalizeSocialHtml } from './socialMeta.ts'
-import { handleApi, startArrivedOrderFlusher, startMailScheduleFlusher } from './router.ts'
+import {
+  handleApi,
+  startArrivedOrderFlusher,
+  startMailScheduleFlusher,
+  startRealisticImageFlusher,
+} from './router.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -183,6 +188,7 @@ async function main() {
   await ensureModelBucket()
   startMailScheduleFlusher()
   startArrivedOrderFlusher()
+  startRealisticImageFlusher()
   // In-memory quote queue dies on deploy — pick up designs left mid-quote.
   void import('./catalogApi.ts').then(({ resumeInterruptedDesignQuotes }) =>
     resumeInterruptedDesignQuotes(),

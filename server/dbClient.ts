@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import pg from 'pg'
 
 export type QueryResult = { changes: number }
@@ -137,54 +138,147 @@ function createPostgresApi(activePool: pg.Pool, gen: number, getGeneration: () =
   }
 }
 
-/** Cloudflare Workers: pg.Pool idle sockets hang the isolate — use short-lived Clients. */
-function createPostgresClientApi(connectionString: string): DbApi {
-  async function withClient<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
-    const client = new pg.Client({
-      connectionString,
-      // Hyperdrive's local connection string is plaintext to the edge proxy.
-      ssl: connectionString.includes('localhost') || connectionString.includes('127.0.0.1')
-        ? undefined
-        : { rejectUnauthorized: false },
-      connectionTimeoutMillis: 10_000,
-    })
-    await client.connect()
-    try {
-      return await fn(client)
-    } finally {
+/**
+ * Request-scoped DB connection (AsyncLocalStorage).
+ *
+ * Cloudflare forbids using an I/O object created during one request in a
+ * different request ("Cannot perform I/O on behalf of a different
+ * request"), so a per-isolate shared client is illegal. But a fresh
+ * connection per query storms Hyperdrive/Supavisor when a page fires
+ * many requests at once — connects queue for 25s+ and everything starves.
+ *
+ * The middle path: ONE pg Client per request scope. cfAdapter wraps each
+ * API request in runWithDbScope(); cron wraps its whole run. All queries
+ * inside the scope share that client (pg serializes on the wire), the
+ * client is ended when the scope ends, and no socket ever crosses a
+ * request boundary. Outside any scope, falls back to per-query clients.
+ * Every query keeps an 8s hard timeout so a dead socket fails fast, and
+ * connection-ish errors drop the client — reads retry once on a fresh
+ * one, writes never auto-retry (they may already have landed).
+ */
+type DbScope = { client: pg.Client | null; connecting: Promise<pg.Client> | null }
+
+const dbScope = new AsyncLocalStorage<DbScope>()
+
+export async function runWithDbScope<T>(fn: () => Promise<T>): Promise<T> {
+  if (dbScope.getStore()) return fn()
+  const scope: DbScope = { client: null, connecting: null }
+  try {
+    return await dbScope.run(scope, fn)
+  } finally {
+    const current = scope.client
+    scope.client = null
+    scope.connecting = null
+    if (current) {
       try {
-        await client.end()
+        await current.end()
       } catch {
         /* ignore */
       }
     }
   }
+}
+
+const CONNECTION_ERROR =
+  /connection terminated|terminated unexpectedly|econnreset|etimedout|connection ended|socket hang up|query read timeout|timeout expired|client was closed|Cannot perform I\/O/i
+
+function createPostgresClientApi(connectionString: string): DbApi {
+  const ssl =
+    connectionString.includes('localhost') || connectionString.includes('127.0.0.1')
+      ? undefined
+      : { rejectUnauthorized: false }
+
+  function makeClient(): pg.Client {
+    return new pg.Client({
+      connectionString,
+      ssl,
+      connectionTimeoutMillis: 5_000,
+      query_timeout: 8_000,
+      statement_timeout: 8_000,
+      keepAlive: true,
+    })
+  }
+
+  async function scopeClient(scope: DbScope): Promise<pg.Client> {
+    if (scope.client) return scope.client
+    if (!scope.connecting) {
+      scope.connecting = (async () => {
+        const created = makeClient()
+        created.on('error', () => {
+          if (scope.client === created) scope.client = null
+        })
+        await created.connect()
+        scope.client = created
+        scope.connecting = null
+        return created
+      })().catch((err) => {
+        scope.connecting = null
+        throw err
+      })
+    }
+    return scope.connecting
+  }
+
+  function dropScopeClient(scope: DbScope) {
+    const current = scope.client
+    scope.client = null
+    if (current) {
+      void current.end().catch(() => undefined)
+    }
+  }
+
+  async function withClient<T>(fn: (c: pg.Client) => Promise<T>, retryable: boolean): Promise<T> {
+    const scope = dbScope.getStore()
+    if (!scope) {
+      // No request scope (bootstrap probe, stray background work): one-off client.
+      const created = makeClient()
+      await created.connect()
+      try {
+        return await fn(created)
+      } finally {
+        try {
+          await created.end()
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    try {
+      return await fn(await scopeClient(scope))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!CONNECTION_ERROR.test(msg)) throw err
+      dropScopeClient(scope)
+      if (!retryable) throw err
+      return fn(await scopeClient(scope))
+    }
+  }
 
   return {
     async exec(sql: string) {
-      await withClient(async (client) => {
+      await withClient(async (c) => {
         for (const statement of splitSqlStatements(sql)) {
-          await client.query(statement)
+          await c.query(statement)
         }
-      })
+      }, false)
     },
     async run(sql: string, ...params: unknown[]) {
-      return withClient(async (client) => {
-        const result = await client.query(toPgPlaceholders(sql), params)
+      return withClient(async (c) => {
+        const result = await c.query(toPgPlaceholders(sql), params)
         return { changes: result.rowCount ?? 0 }
-      })
+      }, false)
     },
     async get<T = Record<string, unknown>>(sql: string, ...params: unknown[]) {
-      return withClient(async (client) => {
-        const result = await client.query(toPgPlaceholders(sql), params)
+      return withClient(async (c) => {
+        const result = await c.query(toPgPlaceholders(sql), params)
         return result.rows[0] as T | undefined
-      })
+      }, true)
     },
     async all<T = Record<string, unknown>>(sql: string, ...params: unknown[]) {
-      return withClient(async (client) => {
-        const result = await client.query(toPgPlaceholders(sql), params)
+      return withClient(async (c) => {
+        const result = await c.query(toPgPlaceholders(sql), params)
         return result.rows as T[]
-      })
+      }, true)
     },
   }
 }

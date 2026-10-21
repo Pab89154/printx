@@ -15,6 +15,12 @@ type Props = {
   colorHex?: string
   /** When false, wait until the host is near the viewport before loading. */
   eager?: boolean
+  /**
+   * Skip the 3D parse (show a note instead) when the model file is bigger
+   * than this. Parsing a huge STL multiplies its size in memory and can
+   * crash low-memory devices (school Chromebooks) — the file stays saved.
+   */
+  maxBytes?: number
 }
 
 /** iOS Safari / home-screen web apps crash or error when too many WebGL contexts are open. */
@@ -102,6 +108,38 @@ function parseHex(hex: string | undefined, fallback: number): number {
   return Number.parseInt(h, 16)
 }
 
+/**
+ * Fetch an STL with a stall timeout and one retry. Models are served
+ * same-origin from /cdn/models, which streams them from GitHub on a cold
+ * edge cache; a stalled upstream used to leave “Loading 3D…” on screen
+ * forever because a plain fetch has no deadline.
+ */
+async function fetchStl(url: string, credentials: RequestCredentials): Promise<Response> {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 120_000)
+    try {
+      const res = await fetch(url, { credentials, signal: controller.signal })
+      if (res.status >= 500 && attempt === 0) {
+        try {
+          await res.body?.cancel()
+        } catch {
+          /* ignore */
+        }
+        continue
+      }
+      return res
+    } catch (err) {
+      lastError = err
+      if (attempt === 1) throw err
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Could not load model.')
+}
+
 function parseStlOffMain(loader: STLLoader, buffer: ArrayBuffer): Promise<THREE.BufferGeometry> {
   return new Promise((resolve, reject) => {
     // Yield so React can finish unmounts before a multi‑MB sync parse blocks the thread.
@@ -124,6 +162,7 @@ export function StlViewer({
   interactive = true,
   colorHex,
   eager = true,
+  maxBytes,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const materialRef = useRef<THREE.MeshStandardMaterial | null>(null)
@@ -166,7 +205,7 @@ export function StlViewer({
     if (!mat) return
     mat.color.setHex(parseHex(colorHex, 0x12b5d4))
     mat.needsUpdate = true
-    if (!interactive && renderer && scene && camera) {
+    if (renderer && scene && camera) {
       renderer.render(scene, camera)
     }
   }, [colorHex, interactive])
@@ -235,6 +274,15 @@ export function StlViewer({
 
       rendererRef.current = renderer
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, interactive ? 1.5 : 1))
+      // A lost graphics context used to leave a black box (or kill weak
+      // Chromebook GPUs outright) — surface a friendly note instead.
+      renderer.domElement.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault()
+        if (!cancelled) {
+          setLoading(false)
+          setError('3D preview stopped on this device — the model file itself is fine.')
+        }
+      })
       host.replaceChildren(renderer.domElement)
       renderer.domElement.style.display = 'block'
       renderer.domElement.style.width = '100%'
@@ -248,7 +296,12 @@ export function StlViewer({
 
       if (interactive) {
         controls = new OrbitControls(camera, renderer.domElement)
-        controls.enableDamping = true
+        // Draw only when the view actually changes. A perpetual render loop
+        // pegs weak GPUs (school Chromebooks) until the tab goes black.
+        controls.enableDamping = false
+        controls.addEventListener('change', () => {
+          if (!cancelled && renderer) renderer.render(scene, camera)
+        })
       }
 
       const syncSize = () => {
@@ -270,16 +323,11 @@ export function StlViewer({
       })
       ro.observe(host)
 
-      const tick = () => {
-        if (cancelled || !renderer) return
-        frame = requestAnimationFrame(tick)
-        controls?.update()
-        renderer.render(scene, camera)
-      }
-      if (interactive) tick()
+      // No perpetual render loop (see above) — initial/interaction/resize
+      // renders cover every visible change.
 
       try {
-        const res = await fetch(activeUrl, { credentials })
+        const res = await fetchStl(activeUrl, credentials)
         if (cancelled) return
         if (!res.ok) {
           throw new Error(
@@ -288,8 +336,27 @@ export function StlViewer({
               : `Could not load model (${res.status}).`,
           )
         }
+        // Bail before swallowing a giant file into memory: parsing a huge
+        // STL multiplies its size several times over and kills weak tabs.
+        const cap = maxBytes ?? 50 * 1024 * 1024
+        const declaredMb = Number(res.headers.get('content-length') || 0) / 1048576
+        if (declaredMb * 1048576 > cap) {
+          try {
+            await res.body?.cancel()
+          } catch {
+            /* ignore */
+          }
+          throw new Error(
+            `This model is ${declaredMb.toFixed(0)} MB — too big to preview safely on this device. The file itself is fine and will print normally.`,
+          )
+        }
         const buffer = await res.arrayBuffer()
         if (cancelled) return
+        if (buffer.byteLength > cap) {
+          throw new Error(
+            `This model is ${(buffer.byteLength / 1048576).toFixed(0)} MB — too big to preview safely on this device. The file itself is fine and will print normally.`,
+          )
+        }
 
         const geometry = await parseStlOffMain(loader, buffer)
         if (cancelled) {
@@ -297,7 +364,8 @@ export function StlViewer({
           return
         }
 
-        geometry.computeVertexNormals()
+        // STLLoader already supplies face normals — recomputing them just
+        // burns memory/CPU on big models.
         geometry.center()
         geometry.computeBoundingSphere()
 
@@ -417,6 +485,8 @@ type MultiProps = {
   credentials?: RequestCredentials
   interactive?: boolean
   eager?: boolean
+  /** Per-part version of StlViewer's maxBytes guard. */
+  maxBytes?: number
 }
 
 /** Multi-mesh STL preview — each part tinted with its slot color. */
@@ -427,6 +497,7 @@ export function MultiStlViewer({
   credentials = 'same-origin',
   interactive = true,
   eager = true,
+  maxBytes,
 }: MultiProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const materialsRef = useRef<THREE.MeshStandardMaterial[]>([])
@@ -472,7 +543,9 @@ export function MultiStlViewer({
         mat.needsUpdate = true
       }
     })
-    if (!interactive && renderer && scene && camera) {
+    // Repaint even for interactive viewers (which have no render loop),
+    // or a newly picked part color stays invisible until the model is dragged.
+    if (renderer && scene && camera) {
       renderer.render(scene, camera)
     }
   }, [colorsKey, interactive, parts])
@@ -541,6 +614,15 @@ export function MultiStlViewer({
 
       rendererRef.current = renderer
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, interactive ? 1.5 : 1))
+      // A lost graphics context used to leave a black box (or kill weak
+      // Chromebook GPUs outright) — surface a friendly note instead.
+      renderer.domElement.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault()
+        if (!cancelled) {
+          setLoading(false)
+          setError('3D preview stopped on this device — the model file itself is fine.')
+        }
+      })
       host.replaceChildren(renderer.domElement)
       renderer.domElement.style.display = 'block'
       renderer.domElement.style.width = '100%'
@@ -554,7 +636,12 @@ export function MultiStlViewer({
 
       if (interactive) {
         controls = new OrbitControls(camera, renderer.domElement)
-        controls.enableDamping = true
+        // Draw only when the view actually changes. A perpetual render loop
+        // pegs weak GPUs (school Chromebooks) until the tab goes black.
+        controls.enableDamping = false
+        controls.addEventListener('change', () => {
+          if (!cancelled && renderer) renderer.render(scene, camera)
+        })
       }
 
       const syncSize = () => {
@@ -576,37 +663,59 @@ export function MultiStlViewer({
       })
       ro.observe(host)
 
-      const tick = () => {
-        if (cancelled || !renderer) return
-        frame = requestAnimationFrame(tick)
-        controls?.update()
-        renderer.render(scene, camera)
-      }
-      if (interactive) tick()
+      // No perpetual render loop (see above) — initial/interaction/resize
+      // renders cover every visible change.
 
       try {
         const group = new THREE.Group()
         const mats: THREE.MeshStandardMaterial[] = []
 
+        // Fetch + parse every part in parallel — downloading them one
+        // after another multiplied the wait on cold-cache models.
+        const geometries = await Promise.all(
+          activeParts.map(async (part) => {
+            const res = await fetchStl(part.url, credentials)
+            if (!res.ok) {
+              throw new Error(
+                res.status === 404
+                  ? 'A part model is missing — re-upload the slot STLs.'
+                  : `Could not load model (${res.status}).`,
+              )
+            }
+            const cap = maxBytes ?? 50 * 1024 * 1024
+            const declaredMb = Number(res.headers.get('content-length') || 0) / 1048576
+            if (declaredMb * 1048576 > cap) {
+              try {
+                await res.body?.cancel()
+              } catch {
+                /* ignore */
+              }
+              throw new Error(
+                `A model part is ${declaredMb.toFixed(0)} MB — too big to preview safely on this device. The files themselves are fine and will print normally.`,
+              )
+            }
+            const buffer = await res.arrayBuffer()
+            if (buffer.byteLength > cap) {
+              throw new Error(
+                `A model part is ${(buffer.byteLength / 1048576).toFixed(0)} MB — too big to preview safely on this device. The files themselves are fine and will print normally.`,
+              )
+            }
+            return parseStlOffMain(loader, buffer)
+          }),
+        )
+        if (cancelled) {
+          for (const g of geometries) g.dispose()
+          return
+        }
+
         for (let i = 0; i < activeParts.length; i++) {
           const part = activeParts[i]!
-          const res = await fetch(part.url, { credentials })
-          if (cancelled) return
-          if (!res.ok) {
-            throw new Error(
-              res.status === 404
-                ? 'A part model is missing — re-upload the slot STLs.'
-                : `Could not load model (${res.status}).`,
-            )
-          }
-          const buffer = await res.arrayBuffer()
-          if (cancelled) return
-          const geometry = await parseStlOffMain(loader, buffer)
-          if (cancelled) {
-            geometry.dispose()
-            return
-          }
-          geometry.computeVertexNormals()
+          const geometry = geometries[i]!
+          // Part STLs carry slicer build-plate offsets (parts can sit
+          // hundreds of mm apart in file coordinates). Center each part on
+          // its own centroid — the row layout below positions them.
+          geometry.center()
+          geometry.computeBoundingBox()
           const material = new THREE.MeshStandardMaterial({
             color: parseHex(part.colorHex, 0x12b5d4),
             metalness: 0.08,
@@ -616,6 +725,25 @@ export function MultiStlViewer({
           const mesh = new THREE.Mesh(geometry, material)
           group.add(mesh)
           meshes.push(mesh)
+        }
+
+        // Lay the centered parts in a neat row with even gaps, so every
+        // multicolor preview is big and readable instead of tiny blobs
+        // scattered across an empty build plate.
+        if (meshes.length > 1) {
+          const sizes = meshes.map((m) => {
+            const s = new THREE.Vector3()
+            m.geometry.boundingBox?.getSize(s)
+            return s
+          })
+          const maxDim = Math.max(...sizes.map((s) => Math.max(s.x, s.y, s.z)), 1)
+          const gap = maxDim * 0.18
+          const totalWidth = sizes.reduce((sum, s) => sum + s.x, 0) + gap * (meshes.length - 1)
+          let cursor = -totalWidth / 2
+          meshes.forEach((m, i) => {
+            m.position.x = cursor + sizes[i]!.x / 2
+            cursor += sizes[i]!.x + gap
+          })
         }
 
         if (cancelled) {

@@ -30,6 +30,12 @@ create table if not exists designs (
   description text not null default '',
   category text not null default 'General',
   image_url text not null default '',
+  realistic_image_url text not null default '',
+  realistic_image_status text not null default 'idle',
+  realistic_image_error text not null default '',
+  realistic_image_project_id text not null default '',
+  realistic_image_source text not null default '',
+  realistic_image_updated_at text,
   stl_path text not null default '',
   slice_status text not null default 'idle',
   slice_error text not null default '',
@@ -64,6 +70,25 @@ alter table designs add column if not exists stl_path text not null default '';
 alter table designs add column if not exists slice_status text not null default 'idle';
 alter table designs add column if not exists slice_error text not null default '';
 alter table designs add column if not exists multicolor_only integer not null default 0;
+alter table designs add column if not exists realistic_image_url text not null default '';
+alter table designs add column if not exists realistic_image_status text not null default 'idle';
+alter table designs add column if not exists realistic_image_error text not null default '';
+alter table designs add column if not exists realistic_image_project_id text not null default '';
+alter table designs add column if not exists realistic_image_source text not null default '';
+alter table designs add column if not exists realistic_image_updated_at text;
+
+-- One generated realistic photo per offered color (color_key = color id, or 'multicolor').
+create table if not exists design_realistic_images (
+  design_id text not null references designs(id) on delete cascade,
+  color_key text not null,
+  image_url text not null default '',
+  status text not null default 'pending',
+  error text not null default '',
+  project_id text not null default '',
+  source text not null default '',
+  updated_at text,
+  primary key (design_id, color_key)
+);
 
 create table if not exists orders (
   id text primary key,

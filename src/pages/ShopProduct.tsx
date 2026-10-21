@@ -7,9 +7,10 @@ import {
   clampMulticolorSlotCount,
   colorSwatchStyle,
   defaultMulticolorPartLabel,
-  formatMulticolorSelection,
+    formatMulticolorSelection,
   isMulticolorColorId,
 } from '../../shared/colors'
+import { Box, Image as ImageIcon, Rotate3d } from 'lucide-react'
 import { useCart } from '../context/CartContext'
 import type { PublicCatalogDesign } from '../types/catalog'
 import { formatSizeMm } from '../../shared/sizeLabel'
@@ -24,6 +25,7 @@ export function ShopProduct() {
   const [colorId, setColorId] = useState('')
   const [slotColorIds, setSlotColorIds] = useState<string[]>([])
   const [qty, setQty] = useState(1)
+  const [visual, setVisual] = useState<'photo' | 'model'>('photo')
   const [error, setError] = useState('')
   const [added, setAdded] = useState(false)
   const { add } = useCart()
@@ -42,7 +44,15 @@ export function ShopProduct() {
           (hit.availableColors.length === 1 && isMulticolorColorId(hit.availableColors[0]?.id))
         if (multi) {
           const slots = clampMulticolorSlotCount(hit.multicolorSlotCount ?? MULTICOLOR_SLOT_DEFAULT)
-          setSlotColorIds(Array.from({ length: slots }, () => ''))
+          const solids = hit.availableColors.filter((c) => !isMulticolorColorId(c.id))
+          setSlotColorIds(
+            Array.from({ length: slots }, (_, i) => {
+              const allowed = hit.parts?.[i]?.colorIds ?? []
+              const restricted = solids.filter((c) => allowed.includes(c.id))
+              // A part limited to one color is already decided by the designer.
+              return restricted.length === 1 ? restricted[0]!.id : ''
+            }),
+          )
           setColorId(MULTICOLOR_COLOR_ID)
         } else if (hit.availableColors[0]) {
           setColorId(hit.availableColors[0].id)
@@ -69,7 +79,19 @@ export function ShopProduct() {
     })
   }, [design])
 
-  const slotColors = slotColorIds.map((id) => solidChoices.find((c) => c.id === id) ?? null)
+  const slotChoices = useMemo(
+    () =>
+      slotLabels.map((_, i) => {
+        const allowed = design?.parts?.[i]?.colorIds ?? []
+        const restricted = solidChoices.filter((c) => allowed.includes(c.id))
+        return restricted.length ? restricted : solidChoices
+      }),
+    [design, slotLabels, solidChoices],
+  )
+
+  const slotColors = slotColorIds.map(
+    (id, i) => slotChoices[i]?.find((c) => c.id === id) ?? null,
+  )
   const multicolorReady =
     multicolorOnly &&
     slotColorIds.length > 0 &&
@@ -101,6 +123,39 @@ export function ShopProduct() {
     design?.catalogPriceUsd != null && (multicolorOnly ? multicolorReady : singleColor),
   )
 
+  // One photo per color: show the picked color's photo when ready.
+  // Multicolor prints get one photo per color COMBO: the key is the picked
+  // colors in part order joined with '+', skipping parts whose color
+  // "does not matter" (they never change the photo). Until the exact combo
+  // has a photo, fall back to the generic multicolor photo.
+  const comboPhotoKey = useMemo(() => {
+    if (!multicolorOnly || !design) return ''
+    const ids: string[] = []
+    for (let i = 0; i < slotColorIds.length; i++) {
+      if (/does not matter/i.test(design.parts?.[i]?.label || '')) continue
+      const id = slotColorIds[i]
+      if (!id) return ''
+      ids.push(id)
+    }
+    return ids.length >= 2 ? ids.join('+') : ''
+  }, [multicolorOnly, design, slotColorIds])
+
+  const activePhotoKey = multicolorOnly ? comboPhotoKey || 'multicolor' : colorId
+  const activePhoto =
+    (activePhotoKey ? design?.colorImages?.[activePhotoKey] : '') ||
+    (multicolorOnly ? design?.colorImages?.['multicolor'] : '') ||
+    design?.imageUrl ||
+    ''
+  const activePhotoStatus = activePhotoKey
+    ? design?.colorImageStatuses?.[activePhotoKey]
+    : undefined
+  const colorPhotoPending =
+    !multicolorOnly &&
+    Boolean(colorId) &&
+    !design?.colorImages?.[colorId] &&
+    Boolean(activePhotoStatus) &&
+    activePhotoStatus !== 'ready'
+
   return (
     <div className="min-h-screen bg-surface">
       <Header />
@@ -117,31 +172,115 @@ export function ShopProduct() {
         {design && (
           <div className="grid gap-10 lg:grid-cols-2">
             <div>
-              {useMultiPreview ? (
-                <MultiStlViewer
-                  parts={multiParts}
-                  credentials="same-origin"
-                  interactive
-                  eager
-                  height={420}
-                  className="overflow-hidden rounded-2xl border bg-white [&_>div]:rounded-2xl [&_>div]:border-0"
-                />
-              ) : design.modelUrl ? (
-                <StlViewer
-                  url={design.modelUrl}
-                  credentials="same-origin"
-                  interactive
-                  eager
-                  colorHex={previewColor?.hex}
-                  height={420}
-                  className="overflow-hidden rounded-2xl border bg-white [&_>div]:rounded-2xl [&_>div]:border-0"
-                />
-              ) : (
-                <div className="flex aspect-square items-center justify-center rounded-2xl border bg-white text-muted">
-                  No interactive model available
+              <div className="relative">
+                {activePhoto && visual === 'photo' ? (
+                  <>
+                    <img
+                      src={activePhoto}
+                      alt={`${design.name} realistic preview`}
+                      className="aspect-square w-full cursor-pointer rounded-2xl border bg-white object-cover"
+                      title="View the interactive 3D model"
+                      onClick={() => {
+                        if (useMultiPreview || design.modelUrl) setVisual('model')
+                      }}
+                    />
+                    {useMultiPreview || design.modelUrl ? (
+                      <button
+                        type="button"
+                        className="absolute bottom-3 right-3 inline-flex items-center gap-1.5 rounded-full bg-navy/90 px-3 py-1.5 text-xs font-semibold text-white shadow"
+                        onClick={() => setVisual('model')}
+                      >
+                        <Rotate3d size={14} />
+                        View in 3D
+                      </button>
+                    ) : null}
+                  </>
+                ) : useMultiPreview ? (
+                  <MultiStlViewer
+                    parts={multiParts}
+                    credentials="same-origin"
+                    interactive
+                    eager
+                    height={420}
+                    className="overflow-hidden rounded-2xl border bg-white [&_>div]:rounded-2xl [&_>div]:border-0"
+                  />
+                ) : design.modelUrl ? (
+                  <StlViewer
+                    url={design.modelUrl}
+                    credentials="same-origin"
+                    interactive
+                    eager
+                    colorHex={previewColor?.hex}
+                    height={420}
+                    className="overflow-hidden rounded-2xl border bg-white [&_>div]:rounded-2xl [&_>div]:border-0"
+                  />
+                ) : (
+                  <div className="flex aspect-square items-center justify-center rounded-2xl border bg-white text-muted">
+                    No interactive model available
+                  </div>
+                )}
+                {activePhoto && visual === 'model' ? (
+                  <button
+                    type="button"
+                    className="absolute bottom-3 right-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-navy/90 px-3 py-1.5 text-xs font-semibold text-white shadow"
+                    onClick={() => setVisual('photo')}
+                  >
+                    <ImageIcon size={14} />
+                    View photo
+                  </button>
+                ) : null}
+              </div>
+              {activePhoto && (useMultiPreview || design.modelUrl) ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    aria-label="Show real-life photo"
+                    className={`relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border-2 ${
+                      visual === 'photo' ? 'border-electric' : 'border-slate-200'
+                    }`}
+                    onClick={() => setVisual('photo')}
+                  >
+                    <img
+                      src={activePhoto}
+                      alt=""
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                    />
+                    <span className="absolute inset-x-0 bottom-0 bg-navy/80 py-0.5 text-[10px] font-semibold text-white">
+                      Photo
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Show interactive 3D model"
+                    className={`flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 bg-navy text-white ${
+                      visual === 'model' ? 'border-electric' : 'border-navy'
+                    }`}
+                    onClick={() => setVisual('model')}
+                  >
+                    <Box size={22} />
+                    <span className="text-[10px] font-semibold">3D model</span>
+                  </button>
+                  <p className="min-w-[10rem] flex-1 text-xs text-muted">
+                    {visual === 'photo'
+                      ? 'Real-life photo of the printed object. Click the photo or the 3D thumbnail to spin the actual model.'
+                      : 'Drag to rotate · scroll to zoom. The model updates in the colors you pick.'}
+                  </p>
                 </div>
+              ) : activePhoto ? (
+                <p className="mt-2 text-xs text-muted">
+                  Realistic preview of the printed object on a white background.
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-muted">Drag to rotate · scroll to zoom</p>
               )}
-              <p className="mt-2 text-xs text-muted">Drag to rotate · scroll to zoom</p>
+              {colorPhotoPending ? (
+                <p className="mt-2 text-xs text-amber-700">
+                  {activePhotoStatus === 'error'
+                    ? `The ${singleColor?.name ?? 'picked'} photo could not be generated, so the main color photo is shown.`
+                    : `The ${singleColor?.name ?? 'picked'} photo is being generated — showing the main color photo for now. Pick it again soon to see it.`}
+                </p>
+              ) : null}
             </div>
             <div>
               <h1 className="text-3xl font-extrabold text-navy">
@@ -167,11 +306,15 @@ export function ShopProduct() {
                   <div>
                     <p className="text-sm font-semibold text-navy">Color for each part</p>
                     <p className="mt-1 text-xs text-muted">
-                      This print has separate models — pick a filament color for each one. The preview
-                      updates as you choose.
+                      This print has separate models — pick a filament color for each one. Some
+                      parts only offer the colors picked for that part. The preview updates as you
+                      choose.
                     </p>
                   </div>
-                  {slotColorIds.map((selectedId, index) => (
+                  {slotColorIds.map((selectedId, index) => {
+                    const choices = slotChoices[index] ?? solidChoices
+                    const restricted = (design.parts?.[index]?.colorIds ?? []).length > 0
+                    return (
                     <div key={`slot-${index}`}>
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                         {slotLabels[index] || defaultMulticolorPartLabel(index)}
@@ -179,10 +322,18 @@ export function ShopProduct() {
                           <span className="ml-1 font-normal normal-case text-amber-700">
                             — pick a color
                           </span>
+                        ) : restricted && choices.length === 1 ? (
+                          <span className="ml-1 font-normal normal-case text-muted">
+                            — set for this part
+                          </span>
+                        ) : restricted ? (
+                          <span className="ml-1 font-normal normal-case text-muted">
+                            — only these colors
+                          </span>
                         ) : null}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {solidChoices.map((c) => (
+                        {choices.map((c) => (
                           <button
                             key={`${index}-${c.id}`}
                             type="button"
@@ -208,7 +359,8 @@ export function ShopProduct() {
                         ))}
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               ) : (
                 <>
@@ -252,7 +404,6 @@ export function ShopProduct() {
                 onClick={() => {
                   if (!design.catalogPriceUsd) return
                   if (multicolorOnly) {
-                    if (!multicolorReady) return
                     const names = slotColors.map((c) => c!.name)
                     add(
                       {

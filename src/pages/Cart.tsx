@@ -21,6 +21,7 @@ export function Cart() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [promoCode, setPromoCode] = useState('')
+  const [cashCodeInput, setCashCodeInput] = useState('')
   const [schoolCode, setSchoolCode] = useState('')
   const [schoolError, setSchoolError] = useState('')
   const [customerName, setCustomerName] = useState('')
@@ -33,7 +34,7 @@ export function Cart() {
   }, [customer?.displayName, customerName])
 
   useEffect(() => {
-    const trimmed = promoCode.trim()
+    const trimmed = cashCodeInput.trim()
     setSchoolCode('')
     setSchoolError('')
     setAgreePay(false)
@@ -48,7 +49,10 @@ export function Cart() {
             setSchoolError('')
           } else {
             setSchoolCode('')
-            setSchoolError(res.error || '')
+            setSchoolError(
+              res.error ||
+                'That is not a school pickup code. Discount codes go in the promo box above.',
+            )
           }
         })
         .catch((e) => {
@@ -57,7 +61,7 @@ export function Cart() {
         })
     }, 300)
     return () => window.clearTimeout(handle)
-  }, [promoCode])
+  }, [cashCodeInput])
 
   const notice = cashSaleItemNotice(
     lines.map((l) => ({
@@ -103,14 +107,20 @@ export function Cart() {
     try {
       const res = await api.catalog.cashCheckout({
         code: schoolCode,
+        promoCode: promoCode.trim() || undefined,
         customerName: customerName.trim(),
         agreeToPay: true,
         agreeToTerms: true,
         items: cartItems(),
       })
       clear()
-      setDone(`Order placed for $${res.totalUsd.toFixed(2)}. School pickup, no shipping.`)
+      setDone(
+        res.discountUsd && res.discountUsd > 0
+          ? `Order placed for $${res.totalUsd.toFixed(2)} (promo ${res.promoCode} saved $${res.discountUsd.toFixed(2)}). School pickup, no shipping.`
+          : `Order placed for $${res.totalUsd.toFixed(2)}. School pickup, no shipping.`,
+      )
       setPromoCode('')
+      setCashCodeInput('')
       setSchoolCode('')
       setAgreePay(false)
       setAgreeTerms(false)
@@ -195,12 +205,27 @@ export function Cart() {
                 className="mt-1 w-full rounded-lg border px-3 py-2 uppercase"
                 value={promoCode}
                 onChange={(e) => setPromoCode(e.target.value)}
-                placeholder="Optional"
+                placeholder="Optional — only one promo code"
+                autoComplete="off"
+              />
+            </label>
+            <label className="mt-4 block text-sm text-navy">
+              School pickup code (pay cash)
+              <input
+                className="mt-1 w-full rounded-lg border px-3 py-2 uppercase"
+                value={cashCodeInput}
+                onChange={(e) => setCashCodeInput(e.target.value)}
+                placeholder="Optional — pay cash when you pick up at school"
                 autoComplete="off"
               />
             </label>
             {schoolCode ? (
-              <p className="mt-2 text-sm text-emerald-700">Classmate code {schoolCode} — school pickup, pay cash.</p>
+              <p className="mt-2 text-sm text-emerald-700">
+                School pickup code {schoolCode} — pay cash at school.
+                {promoCode.trim()
+                  ? ` Your promo code also applies — its discount comes off the cash total.`
+                  : ''}
+              </p>
             ) : null}
             {schoolError ? <p className="mt-2 text-sm text-red-600">{schoolError}</p> : null}
 

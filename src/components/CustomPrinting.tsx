@@ -95,6 +95,12 @@ export function CustomPrinting() {
       setError('Please attach an .stl or .gcode file.')
       return
     }
+    if (file.size > 50 * 1024 * 1024) {
+      setError(
+        `That file is ${(file.size / 1048576).toFixed(0)} MB — the biggest model we can take is 50 MB. In your design app, look for “decimate” or “reduce mesh” to shrink it, then try again.`,
+      )
+      return
+    }
 
     abandonRef.current = false
     setBusy(true)

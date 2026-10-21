@@ -81,6 +81,7 @@ export const BUILTIN_COLORS: ColorDef[] = [
   { id: 'yellow', code: 'YLW', name: 'Yellow', hex: '#EAB308', builtin: true },
   { id: 'purple', code: 'PRP', name: 'Purple', hex: '#7C3AED', builtin: true },
   { id: 'pink', code: 'PNK', name: 'Pink', hex: '#F472B6', builtin: true },
+  { id: 'brown', code: 'BRN', name: 'Brown', hex: '#8B5A2B', builtin: true },
   MULTICOLOR_COLOR,
 ]
 

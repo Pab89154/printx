@@ -7,3 +7,4 @@ node_modules
 
 # Extracted Bambu Studio AppImage (Render / Linux)
 .slicer/
+.cursor/

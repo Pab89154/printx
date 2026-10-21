@@ -145,7 +145,7 @@ export function AdminMoney() {
               <p className="mt-1 text-xs text-muted">
                 Print pay ${printPayUsd.toFixed(2)} + profit share $
                 {(data.myProfitShareUsd ?? 0).toFixed(2)}
-                {data.partnerCount ? ` · split ${data.partnerCount} ways` : ''}
+                {data.partnerCount ? ` · split ${data.partnerCount} ways` : ''} · since last settled
               </p>
             </div>
             <div className="rounded-2xl border bg-white p-5">
@@ -273,7 +273,8 @@ export function AdminMoney() {
               <div>
                 <h2 className="text-lg font-bold text-navy">Owed by person</h2>
                 <p className="mt-1 text-sm text-muted">
-                  Print pay + profit share for {formatMonthLabel(data.month)}.
+                  Print pay + profit share since each person was last settled. Marking someone
+                  settled resets their balance to $0 — it does not reset at the end of the month.
                 </p>
               </div>
               <p className="text-right">

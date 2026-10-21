@@ -338,6 +338,27 @@ export function startArrivedOrderFlusher() {
   }
 }
 
+const REALISTIC_IMAGE_FLUSH_MS = 60 * 1000
+let realisticImageFlushTimer: ReturnType<typeof setInterval> | null = null
+
+/** Poll Magic Hour realistic-image jobs on the long-running Node server. */
+export function startRealisticImageFlusher() {
+  if (realisticImageFlushTimer) return
+  const tick = () => {
+    void getDb()
+      .then(async (db) => {
+        const { processRealisticImageJobs } = await import('./realisticImages.ts')
+        return processRealisticImageJobs(db, { maxStarts: 1 })
+      })
+      .catch((err) => console.error('[printx] realistic image flush failed', err))
+  }
+  tick()
+  realisticImageFlushTimer = setInterval(tick, REALISTIC_IMAGE_FLUSH_MS)
+  if (typeof realisticImageFlushTimer === 'object' && 'unref' in realisticImageFlushTimer) {
+    realisticImageFlushTimer.unref()
+  }
+}
+
 async function purgeExpiredMailTrash(db: Awaited<ReturnType<typeof getDb>>) {
   const cutoff = mailTrashCutoffIso()
   const expiredRecipients = await db.all<{ id: string; message_id: string }>(
@@ -1280,6 +1301,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       const { filePath } = await parseMultipart(req, {
         allowedExt: ALLOWED_IMAGE_EXT,
         invalidTypeMessage: 'Invalid image type. Use JPG, PNG, WEBP, or GIF.',
+        maxFileSize: 12 * 1024 * 1024,
       })
       if (!filePath) {
         send(res, 400, { error: 'Image file is required.' })
@@ -1288,7 +1310,62 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, urlPa
       send(res, 201, { url: `/api/public/uploads/${filePath}` })
       return true
     } catch (err) {
-      send(res, 400, { error: err instanceof Error ? err.message : 'Upload failed' })
+      const msg = err instanceof Error ? err.message : 'Upload failed'
+      send(res, 400, {
+        error: /maxTotalFileSize|maxFileSize/i.test(msg)
+          ? 'That photo is too big — please pick one under 12 MB.'
+          : msg,
+      })
+      return true
+    }
+  }
+
+  // Upload your own photo for one color of a design (instead of generating).
+  const realisticUploadMatch =
+    /^\/api\/admin\/designs\/([^/]+)\/realistic-image\/upload$/.exec(urlPath)
+  if (realisticUploadMatch && method === 'POST') {
+    if (!requirePerm(admin, 'products', res)) return true
+    const designId = realisticUploadMatch[1]!
+    try {
+      const designRow = await db.get<Record<string, unknown>>(
+        'SELECT * FROM designs WHERE id = ?',
+        designId,
+      )
+      if (!designRow) {
+        send(res, 404, { error: 'Design not found' })
+        return true
+      }
+      const { fields, filePath } = await parseMultipart(req, {
+        allowedExt: ALLOWED_IMAGE_EXT,
+        invalidTypeMessage: 'Invalid image type. Use JPG, PNG, WEBP, or GIF.',
+        maxFileSize: 12 * 1024 * 1024,
+      })
+      if (!filePath) {
+        send(res, 400, { error: 'Image file is required.' })
+        return true
+      }
+      const colorId = String(fields.colorId ?? '').trim()
+      if (!colorId) {
+        send(res, 400, { error: 'Pick which color this photo is for.' })
+        return true
+      }
+      const { setUploadedColorImage } = await import('./realisticImages.ts')
+      const imageUrl = `/api/public/uploads/${filePath}`
+      const ok = await setUploadedColorImage(db, rowToDesign(designRow), colorId, imageUrl)
+      if (!ok) {
+        send(res, 400, { error: 'That color is not offered for this design.' })
+        return true
+      }
+      bumpPublicCache()
+      send(res, 201, { ok: true, imageUrl })
+      return true
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Upload failed'
+      send(res, 400, {
+        error: /maxTotalFileSize|maxFileSize/i.test(msg)
+          ? 'That photo is too big — please pick one under 12 MB.'
+          : msg,
+      })
       return true
     }
   }

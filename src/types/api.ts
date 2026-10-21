@@ -144,6 +144,7 @@ export type AdminPermissions = {
   stands: boolean
   products: boolean
   orders: boolean
+  discounts: boolean
   requests: boolean
   content: boolean
   sandbox: boolean

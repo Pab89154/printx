@@ -533,6 +533,8 @@ export function AdminOrders() {
           <div className="mt-4 space-y-3">
             {(order.items ?? []).map((item) => {
               const printerPayUsd = expectedPrinterPayUsd(order, item)
+              const cashLocked =
+                order.paymentMethod === 'cash' && !order.cashRecordedBy
               return (
               <div
                 key={item.id}
@@ -571,7 +573,6 @@ export function AdminOrders() {
                   </div>
 
                   {order.status !== 'refunded' &&
-                    order.status !== 'awaiting_cash' &&
                     item.printStatus === 'unclaimed' && (
                     <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                       <select
@@ -599,12 +600,23 @@ export function AdminOrders() {
                       >
                         Claim as {label}
                       </button>
+                      {cashLocked && (
+                        <p className="text-xs text-muted">
+                          You can claim now — files unlock when the cash is in.
+                        </p>
+                      )}
                     </div>
                   )}
 
                   {order.status !== 'refunded' &&
                     !order.shippedAt &&
-                    (item.printStatus === 'claimed' || isPrinted(item.printStatus)) && (
+                    (item.printStatus === 'claimed' || isPrinted(item.printStatus)) &&
+                    (cashLocked ? (
+                      <p className="text-xs font-medium text-amber-700">
+                        Cash not in yet — STL/G-code downloads and Mark printed unlock
+                        when you tap &ldquo;Cash is in&rdquo; above.
+                      </p>
+                    ) : (
                       <div className="action-row">
                         <button
                           type="button"
@@ -669,7 +681,7 @@ export function AdminOrders() {
                           </button>
                         )}
                       </div>
-                    )}
+                    ))}
                 </div>
               </div>
               )

@@ -21,6 +21,7 @@ import { upsTrackUrl } from './shippingUrls.ts'
 import { notifyAdminsWithPermission, notifyAdminUsers, notifyMainAdmins } from './pushNotify.ts'
 import { runInBackground } from './background.ts'
 import { permissionsForUser } from '../shared/permissions.ts'
+import { resolveImageUrl } from '../shared/imageUrl.ts'
 import { advanceArrivedOrders, ensureOrderTrackCode } from './trackCodes.ts'
 import {
   arrivedEtaIso,
@@ -35,7 +36,7 @@ import {
   cashSaleItemNotice,
   stripeAgreementText,
 } from '../shared/checkoutConsent.ts'
-import { invalidateBootstrapCache } from './bootstrapCache.ts'
+import { getCachedCatalog, setCachedCatalog, invalidateBootstrapCache } from './bootstrapCache.ts'
 import {
   buildSku,
   colorById,
@@ -116,6 +117,14 @@ import {
   sendStoredFile,
   uploadStoredFile,
 } from './objectStorage.ts'
+import {
+  listRealisticColorImages,
+  primaryRealisticColorKey,
+  processRealisticImageJobs,
+  queueDesignRealisticImage,
+  queueRealisticImageForColor,
+  type RealisticColorImageRow,
+} from './realisticImages.ts'
 
 const MODEL_MAX_BYTES = 50 * 1024 * 1024
 
@@ -130,12 +139,20 @@ const PRINTER_FIELD: Record<
 
 function designDto(
   d: Design,
+  colorRows: RealisticColorImageRow[] = [],
 ): Omit<Design, 'stlPath' | 'parts' | 'gcodePathsJson'> & {
   stlPath: ''
   modelExt: string
-  parts: { label: string; stlPath: ''; hasStl: boolean; modelExt: string }[]
+  parts: {
+    label: string
+    stlPath: ''
+    hasStl: boolean
+    modelExt: string
+    colorIds: string[]
+  }[]
   gcodeReadyPrinters: string[]
   fromGcode: boolean
+  realisticColorImages: { colorId: string; imageUrl: string; status: string }[]
 } {
   const modelExt = path.extname(d.stlPath || '').toLowerCase()
   const gcodePaths = parseDesignIdMap(d.gcodePathsJson)
@@ -150,9 +167,33 @@ function designDto(
       stlPath: '' as const,
       hasStl: Boolean(p.stlPath.trim()),
       modelExt: path.extname(p.stlPath || '').toLowerCase(),
+      colorIds: [...(p.colorIds ?? [])],
     })),
     gcodeReadyPrinters: gcodeReadyPrinterIds(gcodePaths, Math.max(1, partCount)),
     fromGcode: Boolean(gcodePaths.source),
+    realisticColorImages: colorRows.map((r) => ({
+      colorId: String(r.color_key),
+      imageUrl: resolveImageUrl(String(r.image_url || '')),
+      status: String(r.status || ''),
+    })),
+  }
+}
+
+/** Queue (and kick off) the Magic Hour realistic photo for a saved design. */
+async function queueRealisticImage(
+  db: Awaited<ReturnType<typeof getDb>>,
+  design: Design,
+  force = false,
+): Promise<void> {
+  try {
+    const queued = await queueDesignRealisticImage(db, design, { force })
+    if (queued) {
+      runInBackground(`realistic-image-${design.id}`, () =>
+        processRealisticImageJobs(db, { designId: design.id, maxStarts: 1 }),
+      )
+    }
+  } catch (err) {
+    console.warn('[realistic-image] queue failed:', err instanceof Error ? err.message : err)
   }
 }
 
@@ -234,13 +275,25 @@ function mergeDesignParts(
   }
   const out: DesignPart[] = []
   for (let i = 0; i < slots; i++) {
-    const row = incoming[i] as { label?: unknown; stlPath?: unknown } | undefined
+    const row = incoming[i] as
+      | { label?: unknown; stlPath?: unknown; colorIds?: unknown; allowedColorIds?: unknown }
+      | undefined
     const label =
       sanitizeText(String(row?.label ?? existing[i]?.label ?? ''), 40) ||
       defaultMulticolorPartLabel(i)
     const nextPath = row?.stlPath !== undefined ? safeStlPath(row.stlPath) : ''
     const stlPath = nextPath || existing[i]?.stlPath || ''
-    out.push({ label, stlPath })
+    const rawColorIds = Array.isArray(row?.colorIds)
+      ? row.colorIds
+      : Array.isArray(row?.allowedColorIds)
+        ? row.allowedColorIds
+        : existing[i]?.colorIds
+    const colorIds = [
+      ...new Set((rawColorIds ?? []).map((x) => String(x).trim()).filter(Boolean)),
+    ]
+      .filter((id) => !isMulticolorColorId(id))
+      .slice(0, 20)
+    out.push({ label, stlPath, colorIds })
   }
   return out
 }
@@ -1624,22 +1677,29 @@ function parseDesignBody(body: Record<string, unknown>, existing?: Design) {
   }
   // Multicolor mode: availableColorIds = solid filaments customers may pick (not the MLT badge).
   availableColorIds = availableColorIds.filter((id) => !isMulticolorColorId(id))
-  let mainColorId = String(body.mainColorId ?? existing?.mainColorId ?? '').trim()
-  if (!availableColorIds.includes(mainColorId)) mainColorId = availableColorIds[0] || ''
   const multicolorSlotCount = clampMulticolorSlotCount(
     body.multicolorSlotCount !== undefined
       ? body.multicolorSlotCount
       : existing?.multicolorSlotCount,
   )
-  if (multicolorOnly && availableColorIds.length < multicolorSlotCount) {
-    availableColorIds = solidBuiltinColors().map((c) => c.id)
-  }
   const parts = mergeDesignParts(
     body.parts,
     existing?.parts ?? [],
     multicolorSlotCount,
     multicolorOnly,
   )
+  if (multicolorOnly) {
+    // A color picked for a specific part is part of the design's offered colors,
+    // even when the admin did not also tick it in the general color list.
+    availableColorIds = [
+      ...new Set([...availableColorIds, ...parts.flatMap((p) => p.colorIds)]),
+    ].slice(0, 20)
+    for (const part of parts) {
+      part.colorIds = part.colorIds.filter((id) => availableColorIds.includes(id))
+    }
+  }
+  let mainColorId = String(body.mainColorId ?? existing?.mainColorId ?? '').trim()
+  if (!availableColorIds.includes(mainColorId)) mainColorId = availableColorIds[0] || ''
   const num = (key: string, fallback: number | null) => {
     if (body[key] === undefined || body[key] === null || body[key] === '') return fallback
     const n = Number(body[key])
@@ -1882,6 +1942,17 @@ const SHOP_ORDER_MONEY_STATUSES = [
 
 const SHOP_ORDER_MONEY_STATUS_SQL = SHOP_ORDER_MONEY_STATUSES.map((s) => `'${s}'`).join(', ')
 
+/** Cash (school pickup) order whose money has not been handed over yet. */
+function isUnpaidCashOrder(
+  order: { payment_method?: unknown; cash_recorded_by?: unknown } | null | undefined,
+): boolean {
+  if (!order) return false
+  return String(order.payment_method || '') === 'cash' && !String(order.cash_recorded_by || '').trim()
+}
+
+const CASH_FILES_LOCKED_ERROR =
+  'Cash is not in yet — STL and G-code files unlock when you tap "Cash is in" for this order.'
+
 export async function resumeArrivedOrderChecks(): Promise<void> {
   try {
     const db = await getDb()
@@ -2044,23 +2115,40 @@ export async function handleCatalogApi(
 
   // ----- Public catalog -----
   if (urlPath === '/api/public/catalog' && method === 'GET') {
+    const cachedCatalog = getCachedCatalog()
+    if (cachedCatalog) {
+      send(res, 200, cachedCatalog)
+      return true
+    }
     const settings = await getPricingSettings(db)
     const stockIds = await filamentStock(db)
     const rows = await db.all<Record<string, unknown>>(
       `SELECT * FROM designs WHERE status = 'approved'`,
     )
     const buyers = await designBuyerCounts(db)
+    const colorImageMap = await listRealisticColorImages(db)
     const designs = rows
       .map(rowToDesign)
       .map((d) => ({ ...d, buyerCount: buyers.get(d.id) || 0 }))
       .sort(compareByPopularity)
       .map((d) => {
+      const colorImages: Record<string, string> = {}
+      const colorImageStatuses: Record<string, string> = {}
+      for (const row of colorImageMap.get(d.id) ?? []) {
+        const key = String(row.color_key)
+        colorImageStatuses[key] = String(row.status || '')
+        if (row.status === 'ready' && row.image_url) {
+          colorImages[key] = resolveImageUrl(String(row.image_url))
+        }
+      }
+      const primaryKey = primaryRealisticColorKey(d)
       const modelExt = path.extname(d.stlPath || '').toLowerCase()
       const parts = d.multicolorOnly
         ? d.parts.map((p, index) => {
             const partExt = path.extname(p.stlPath || '').toLowerCase()
             return {
               label: p.label || defaultMulticolorPartLabel(index),
+              colorIds: (p.colorIds ?? []).filter((id) => !isMulticolorColorId(id)),
               modelUrl:
                 p.stlPath.trim() && partExt === '.stl'
                   ? `/api/public/catalog/${d.id}/parts/${index}/stl`
@@ -2074,7 +2162,11 @@ export async function handleCatalogApi(
         name: d.name,
         description: d.description,
         category: d.category,
-        imageUrl: '',
+        imageUrl: colorImages[primaryKey] || d.realisticImageUrl || '',
+        realisticImageStatus: d.realisticImageStatus,
+        /** Generated real-life photo per offered color id ('multicolor' for multicolor prints). */
+        colorImages,
+        colorImageStatuses,
         hasModel: d.hasStl,
         modelExt,
         /** Public STL preview for approved catalog items. */
@@ -2092,7 +2184,7 @@ export async function handleCatalogApi(
           // Legacy rows stored only `multicolor` — fall back to every solid filament.
           const solidIds = d.availableColorIds.filter((id) => !isMulticolorColorId(id))
           const ids =
-            d.multicolorOnly && solidIds.length < d.multicolorSlotCount
+            d.multicolorOnly && solidIds.length === 0
               ? [
                   ...solidBuiltinColors().map((c) => c.id),
                   ...settings.customColors.filter((c) => c.name.trim()).map((c) => c.id),
@@ -2112,7 +2204,7 @@ export async function handleCatalogApi(
         })(),
       }
     })
-    send(res, 200, {
+    const catalogBody = {
       designs,
       colors: [
         ...BUILTIN_COLORS.map((c) => ({
@@ -2126,7 +2218,9 @@ export async function handleCatalogApi(
           .filter((c) => c.name.trim())
           .map((c) => ({ id: c.id, code: c.code, name: c.name, hex: c.hex, builtin: false })),
       ],
-    })
+    }
+    setCachedCatalog(catalogBody)
+    send(res, 200, catalogBody)
     return true
   }
 
@@ -2261,8 +2355,8 @@ export async function handleCatalogApi(
       if (design.multicolorOnly) {
         colorId = MULTICOLOR_COLOR_ID
         const rawFilaments = Array.isArray(row.filamentColorIds) ? row.filamentColorIds : []
-        filamentColorIds = rawFilaments.map((x) => String(x)).filter(Boolean)
         const slotCount = design.multicolorSlotCount
+        filamentColorIds = rawFilaments.map((x) => String(x)).filter(Boolean)
         if (filamentColorIds.length !== slotCount) {
           send(res, 400, {
             error: `${design.name} needs ${slotCount} filament colors selected.`,
@@ -2270,16 +2364,19 @@ export async function handleCatalogApi(
           return true
         }
         const allowedSolids = design.availableColorIds.filter((id) => !isMulticolorColorId(id))
-        const pool =
-          allowedSolids.length >= slotCount
-            ? allowedSolids
-            : [
-                ...solidBuiltinColors().map((c) => c.id),
-                ...settings.customColors.filter((c) => c.name.trim()).map((c) => c.id),
-              ]
+        const pool = allowedSolids.length
+          ? allowedSolids
+          : [
+              ...solidBuiltinColors().map((c) => c.id),
+              ...settings.customColors.filter((c) => c.name.trim()).map((c) => c.id),
+            ]
         const names: string[] = []
-        for (const fid of filamentColorIds) {
-          if (!pool.includes(fid) || !isOfferedFilament(fid, stockIds)) {
+        for (const [slotIndex, fid] of filamentColorIds.entries()) {
+          const partAllowed = (design.parts[slotIndex]?.colorIds ?? []).filter((id) =>
+            pool.includes(id),
+          )
+          const effectivePool = partAllowed.length ? partAllowed : pool
+          if (!effectivePool.includes(fid) || !isOfferedFilament(fid, stockIds)) {
             send(res, 400, { error: `Invalid filament color for ${design.name}.` })
             return true
           }
@@ -2326,6 +2423,10 @@ export async function handleCatalogApi(
       return true
     }
 
+    if (Array.isArray(body.promoCodes) && body.promoCodes.length > 1) {
+      send(res, 400, { error: 'Only one promo code can be used per order.' })
+      return true
+    }
     const promoCode = sanitizeText(String(body.promoCode ?? ''), 40)
       .toUpperCase()
       .replace(/\s+/g, '')
@@ -2404,9 +2505,9 @@ export async function handleCatalogApi(
       `INSERT INTO orders (
         id, customer_name, customer_email, status, stripe_session_id, stripe_payment_intent,
         subtotal_usd, total_usd, currency, created_at, updated_at, paid_at, user_id,
-        payment_method, agreement_name, agreement_text,
+        payment_method, promo_code, agreement_name, agreement_text,
         agreement_payment_checked, agreement_terms_checked, agreement_at
-      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 'usd', ?, ?, NULL, ?, 'stripe', ?, ?, 0, 0, NULL)`,
+      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 'usd', ?, ?, NULL, ?, 'stripe', ?, ?, ?, 0, 0, NULL)`,
       orderId,
       customerName || 'Customer',
       customerEmail || '',
@@ -2416,6 +2517,7 @@ export async function handleCatalogApi(
       now,
       now,
       account?.id ?? null,
+      appliedPromo?.code ?? '',
       customerName || '',
       stripeAgreementText(),
     )
@@ -2711,13 +2813,14 @@ export async function handleCatalogApi(
       `SELECT * FROM designs WHERE status != 'archived' ORDER BY updated_at DESC`,
     )
     const buyers = await designBuyerCounts(db)
+    const colorImageMap = await listRealisticColorImages(db)
     send(
       res,
       200,
       rows.map((row) => {
         const design = rowToDesign(row)
         design.buyerCount = buyers.get(design.id) || 0
-        return designDto(design)
+        return designDto(design, colorImageMap.get(design.id) ?? [])
       }),
     )
     return true
@@ -2777,6 +2880,25 @@ export async function handleCatalogApi(
     return true
   }
 
+  // Big models (40–100 MB) skip multipart entirely: the client PUTs the raw
+  // file to /upload/direct/<fileName>, which streams it to GitHub. This just
+  // mints the file name after the usual permission check.
+  if (urlPath === '/api/admin/designs/upload-model/direct-start' && method === 'POST') {
+    const admin = await requireAdmin(req)
+    if (!admin || !adminCan(admin, 'products')) {
+      send(res, 403, { error: 'Forbidden' })
+      return true
+    }
+    const body = (await readJson(req).catch(() => ({}))) as Record<string, unknown>
+    const ext = String(body.ext ?? '.stl').toLowerCase()
+    if (ext !== '.stl') {
+      send(res, 400, { error: 'Only STL files can use the big-file upload. For G-code, please upload the STL instead.' })
+      return true
+    }
+    send(res, 201, { fileName: `${randomUUID()}.stl` })
+    return true
+  }
+
   if (
     (urlPath === '/api/admin/designs/upload-stl' || urlPath === '/api/admin/designs/upload-model') &&
     method === 'POST'
@@ -2821,6 +2943,18 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'Name is required.' })
       return true
     }
+    // The SKU is always made from the name — nobody types one anymore.
+    // A name that's already taken gets a number: PX-NAME, PX-NAME-2, …
+    {
+      const baseSku = suggestSkuBase(parsed.name)
+      let candidate = baseSku
+      for (let n = 2; ; n++) {
+        const clash = await db.get('SELECT id FROM designs WHERE sku_base = ?', candidate)
+        if (!clash) break
+        candidate = `${baseSku.slice(0, 36)}-${n}`
+      }
+      parsed.skuBase = candidate
+    }
     if (parsed.multicolorOnly) {
       if (parsed.parts.length < parsed.multicolorSlotCount) {
         send(res, 400, { error: 'Upload an STL for every multicolor part before saving.' })
@@ -2833,9 +2967,9 @@ export async function handleCatalogApi(
         })
         return true
       }
-      if (parsed.availableColorIds.length < parsed.multicolorSlotCount) {
+      if (parsed.availableColorIds.length < 1) {
         send(res, 400, {
-          error: `Pick at least ${parsed.multicolorSlotCount} solid filament options for customers.`,
+          error: 'Pick at least one solid filament color for customers.',
         })
         return true
       }
@@ -2901,7 +3035,10 @@ export async function handleCatalogApi(
       })
       return true
     }
-    const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', id)
+    let row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', id)
+    // Every new design gets a realistic white-background catalog photo.
+    await queueRealisticImage(db, rowToDesign(row!))
+    row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', id)
     send(res, 201, designDto(rowToDesign(row!)))
     return true
   }
@@ -2984,7 +3121,7 @@ export async function handleCatalogApi(
   }
 
   const designMatch =
-    /^\/api\/admin\/designs\/([^/]+)(?:\/(submit|requote|approve|reject|reprice|quote-tick|popular))?$/.exec(urlPath)
+    /^\/api\/admin\/designs\/([^/]+)(?:\/(submit|requote|approve|reject|reprice|quote-tick|popular|manual-photos|realistic-image))?$/.exec(urlPath)
   if (designMatch) {
     const designId = designMatch[1]!
     const action = designMatch[2]
@@ -3002,6 +3139,77 @@ export async function handleCatalogApi(
       return true
     }
     let design = rowToDesign(existingRow)
+
+    if (method === 'POST' && action === 'realistic-image') {
+      if (design.manualPhotos) {
+        send(res, 400, {
+          error: 'Paid API images are OFF for this design — use Upload to add photos instead.',
+        })
+        return true
+      }
+      if (!design.hasStl && !design.parts.some((p) => p.stlPath.trim())) {
+        send(res, 400, { error: 'Upload a 3D model before generating a realistic image.' })
+        return true
+      }
+      const body = (await readJson(req).catch(() => ({}))) as Record<string, unknown>
+      const colorId = String(body.colorId ?? '').trim()
+      if (colorId) {
+        // Redo of a single color only — everything else keeps its photo.
+        const rows = (await listRealisticColorImages(db)).get(designId) ?? []
+        const existing = rows.find((r) => String(r.color_key) === colorId)
+        if (
+          existing &&
+          ['pending', 'rendering', 'processing'].includes(String(existing.status))
+        ) {
+          send(res, 400, { error: 'That color photo is already generating.' })
+          return true
+        }
+        const queued = await queueRealisticImageForColor(db, design, colorId)
+        if (!queued) {
+          send(res, 400, { error: 'That color is not offered for this design.' })
+          return true
+        }
+        runInBackground(`realistic-image-${design.id}-${colorId}`, () =>
+          processRealisticImageJobs(db, { designId: design.id, maxStarts: 1 }),
+        )
+      } else {
+        await queueRealisticImage(db, design, true)
+      }
+      const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+      const colorRows = (await listRealisticColorImages(db)).get(designId) ?? []
+      send(res, 200, designDto(rowToDesign(row!), colorRows))
+      return true
+    }
+
+    if (method === 'POST' && action === 'manual-photos') {
+      const body = await readJson(req)
+      const next = body.manualPhotos === undefined ? !design.manualPhotos : Boolean(body.manualPhotos)
+      await db.run(
+        `UPDATE designs SET manual_photos = ?, updated_at = ? WHERE id = ?`,
+        next ? 1 : 0,
+        new Date().toISOString(),
+        designId,
+      )
+      if (next) {
+        // Cancel anything the paid API has queued/running for this design
+        // so flipping the switch stops future charges immediately.
+        await db.run(
+          `UPDATE design_realistic_images
+           SET status = 'error',
+               error = 'Paid API images are OFF for this design — photos are manual only.',
+               updated_at = ?
+           WHERE design_id = ? AND status IN ('pending', 'processing', 'rendering')`,
+          new Date().toISOString(),
+          designId,
+        )
+      }
+      const row = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
+      const buyers = await designBuyerCounts(db)
+      const updated = rowToDesign(row!)
+      updated.buyerCount = buyers.get(designId) || 0
+      send(res, 200, designDto(updated))
+      return true
+    }
 
     if (method === 'POST' && action === 'popular') {
       const body = await readJson(req)
@@ -3043,9 +3251,9 @@ export async function handleCatalogApi(
           })
           return true
         }
-        if (parsed.availableColorIds.length < parsed.multicolorSlotCount) {
+        if (parsed.availableColorIds.length < 1) {
           send(res, 400, {
-            error: `Pick at least ${parsed.multicolorSlotCount} solid filament options for customers.`,
+            error: 'Pick at least one solid filament color for customers.',
           })
           return true
         }
@@ -3116,6 +3324,11 @@ export async function handleCatalogApi(
         })
         return true
       }
+      design = rowToDesign(
+        (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
+      )
+      // A changed model/colors produces a new signature and a fresh photo.
+      await queueRealisticImage(db, design)
       design = rowToDesign(
         (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
       )
@@ -3191,6 +3404,7 @@ export async function handleCatalogApi(
         send(res, 400, { error: 'Pick at least one color before submitting.' })
         return true
       }
+      await queueRealisticImage(db, design)
 
       const modelExt = path.extname(design.stlPath).toLowerCase()
       const now = new Date().toISOString()
@@ -3403,6 +3617,7 @@ export async function handleCatalogApi(
         design = rowToDesign(
           (await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId))!,
         )
+        await queueRealisticImage(db, design)
       }
       if (!designHasPricableInputs(design)) {
         send(res, 400, {
@@ -3712,6 +3927,69 @@ export async function handleCatalogApi(
       send(res, 400, { error: found.error || 'That code is not an active school pickup code.' })
       return true
     }
+    // One promo code may ride along with the cash (school pickup) code.
+    // Two promo codes are never allowed — there is only this one promo slot.
+    const promoRaw = sanitizeText(String(body.promoCode ?? ''), 40)
+      .toUpperCase()
+      .replace(/\s+/g, '')
+    let cashPromo: {
+      code: string
+      kind: string
+      percentOff: number | null
+      amountOffCents: number | null
+    } | null = null
+    if (promoRaw) {
+      if (promoRaw === String(found.code).toUpperCase().replace(/\s+/g, '')) {
+        send(res, 400, {
+          error: 'That is your school pickup code. A promo code is a different code.',
+        })
+        return true
+      }
+      const promoRow = await db.get<{
+        code: string
+        kind: string
+        percent_off: number | null
+        amount_off_cents: number | null
+        active: number | string
+        max_redemptions: number | null
+      }>(
+        `SELECT code, kind, percent_off, amount_off_cents, active, max_redemptions
+         FROM discounts WHERE UPPER(REPLACE(code, ' ', '')) = ? LIMIT 1`,
+        promoRaw,
+      )
+      if (promoRow && String(promoRow.kind) === 'school_pickup') {
+        send(res, 400, {
+          error:
+            'That is a school pickup code, not a promo code. School pickup codes go in the school pickup box.',
+        })
+        return true
+      }
+      if (!promoRow || !Number(promoRow.active)) {
+        send(res, 400, { error: 'That promo code is invalid or inactive.' })
+        return true
+      }
+      const promoMax =
+        promoRow.max_redemptions != null ? Number(promoRow.max_redemptions) : null
+      if (promoMax != null && Number.isFinite(promoMax)) {
+        const used = await db.get<{ n: number | string }>(
+          `SELECT COUNT(*) as n FROM orders
+           WHERE UPPER(REPLACE(promo_code, ' ', '')) = ?
+             AND status NOT IN ('cancelled', 'refunded')`,
+          promoRaw,
+        )
+        if (Number(used?.n) >= promoMax) {
+          send(res, 400, { error: 'That promo code has already been fully used.' })
+          return true
+        }
+      }
+      cashPromo = {
+        code: String(promoRow.code),
+        kind: String(promoRow.kind || 'percent'),
+        percentOff: promoRow.percent_off != null ? Number(promoRow.percent_off) : null,
+        amountOffCents:
+          promoRow.amount_off_cents != null ? Number(promoRow.amount_off_cents) : null,
+      }
+    }
     const itemsIn = Array.isArray(body.items) ? body.items : []
     if (itemsIn.length === 0) {
       send(res, 400, { error: 'Pick a design.' })
@@ -3754,23 +4032,28 @@ export async function handleCatalogApi(
       if (design.multicolorOnly) {
         colorId = MULTICOLOR_COLOR_ID
         const rawFilaments = Array.isArray(row.filamentColorIds) ? row.filamentColorIds : []
-        filamentColorIds = rawFilaments.map((x) => String(x)).filter(Boolean)
         const slotCount = design.multicolorSlotCount
+        filamentColorIds = rawFilaments.map((x) => String(x)).filter(Boolean)
         if (filamentColorIds.length !== slotCount) {
-          send(res, 400, { error: `${design.name} needs ${slotCount} filament colors.` })
+          send(res, 400, {
+            error: `${design.name} needs ${slotCount} filament colors selected.`,
+          })
           return true
         }
         const allowedSolids = design.availableColorIds.filter((id) => !isMulticolorColorId(id))
-        const pool =
-          allowedSolids.length >= slotCount
-            ? allowedSolids
-            : [
-                ...solidBuiltinColors().map((c) => c.id),
-                ...settings.customColors.filter((c) => c.name.trim()).map((c) => c.id),
-              ]
+        const pool = allowedSolids.length
+          ? allowedSolids
+          : [
+              ...solidBuiltinColors().map((c) => c.id),
+              ...settings.customColors.filter((c) => c.name.trim()).map((c) => c.id),
+            ]
         const names: string[] = []
-        for (const fid of filamentColorIds) {
-          if (!pool.includes(fid) || !isOfferedFilament(fid, stockIds)) {
+        for (const [slotIndex, fid] of filamentColorIds.entries()) {
+          const partAllowed = (design.parts[slotIndex]?.colorIds ?? []).filter((id) =>
+            pool.includes(id),
+          )
+          const effectivePool = partAllowed.length ? partAllowed : pool
+          if (!effectivePool.includes(fid) || !isOfferedFilament(fid, stockIds)) {
             send(res, 400, { error: `Invalid filament color for ${design.name}.` })
             return true
           }
@@ -3816,6 +4099,18 @@ export async function handleCatalogApi(
       return true
     }
     const subtotal = roundMoney(lineItems.reduce((s, i) => s + i.unit * i.qty, 0))
+    // Apply the one allowed promo on top of the cash (school pickup) order.
+    // School pickup has no shipping, so free-shipping promos save $0 here.
+    let discountUsd = 0
+    if (cashPromo) {
+      if (cashPromo.kind === 'percent' || cashPromo.kind === 'percent_and_shipping') {
+        const pct = Math.min(100, Math.max(0, cashPromo.percentOff ?? 0))
+        discountUsd = roundMoney((subtotal * pct) / 100)
+      } else if (cashPromo.kind === 'amount' || cashPromo.kind === 'amount_and_shipping') {
+        discountUsd = roundMoney(Math.min(subtotal, (cashPromo.amountOffCents ?? 0) / 100))
+      }
+    }
+    const totalUsd = roundMoney(subtotal - discountUsd)
     const notice = cashSaleItemNotice(
       lineItems.map((i) => ({
         name: i.design.name,
@@ -3823,7 +4118,7 @@ export async function handleCatalogApi(
         qty: i.qty,
         lineUsd: roundMoney(i.unit * i.qty),
       })),
-      subtotal,
+      totalUsd,
     )
     const now = new Date().toISOString()
     const orderId = randomUUID()
@@ -3831,14 +4126,14 @@ export async function handleCatalogApi(
       `INSERT INTO orders (
         id, customer_name, customer_email, status, stripe_session_id, stripe_payment_intent,
         subtotal_usd, total_usd, currency, created_at, updated_at, paid_at, user_id,
-        payment_method, cash_recorded_by, classmate_code,
+        payment_method, cash_recorded_by, classmate_code, promo_code,
         shipping_method, shipping_usd,
         agreement_name, agreement_text,
         agreement_payment_checked, agreement_terms_checked, agreement_at
       ) VALUES (
         ?, ?, ?, 'awaiting_cash', NULL, NULL,
         ?, ?, 'usd', ?, ?, NULL, ?,
-        'cash', NULL, ?,
+        'cash', NULL, ?, ?,
         '', 0,
         ?, ?,
         1, 1, ?
@@ -3847,11 +4142,12 @@ export async function handleCatalogApi(
       customerName,
       account?.email || '',
       subtotal,
-      subtotal,
+      totalUsd,
       now,
       now,
       account?.id ?? null,
       found.code,
+      cashPromo?.code ?? '',
       customerName,
       cashAgreementText(notice),
       now,
@@ -3875,7 +4171,14 @@ export async function handleCatalogApi(
         roundMoney(item.unit * item.qty),
       )
     }
-    send(res, 200, { orderId, totalUsd: subtotal, code: found.code })
+    send(res, 200, {
+      orderId,
+      totalUsd,
+      subtotalUsd: subtotal,
+      discountUsd,
+      promoCode: cashPromo?.code ?? '',
+      code: found.code,
+    })
     return true
   }
 
@@ -3906,10 +4209,19 @@ export async function handleCatalogApi(
     }
     const now = new Date().toISOString()
     if (String(order.status) === 'awaiting_cash') {
+      // Items may already be claimed (claiming is allowed before cash is
+      // in) — those orders are mid-print, not merely paid.
+      const claimedItem = await db.get<{ id: string }>(
+        `SELECT id FROM order_items
+         WHERE order_id = ? AND print_status IN ('claimed', 'printing', 'printed', 'done')
+         LIMIT 1`,
+        orderId,
+      )
       await db.run(
         `UPDATE orders
-         SET status = 'paid', paid_at = ?, updated_at = ?, cash_recorded_by = ?
+         SET status = ?, paid_at = ?, updated_at = ?, cash_recorded_by = ?
          WHERE id = ? AND cash_recorded_by IS NULL`,
+        claimedItem ? 'in_production' : 'paid',
         now,
         now,
         admin.id,
@@ -4399,7 +4711,7 @@ export async function handleCatalogApi(
 
   if (urlPath === '/api/admin/discounts' && method === 'GET') {
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin || !adminCan(admin, 'discounts')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
@@ -4427,7 +4739,7 @@ export async function handleCatalogApi(
 
   if (urlPath === '/api/admin/discounts' && method === 'POST') {
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin || !adminCan(admin, 'discounts')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
@@ -4592,7 +4904,7 @@ export async function handleCatalogApi(
   if (discountVisibility && method === 'POST') {
     const discountId = discountVisibility[1]!
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin || !adminCan(admin, 'discounts')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
@@ -4632,7 +4944,7 @@ export async function handleCatalogApi(
   if (discountDeactivate && method === 'POST') {
     const discountId = discountDeactivate[1]!
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin || !adminCan(admin, 'discounts')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
@@ -4666,7 +4978,7 @@ export async function handleCatalogApi(
   if (discountReactivate && method === 'POST') {
     const discountId = discountReactivate[1]!
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin || !adminCan(admin, 'discounts')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
@@ -4706,7 +5018,7 @@ export async function handleCatalogApi(
   if (discountMutate && method === 'PATCH') {
     const discountId = discountMutate[1]!
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin || !adminCan(admin, 'discounts')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
@@ -4992,7 +5304,7 @@ export async function handleCatalogApi(
   if (discountMutate && method === 'DELETE') {
     const discountId = discountMutate[1]!
     const admin = await requireAdmin(req)
-    if (!admin || !adminCan(admin, 'orders')) {
+    if (!admin || !adminCan(admin, 'discounts')) {
       send(res, 403, { error: 'Forbidden' })
       return true
     }
@@ -5139,6 +5451,14 @@ export async function handleCatalogApi(
       send(res, 404, { error: 'Order item not found' })
       return true
     }
+    const parentOrder = await db.get<{ payment_method: string | null; cash_recorded_by: string | null }>(
+      'SELECT payment_method, cash_recorded_by FROM orders WHERE id = ?',
+      item.order_id,
+    )
+    if (isUnpaidCashOrder(parentOrder)) {
+      send(res, 403, { error: CASH_FILES_LOCKED_ERROR })
+      return true
+    }
     const designId = String(item.design_id || '')
     const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
     if (!designRow) {
@@ -5218,12 +5538,20 @@ export async function handleCatalogApi(
       send(res, 400, { error: 'G-code download is disabled after the order is marked shipped.' })
       return true
     }
-    const item = await db.get<{ assigned_printer_id: string | null }>(
-      'SELECT assigned_printer_id FROM order_items WHERE id = ?',
+    const item = await db.get<{ assigned_printer_id: string | null; order_id: string }>(
+      'SELECT assigned_printer_id, order_id FROM order_items WHERE id = ?',
       itemId,
     )
     if (!item) {
       send(res, 404, { error: 'Order item not found' })
+      return true
+    }
+    const parentOrder = await db.get<{ payment_method: string | null; cash_recorded_by: string | null }>(
+      'SELECT payment_method, cash_recorded_by FROM orders WHERE id = ?',
+      item.order_id,
+    )
+    if (isUnpaidCashOrder(parentOrder)) {
+      send(res, 403, { error: CASH_FILES_LOCKED_ERROR })
       return true
     }
     if (!String(item.assigned_printer_id || '').trim()) {
@@ -5252,6 +5580,20 @@ export async function handleCatalogApi(
     }
     if (await orderItemIsShipped(db, itemId)) {
       send(res, 400, { error: 'G-code download is disabled after the order is marked shipped.' })
+      return true
+    }
+    const itemRow = await db.get<{ order_id: string }>(
+      'SELECT order_id FROM order_items WHERE id = ?',
+      itemId,
+    )
+    const parentOrder = itemRow
+      ? await db.get<{ payment_method: string | null; cash_recorded_by: string | null }>(
+          'SELECT payment_method, cash_recorded_by FROM orders WHERE id = ?',
+          itemRow.order_id,
+        )
+      : null
+    if (isUnpaidCashOrder(parentOrder)) {
+      send(res, 403, { error: CASH_FILES_LOCKED_ERROR })
       return true
     }
     const partRaw = new URL(req.url || '', 'http://local').searchParams.get('part')
@@ -5331,7 +5673,10 @@ export async function handleCatalogApi(
         'SELECT * FROM orders WHERE id = ?',
         item.order_id,
       )
-      if (!order || !['paid', 'in_production', 'ready'].includes(String(order.status))) {
+      if (
+        !order ||
+        !['paid', 'in_production', 'ready', 'awaiting_cash'].includes(String(order.status))
+      ) {
         send(res, 400, { error: 'Order is not ready to print.' })
         return true
       }
@@ -5344,7 +5689,15 @@ export async function handleCatalogApi(
         now,
         itemId,
       )
-      await db.run(`UPDATE orders SET status = 'in_production', updated_at = ? WHERE id = ?`, now, item.order_id)
+      // Cash orders keep 'awaiting_cash' until the money is in (Money and
+      // the file lock key off it) — claiming early must not mark them paid.
+      if (String(order.status) !== 'awaiting_cash') {
+        await db.run(
+          `UPDATE orders SET status = 'in_production', updated_at = ? WHERE id = ?`,
+          now,
+          item.order_id,
+        )
+      }
       const updated = await db.get<Record<string, unknown>>(
         `SELECT oi.*, d.name as design_name FROM order_items oi
          JOIN designs d ON d.id = oi.design_id WHERE oi.id = ?`,
@@ -5354,6 +5707,20 @@ export async function handleCatalogApi(
       return true
     }
     if (action === 'complete') {
+      const itemRow = await db.get<{ order_id: string }>(
+        'SELECT order_id FROM order_items WHERE id = ?',
+        itemId,
+      )
+      const parentOrder = itemRow
+        ? await db.get<{ payment_method: string | null; cash_recorded_by: string | null }>(
+            'SELECT payment_method, cash_recorded_by FROM orders WHERE id = ?',
+            itemRow.order_id,
+          )
+        : null
+      if (isUnpaidCashOrder(parentOrder)) {
+        send(res, 400, { error: CASH_FILES_LOCKED_ERROR })
+        return true
+      }
       const result = await settleOrderItem(db, itemId, admin.id)
       if (!result.ok) {
         send(res, 400, { error: result.error })
@@ -5839,7 +6206,7 @@ export async function handleCatalogApi(
       })
       .map((a) => a.id)
     const partnerCount = Math.max(1, partnerIds.length)
-    const myProfitShareUsd = roundMoney(Math.max(0, businessKeptUsd) / partnerCount)
+    let myProfitShareUsd = roundMoney(Math.max(0, businessKeptUsd) / partnerCount)
     // Unclaimed print costs (paid orders not yet claimed) split equally until someone claims.
     const unclaimedShareUsd = roundMoney(Math.max(0, unclaimedPrintCostUsd) / partnerCount)
 
@@ -5896,6 +6263,284 @@ export async function handleCatalogApi(
       }))
       .filter((p) => p.totalOwedUsd > 0 || p.settlement)
       .sort((a, b) => b.totalOwedUsd - a.totalOwedUsd)
+
+    // Owed resets when a person is settled, not when the month changes.
+    // Recompute each person's balance from everything paid after their
+    // latest settlement (all of it, if they have never been settled).
+    const allSettlementRows = await db.all<Record<string, unknown>>(
+      `SELECT id, user_id, amount_usd, marked_paid_at, note
+       FROM printer_settlements
+       ORDER BY marked_paid_at DESC`,
+    )
+    const latestSettlementByUser = new Map<
+      string,
+      { id: string; amountUsd: number; markedPaidAt: string; note: string }
+    >()
+    for (const s of allSettlementRows) {
+      const uid = String(s.user_id)
+      if (latestSettlementByUser.has(uid)) continue
+      latestSettlementByUser.set(uid, {
+        id: String(s.id),
+        amountUsd: roundMoney(Number(s.amount_usd) || 0),
+        markedPaidAt: String(s.marked_paid_at ?? ''),
+        note: String(s.note ?? ''),
+      })
+    }
+    const allLedgerRows = await db.all<Record<string, unknown>>(
+      `SELECT l.id, l.user_id, l.amount_usd, l.note, l.created_at, l.order_item_id,
+              u.email as user_email, u.display_name as user_display_name,
+              oi.qty, oi.sku, oi.color_name, oi.order_id,
+              d.name as design_name
+       FROM profit_ledger l
+       JOIN users u ON u.id = l.user_id
+       LEFT JOIN order_items oi ON oi.id = l.order_item_id
+       LEFT JOIN designs d ON d.id = oi.design_id
+       WHERE l.entry_type = 'reimburse'
+       ORDER BY l.created_at DESC`,
+    )
+    const allPaidItems = await db.all<Record<string, unknown>>(
+      `SELECT oi.id, oi.qty, oi.worst_cost_unit_usd, oi.reimburse_usd, oi.line_total_usd,
+              oi.print_status, oi.assigned_admin_user_id, oi.sku, oi.color_name, oi.order_id,
+              oi.completed_at, oi.claimed_at,
+              d.name as design_name,
+              o.total_usd, o.subtotal_usd, o.shipping_usd, o.paid_at,
+              u.email as user_email, u.display_name as user_display_name
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN designs d ON d.id = oi.design_id
+       LEFT JOIN users u ON u.id = oi.assigned_admin_user_id
+       WHERE o.paid_at IS NOT NULL
+         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(o.payment_method, 'stripe') <> 'cash' OR o.cash_recorded_by IS NOT NULL)`,
+    )
+    const allShopOrdersOwed = await db.all<Record<string, unknown>>(
+      `SELECT o.total_usd, o.subtotal_usd, o.shipping_usd, o.shipping_to_profit_at, o.paid_at,
+              o.payment_method,
+              ${shopItemEarningsSql} as item_earnings_usd,
+              COALESCE((
+                SELECT SUM(oi.worst_cost_unit_usd * oi.qty) FROM order_items oi WHERE oi.order_id = o.id
+              ), 0) as printer_cost_usd
+       FROM orders o
+       WHERE o.paid_at IS NOT NULL
+         AND o.status IN (${SHOP_ORDER_MONEY_STATUS_SQL})
+         AND (COALESCE(o.payment_method, 'stripe') <> 'cash' OR o.cash_recorded_by IS NOT NULL)`,
+    )
+    const allCustomOwed = await db.all<Record<string, unknown>>(
+      `SELECT catalog_price_usd, shipping_usd, shipping_to_profit_at, worst_cost_usd, paid_at
+       FROM custom_requests
+       WHERE paid_at IS NOT NULL AND catalog_price_usd IS NOT NULL`,
+    )
+    const allSiblings = new Map<string, number[]>()
+    for (const item of allPaidItems) {
+      const oid = String(item.order_id)
+      const list = allSiblings.get(oid) ?? []
+      list.push(Number(item.line_total_usd) || 0)
+      allSiblings.set(oid, list)
+    }
+    const estimateAllTime = (item: Record<string, unknown>): number => {
+      const itemsPaid = orderItemsPaidUsd(item)
+      const lines = allSiblings.get(String(item.order_id)) ?? []
+      const lineSum = lines.reduce((s, n) => s + n, 0)
+      const line = Number(item.line_total_usd) || 0
+      const paidShare =
+        itemsPaid <= 0
+          ? 0
+          : lineSum <= 0
+            ? itemsPaid / Math.max(1, lines.length)
+            : itemsPaid * (line / lineSum)
+      const worst = Math.max(0, (Number(item.worst_cost_unit_usd) || 0) * (Number(item.qty) || 1))
+      const recorded = item.reimburse_usd != null ? Number(item.reimburse_usd) : null
+      if (recorded != null && Number.isFinite(recorded) && recorded >= 0) {
+        return roundMoney(Math.min(recorded, paidShare > 0 ? paidShare : recorded))
+      }
+      return roundMoney(Math.min(worst, paidShare))
+    }
+    const allLedgerItemIds = new Set(
+      allLedgerRows
+        .filter((r) => r.order_item_id != null)
+        .map((r) => String(r.order_item_id)),
+    )
+    /** Shared pools (profit share + unclaimed split) earned after a cutoff. */
+    const windowStatsCache = new Map<string, { profitShareUsd: number; unclaimedShareUsd: number }>()
+    const windowStats = (cutoff: string) => {
+      const cached = windowStatsCache.get(cutoff)
+      if (cached) return cached
+      const after = (ts: unknown) => String(ts ?? '') > cutoff
+      const ordersW = allShopOrdersOwed.filter((o) => after(o.paid_at))
+      const customW = allCustomOwed.filter((o) => after(o.paid_at))
+      const itemsEarnedW = roundMoney(
+        ordersW.reduce((s, o) => s + (Number(o.item_earnings_usd) || 0), 0) +
+          customW.reduce((s, o) => s + (Number(o.catalog_price_usd) || 0), 0),
+      )
+      const shippingKeptW = roundMoney(
+        [...ordersW, ...customW].reduce(
+          (s, o) => s + (o.shipping_to_profit_at ? Math.max(0, Number(o.shipping_usd) || 0) : 0),
+          0,
+        ),
+      )
+      const feesW = roundMoney(
+        ordersW.reduce((s, o) => s + shopStripeFee(o), 0) +
+          customW.reduce((s, o) => {
+            const charge =
+              Math.max(0, Number(o.catalog_price_usd) || 0) +
+              Math.max(0, Number(o.shipping_usd) || 0)
+            return s + stripeFeeOnChargeUsd(charge)
+          }, 0),
+      )
+      const printerCostW = roundMoney(
+        ordersW.reduce((s, o) => {
+          const itemsPaid = orderItemsPaidUsd(o)
+          return s + Math.min(Math.max(0, Number(o.printer_cost_usd) || 0), itemsPaid)
+        }, 0) +
+          customW.reduce((s, o) => {
+            const paid = Math.max(0, Number(o.catalog_price_usd) || 0)
+            return s + Math.min(Math.max(0, Number(o.worst_cost_usd) || 0), paid)
+          }, 0),
+      )
+      const ledgerAllW = roundMoney(
+        allLedgerRows
+          .filter((r) => after(r.created_at))
+          .reduce((s, r) => s + (Number(r.amount_usd) || 0), 0),
+      )
+      const adminsEarnW = Math.max(ledgerAllW, printerCostW)
+      const businessKeptW = roundMoney(
+        Math.max(0, itemsEarnedW + shippingKeptW - adminsEarnW - feesW),
+      )
+      let pool = 0
+      for (const item of allPaidItems) {
+        if (!after(item.paid_at)) continue
+        const amount = estimateAllTime(item)
+        if (amount <= 0) continue
+        const assigned =
+          item.assigned_admin_user_id != null ? String(item.assigned_admin_user_id) : ''
+        if (!assigned || String(item.print_status || '') === 'unclaimed') pool += amount
+      }
+      for (const o of customW) {
+        const paid = Math.max(0, Number(o.catalog_price_usd) || 0)
+        pool += Math.min(Math.max(0, Number(o.worst_cost_usd) || 0), paid)
+      }
+      const stats = {
+        profitShareUsd: roundMoney(businessKeptW / partnerCount),
+        unclaimedShareUsd: roundMoney(pool / partnerCount),
+      }
+      windowStatsCache.set(cutoff, stats)
+      return stats
+    }
+
+    const personInfo = new Map<string, { email: string; displayName: string | null }>()
+    for (const a of moneyAdmins) {
+      personInfo.set(a.id, {
+        email: String(a.email ?? ''),
+        displayName:
+          typeof a.display_name === 'string' && a.display_name.trim() ? a.display_name.trim() : null,
+      })
+    }
+    for (const r of allLedgerRows) {
+      const uid = String(r.user_id)
+      if (!personInfo.has(uid)) {
+        personInfo.set(uid, {
+          email: String(r.user_email ?? ''),
+          displayName:
+            typeof r.user_display_name === 'string' && r.user_display_name.trim()
+              ? r.user_display_name.trim()
+              : null,
+        })
+      }
+    }
+    const candidateIds = new Set<string>([
+      ...partnerIds,
+      ...allLedgerRows.map((r) => String(r.user_id)),
+      ...allPaidItems
+        .map((i) => (i.assigned_admin_user_id != null ? String(i.assigned_admin_user_id) : ''))
+        .filter(Boolean),
+    ])
+    const settledOwed: typeof owedByPerson = []
+    for (const uid of candidateIds) {
+      const settlement = latestSettlementByUser.get(uid) ?? null
+      const cutoff = settlement?.markedPaidAt ?? ''
+      const after = (ts: unknown) => String(ts ?? '') > cutoff
+      const lines: OwedLine[] = []
+      let printPay = 0
+      for (const r of allLedgerRows) {
+        if (String(r.user_id) !== uid || !after(r.created_at)) continue
+        const amount = roundMoney(Number(r.amount_usd) || 0)
+        printPay = roundMoney(printPay + amount)
+        lines.push({
+          id: String(r.id),
+          amountUsd: amount,
+          note: String(r.note ?? ''),
+          createdAt: String(r.created_at ?? ''),
+          orderId: r.order_id != null ? String(r.order_id) : null,
+          designName: r.design_name != null ? String(r.design_name) : null,
+          sku: r.sku != null ? String(r.sku) : null,
+          colorName: r.color_name != null ? String(r.color_name) : null,
+          qty: r.qty != null ? Number(r.qty) || null : null,
+        })
+      }
+      for (const item of allPaidItems) {
+        if (!after(item.paid_at)) continue
+        if (item.assigned_admin_user_id == null || String(item.assigned_admin_user_id) !== uid) {
+          continue
+        }
+        if (String(item.print_status || '') === 'unclaimed') continue
+        if (allLedgerItemIds.has(String(item.id))) continue
+        const amount = estimateAllTime(item)
+        if (amount <= 0) continue
+        printPay = roundMoney(printPay + amount)
+        lines.push({
+          id: `accrued-${String(item.id)}`,
+          amountUsd: amount,
+          note:
+            String(item.print_status || '') === 'claimed'
+              ? 'Accrued print pay (claimed — mark printed when done)'
+              : 'Accrued print pay (printed)',
+          createdAt: String(item.completed_at || item.claimed_at || item.paid_at || ''),
+          orderId: String(item.order_id),
+          designName: item.design_name != null ? String(item.design_name) : null,
+          sku: item.sku != null ? String(item.sku) : null,
+          colorName: item.color_name != null ? String(item.color_name) : null,
+          qty: item.qty != null ? Number(item.qty) || null : null,
+        })
+      }
+      const stats = windowStats(cutoff)
+      const isPartner = partnerIds.includes(uid)
+      if (isPartner && stats.unclaimedShareUsd > 0) {
+        printPay = roundMoney(printPay + stats.unclaimedShareUsd)
+        lines.push({
+          id: `unclaimed-share-${uid}-since-settle`,
+          amountUsd: stats.unclaimedShareUsd,
+          note: `Unclaimed print costs · equal split (${partnerCount} ways) until claimed`,
+          createdAt: cutoff,
+          orderId: null,
+          designName: null,
+          sku: null,
+          colorName: null,
+          qty: null,
+        })
+      }
+      const profitShare = isPartner ? stats.profitShareUsd : 0
+      const info = personInfo.get(uid) ?? { email: '', displayName: null }
+      settledOwed.push({
+        userId: uid,
+        email: info.email,
+        displayName: info.displayName,
+        totalOwedUsd: roundMoney(printPay + profitShare),
+        printPayUsd: printPay,
+        profitShareUsd: profitShare,
+        lines,
+        settlement,
+      })
+    }
+    owedByPerson = settledOwed
+      .filter(
+        (p) =>
+          p.totalOwedUsd > 0 ||
+          (p.settlement != null && p.settlement.markedPaidAt >= rangeStart),
+      )
+      .sort((a, b) => b.totalOwedUsd - a.totalOwedUsd)
+    myProfitShareUsd = roundMoney(
+      owedByPerson.find((p) => p.userId === admin.id)?.profitShareUsd ?? 0,
+    )
 
     const myPrintPayUsd = roundMoney(
       owedByPerson.find((p) => p.userId === admin.id)?.printPayUsd ?? 0,
@@ -6218,11 +6863,19 @@ export async function handleCatalogApi(
       send(res, 404, { error: 'User not found.' })
       return true
     }
-    const [yStr, mStr] = yearMonth.split('-')
-    const y = Number(yStr)
-    const m = Number(mStr)
-    const rangeStart = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0)).toISOString()
-    const rangeEnd = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0)).toISOString()
+    // Settling pays everything owed since this person's last settlement and
+    // resets their balance — the window is not the calendar month.
+    const latestSettle = await db.get<{ marked_paid_at: string | null }>(
+      `SELECT marked_paid_at FROM printer_settlements
+       WHERE user_id = ? ORDER BY marked_paid_at DESC LIMIT 1`,
+      userId,
+    )
+    const rangeStart = latestSettle?.marked_paid_at
+      ? String(latestSettle.marked_paid_at)
+      : '1970-01-01T00:00:00.000Z'
+    const rangeEnd = new Date(Date.now() + 60_000).toISOString()
+    const settleNow = new Date()
+    const settleMonth = `${settleNow.getUTCFullYear()}-${String(settleNow.getUTCMonth() + 1).padStart(2, '0')}`
     // Include equal PrintX profit share in what is marked paid (same split as Money page).
     await repairDiscountCappedPayouts(db)
     const settleShopItemSql = `LEAST(
@@ -6435,14 +7088,14 @@ export async function handleCatalogApi(
     )
     const amountUsd = roundMoney(printPayUsd + profitShareUsd)
     if (amountUsd <= 0) {
-      send(res, 400, { error: 'Nothing owed to this person for that month.' })
+      send(res, 400, { error: 'Nothing owed to this person since their last settlement.' })
       return true
     }
     const now = new Date().toISOString()
     const existing = await db.get<{ id: string }>(
       'SELECT id FROM printer_settlements WHERE user_id = ? AND year_month = ?',
       userId,
-      yearMonth,
+      settleMonth,
     )
     let settlementId = existing?.id
     if (existing) {
@@ -6464,7 +7117,7 @@ export async function handleCatalogApi(
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         settlementId,
         userId,
-        yearMonth,
+        settleMonth,
         amountUsd,
         now,
         admin.id,
@@ -6474,7 +7127,7 @@ export async function handleCatalogApi(
     runInBackground('push-money-settle', () =>
       notifyAdminUsers(db, [userId], {
         title: 'Money settled',
-        body: `$${amountUsd.toFixed(2)} owed for ${yearMonth} was marked paid`,
+        body: `$${amountUsd.toFixed(2)} owed was marked paid. Your balance is reset.`,
         url: '/money',
       }),
     )
@@ -6482,7 +7135,7 @@ export async function handleCatalogApi(
       ok: true,
       id: settlementId,
       userId,
-      yearMonth,
+      yearMonth: settleMonth,
       amountUsd,
       markedPaidAt: now,
       note,
@@ -6502,7 +7155,7 @@ export async function handleCatalogApi(
     const unclaimed = await db.get<{ c: number | string }>(
       `SELECT COUNT(*) as c FROM order_items oi
        JOIN orders o ON o.id = oi.order_id
-       WHERE oi.print_status = 'unclaimed' AND o.status IN ('paid', 'in_production')`,
+       WHERE oi.print_status = 'unclaimed' AND o.status IN ('paid', 'in_production', 'awaiting_cash')`,
     )
     send(res, 200, {
       pendingApprovals: Number(pending?.c ?? 0),
