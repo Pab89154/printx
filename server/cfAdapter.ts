@@ -792,7 +792,13 @@ export async function handleWorkerFetch(
     const edgeKey = new Request(`${url.origin}${pathname}`)
     if (edgeCacheable && edgeCache) {
       const hit = await edgeCache.match(edgeKey).catch(() => undefined)
-      if (hit) return hit
+      if (hit) {
+        // Never let browsers pin the catalog for hours: photos/prices must
+        // show up within seconds of an upload, not at some 4h expiry.
+        const headers = new Headers(hit.headers)
+        headers.set('Cache-Control', 'public, max-age=30')
+        return new Response(hit.body, { status: hit.status, headers })
+      }
     }
 
     try {
@@ -846,6 +852,8 @@ export async function handleWorkerFetch(
         const put = edgeCache.put(edgeKey, stored).catch(() => undefined)
         if (ctx?.waitUntil) ctx.waitUntil(put)
         else void put
+        // The browser gets the same short freshness as the edge copy.
+        return new Response(response.body, { status: response.status, headers })
       }
       return response
     } catch (err) {
