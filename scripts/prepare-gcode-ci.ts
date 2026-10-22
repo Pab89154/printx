@@ -71,7 +71,16 @@ async function main() {
   await ensureModelBucket()
   const db = await getDb()
   const designRow = await db.get<Record<string, unknown>>('SELECT * FROM designs WHERE id = ?', designId)
-  if (!designRow) throw new Error(`Design not found: ${designId}`)
+  if (!designRow) {
+    // The design was deleted after the job was queued (e.g. a duplicate in
+    // Admin). Nothing to slice and nobody to update — finish quietly so
+    // GitHub does not send a scary "workflow failed" email.
+    console.log(
+      `[prepare-gcode-ci] Design ${designId} no longer exists (deleted after prepare was clicked). Nothing to do — skipping.`,
+    )
+    await closeDb()
+    return
+  }
   const design = rowToDesign(designRow)
 
   const targets = designGcodeSliceTargets(design)
