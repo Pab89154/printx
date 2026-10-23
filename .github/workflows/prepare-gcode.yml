@@ -56,6 +56,11 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Needed to list/glue chunked big STLs on the printx-files release.
+          # Without it, CI falls back to https://printx.pw/cdn/models/… .
+          PRINTX_GITHUB_TOKEN: ${{ secrets.PRINTX_GITHUB_TOKEN }}
+          PRINTX_GITHUB_REPO: Pab89154/printx
+          PRINTX_PUBLIC_ORIGIN: https://printx.pw
           PRINTX_SLICER_HOME: /opt/printx-slicer
           PRINTX_SLICER_BIN: /opt/printx-slicer/printx-slice
           PRINTX_DESIGN_ID: ${{ inputs.design_id }}

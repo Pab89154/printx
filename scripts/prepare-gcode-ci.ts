@@ -103,7 +103,17 @@ async function main() {
     const creds = await loadPrinterCreds(db, printerId)
     for (const target of targets) {
       const resolved = await resolveStoredFile(target.stlPath)
-      if (!resolved) throw new Error(`STL missing in storage: ${target.stlPath}`)
+      if (!resolved) {
+        // Chunked big files live on GitHub releases; without a token CI used
+        // to die here even when printx.pw/cdn/models still has the file.
+        // resolveStoredFile now falls back to that CDN — if it's still gone,
+        // the STL was deleted. Exit quietly so GitHub doesn't mail a failure.
+        console.log(
+          `[prepare-gcode-ci] STL missing in storage and CDN: ${target.stlPath}. Nothing to slice — skipping.`,
+        )
+        await closeDb()
+        return
+      }
       try {
         const label =
           target.partIndex != null

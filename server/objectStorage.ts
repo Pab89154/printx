@@ -380,13 +380,30 @@ async function downloadStoredFile(fileName: string): Promise<Buffer | null> {
   // for the few oversized stragglers that never moved.
   const fromGithub = await downloadGithubUpload(fileName).catch(() => null)
   if (fromGithub?.length) return fromGithub
-  if (!objectStorageConfigured()) return null
-  const bucket = bucketName()
-  const res = await storageFetch(`/object/${encodeURIComponent(bucket)}/${objectKey(fileName)}`, {
-    method: 'GET',
-  })
-  if (!res.ok) return null
-  return Buffer.from(await res.arrayBuffer())
+  if (objectStorageConfigured()) {
+    const bucket = bucketName()
+    const res = await storageFetch(`/object/${encodeURIComponent(bucket)}/${objectKey(fileName)}`, {
+      method: 'GET',
+    })
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer())
+      if (buf.length) return buf
+    }
+  }
+  // Last resort: live PrintX CDN. GitHub Actions often has no PRINTX_GITHUB_TOKEN,
+  // so chunked big-file assets can't be listed — but the Worker CDN already
+  // glues those pieces and serves the full STL.
+  try {
+    const origin = (process.env.PRINTX_PUBLIC_ORIGIN || 'https://printx.pw').replace(/\/$/, '')
+    const res = await fetch(`${origin}/cdn/models/${encodeURIComponent(fileName)}`)
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer())
+      if (buf.length) return buf
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
 }
 
 /**
