@@ -15,7 +15,7 @@
     "cf:tail": "npx wrangler tail"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.23.4"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.8",

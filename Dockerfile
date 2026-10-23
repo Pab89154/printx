@@ -39,8 +39,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libegl1 \
     libwayland-client0 \
     fonts-dejavu-core \
-  && curl -fsSL https://nodejs.org/dist/v22.20.0/node-v22.20.0-linux-x64.tar.xz \
+  && curl -fsSL https://nodejs.org/dist/v22.23.4/node-v22.23.4-linux-x64.tar.xz \
     | tar -xJ -C /usr/local --strip-components=1 \
+  && update-ca-certificates \
   && node -v && npm -v \
   && rm -rf /var/lib/apt/lists/*
 
